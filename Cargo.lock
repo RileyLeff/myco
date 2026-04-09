@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
-name = "myco"
+name = "myco-cli"
+version = "0.1.0"
+dependencies = [
+ "myco-core",
+]
+
+[[package]]
+name = "myco-core"
 version = "0.1.0"

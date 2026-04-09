@@ -1,0 +1,11 @@
+[package]
+name = "myco-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "myco"
+path = "src/main.rs"
+
+[dependencies]
+myco-core = { path = "../myco-core" }

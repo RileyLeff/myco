@@ -26,9 +26,9 @@ fn run() -> Result<(), String> {
             let source =
                 fs::read_to_string(&path).map_err(|err| format!("failed to read {path}: {err}"))?;
 
-            match myco::syntax::parse_and_validate(&source) {
-                Ok(model) => match myco::semantic::lower_model(&model) {
-                    Ok(semantic) => match myco::equality::lower_model(&semantic) {
+            match myco_core::syntax::parse_and_validate(&source) {
+                Ok(model) => match myco_core::semantic::lower_model(&model) {
+                    Ok(semantic) => match myco_core::equality::lower_model(&semantic) {
                         Ok(equality) => {
                             println!(
                                 "ok: model '{}' parsed, validated, and lowered ({} quantities, {} equations, {} slots)",

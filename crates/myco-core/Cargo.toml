@@ -1,0 +1,11 @@
+[package]
+name = "myco-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "myco_core"
+path = "src/lib.rs"
+
+[dependencies]
+
