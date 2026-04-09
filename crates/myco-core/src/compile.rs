@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     diagnostics::Diagnostic,
-    equality::{EqualityModel, EqualitySlot, Quantity, QuantityId},
+    equality::{EqualityEquation, EqualityModel, EqualitySlot, Quantity, QuantityId},
     syntax::QuantityKind,
 };
 
@@ -79,6 +79,7 @@ pub struct BoundModel {
     pub mode: CompileMode,
     pub horizon_steps: usize,
     pub quantities: Vec<BoundQuantity>,
+    pub equations: Vec<EqualityEquation>,
     pub direct_bindings: Vec<ResolvedDirectBinding>,
     pub slot_bindings: Vec<ResolvedSlotBinding>,
     pub observations: Vec<ResolvedObservation>,
@@ -271,6 +272,7 @@ pub fn bind_compile_spec(
         mode: spec.mode,
         horizon_steps: spec.horizon_steps,
         quantities,
+        equations: model.equations.clone(),
         direct_bindings,
         slot_bindings,
         observations,
