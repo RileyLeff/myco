@@ -2,7 +2,7 @@ use crate::{
     compile::DirectBindingKind,
     equality::{CoreExpr, QuantityId, SpecialRef, TimeReference},
     pipeline::PreparedExperiment,
-    plan::{PlannedEquation, PlannedSlot},
+    plan::{AlternativePayload, PlannedEquation, PlannedSlot},
 };
 
 pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
@@ -50,6 +50,23 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         })
         .collect::<Vec<_>>();
     lines.push(format!("CONSTANT_NAMES = {}", render_py_string_list(&constant_names)));
+    lines.push(String::new());
+
+    lines.push("PROJECTION_METADATA = {".to_string());
+    for slot in &bound.slot_bindings {
+        if !matches!(slot.kind, crate::compile::SlotBindingKind::Learned) {
+            continue;
+        }
+        for provided in &slot.provides {
+            if let Some(projection) = projection_metadata(experiment, *provided) {
+                lines.push(format!(
+                    "    {name}: {projection},",
+                    name = py_string(&quantity_name(experiment, *provided))
+                ));
+            }
+        }
+    }
+    lines.push("}".to_string());
     lines.push(String::new());
 
     lines.push("OBSERVATION_SPECS = {".to_string());
@@ -122,8 +139,28 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return delta * (abs_residual - 0.5 * delta)".to_string());
     lines.push(String::new());
 
+    lines.push("def _resolve_bound(bound, current):".to_string());
+    lines.push("    if isinstance(bound, str):".to_string());
+    lines.push("        return current[bound]".to_string());
+    lines.push("    return bound".to_string());
+    lines.push(String::new());
+
+    lines.push("def _project_output(name, value, current):".to_string());
+    lines.push("    spec = PROJECTION_METADATA.get(name)".to_string());
+    lines.push("    if spec is None:".to_string());
+    lines.push("        return value".to_string());
+    lines.push("    lower = spec.get(\"lower\")".to_string());
+    lines.push("    if lower is not None:".to_string());
+    lines.push("        value = max(value, _resolve_bound(lower, current))".to_string());
+    lines.push("    upper = spec.get(\"upper\")".to_string());
+    lines.push("    if upper is not None:".to_string());
+    lines.push("        value = min(value, _resolve_bound(upper, current))".to_string());
+    lines.push("    return value".to_string());
+    lines.push(String::new());
+
     lines.push("def step(state, forcing, constants, slot_providers, dt):".to_string());
     lines.push("    current = {}".to_string());
+    lines.push("    current[\"_alternatives\"] = {}".to_string());
     lines.push("    current.update(constants)".to_string());
     lines.push("    current.update(forcing)".to_string());
     lines.push("    current.update(state)".to_string());
@@ -134,6 +171,9 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     }
     for equation in &plan.equation_steps {
         emit_equation_step(experiment, equation, &mut lines, "current");
+    }
+    for alternative in &plan.alternatives {
+        emit_alternative_step(experiment, alternative, &mut lines);
     }
 
     lines.push("    next_state = dict(state)".to_string());
@@ -181,7 +221,15 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push(String::new());
 
     lines.push("def consistency_loss(trajectory):".to_string());
-    lines.push("    return 0.0".to_string());
+    lines.push("    total = 0.0".to_string());
+    lines.push("    for frame in trajectory:".to_string());
+    lines.push("        alternatives = frame[\"current\"].get(\"_alternatives\", {})".to_string());
+    lines.push("        for output_name, entries in alternatives.items():".to_string());
+    lines.push("            canonical = frame[\"current\"][output_name]".to_string());
+    lines.push("            for entry in entries:".to_string());
+    lines.push("                residual = canonical - entry[\"value\"]".to_string());
+    lines.push("                total += residual * residual".to_string());
+    lines.push("    return total".to_string());
     lines.push(String::new());
 
     lines.push("def soft_penalty_loss(trajectory):".to_string());
@@ -221,14 +269,14 @@ fn emit_slot_step(experiment: &PreparedExperiment, slot: &PlannedSlot, lines: &m
 
     if slot.outputs.len() == 1 {
         lines.push(format!(
-            "    current[{output}] = {call}",
+            "    current[{output}] = _project_output({output}, {call}, current)",
             output = py_string(&quantity_name(experiment, slot.outputs[0]))
         ));
     } else {
         lines.push(format!("    _slot_out = {call}"));
         for (index, output) in slot.outputs.iter().enumerate() {
             lines.push(format!(
-                "    current[{output}] = _slot_out[{index}]",
+                "    current[{output}] = _project_output({output}, _slot_out[{index}], current)",
                 output = py_string(&quantity_name(experiment, *output))
             ));
         }
@@ -246,6 +294,44 @@ fn emit_equation_step(
     lines.push(format!(
         "    {target_map}[{target}] = {expr}",
         target = py_string(&target)
+    ));
+}
+
+fn emit_alternative_step(
+    experiment: &PreparedExperiment,
+    alternative: &crate::plan::AlternativePath,
+    lines: &mut Vec<String>,
+) {
+    let output_name = quantity_name(experiment, alternative.output);
+    let value_expr = match &alternative.payload {
+        AlternativePayload::Equation { expression } => render_expr(experiment, expression),
+        AlternativePayload::Slot { inputs } => {
+            let slot_name = match &alternative.source {
+                crate::plan::PlanSource::Slot(slot) => slot,
+                crate::plan::PlanSource::Equation(_) => unreachable!("slot payload requires slot source"),
+            };
+            format!(
+                "slot_providers[{name}]({args})",
+                name = py_string(slot_name),
+                args = inputs
+                    .iter()
+                    .map(|quantity| format!("current[{name}]", name = py_string(&quantity_name(experiment, *quantity))))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    };
+
+    lines.push(format!(
+        "    current[\"_alternatives\"].setdefault({output}, []).append({{\"source\": {source}, \"direction\": {direction}, \"value\": {value}}})",
+        output = py_string(&output_name),
+        source = py_string(&alternative_source_label(&alternative.source)),
+        direction = py_string(match alternative.direction {
+            crate::plan::CandidateDirection::Forward => "forward",
+            crate::plan::CandidateDirection::Inverted => "inverted",
+            crate::plan::CandidateDirection::Provider => "provider",
+        }),
+        value = value_expr
     ));
 }
 
@@ -297,6 +383,73 @@ fn py_string(value: &str) -> String {
     format!("{value:?}")
 }
 
+fn alternative_source_label(source: &crate::plan::PlanSource) -> String {
+    match source {
+        crate::plan::PlanSource::Slot(name) | crate::plan::PlanSource::Equation(name) => {
+            name.clone()
+        }
+    }
+}
+
+fn projection_metadata(experiment: &PreparedExperiment, quantity: QuantityId) -> Option<String> {
+    let constraints = &experiment.model.equality.quantities[quantity.0].constraints;
+    let mut lower = None;
+    let mut upper = None;
+
+    for constraint in constraints {
+        if let Some(bound) = parse_bound_constraint(constraint, ">=") {
+            lower = Some(bound);
+        } else if let Some(bound) = parse_bound_constraint(constraint, "<=") {
+            upper = Some(bound);
+        }
+    }
+
+    if lower.is_none() && upper.is_none() {
+        return None;
+    }
+
+    let mut fields = Vec::new();
+    if let Some(bound) = lower {
+        fields.push(format!("\"lower\": {}", render_projection_bound(&bound)));
+    }
+    if let Some(bound) = upper {
+        fields.push(format!("\"upper\": {}", render_projection_bound(&bound)));
+    }
+
+    Some(format!("{{{}}}", fields.join(", ")))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProjectionBound {
+    Number(String),
+    Quantity(String),
+}
+
+fn parse_bound_constraint(input: &str, op: &str) -> Option<ProjectionBound> {
+    let (lhs, rhs) = input.split_once(op)?;
+    if lhs.trim() != "self" {
+        return None;
+    }
+    let rhs = rhs.trim();
+    if rhs.is_empty() {
+        return None;
+    }
+    if rhs.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
+        return Some(ProjectionBound::Number(rhs.to_string()));
+    }
+    if rhs.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Some(ProjectionBound::Quantity(rhs.to_string()));
+    }
+    None
+}
+
+fn render_projection_bound(bound: &ProjectionBound) -> String {
+    match bound {
+        ProjectionBound::Number(value) => value.clone(),
+        ProjectionBound::Quantity(name) => py_string(name),
+    }
+}
+
 trait SlotKindName {
     fn kind_name(&self) -> &'static str;
 }
@@ -331,12 +484,16 @@ mod tests {
         let module = emit_python_module(&experiment);
 
         assert!(module.contains("MODEL_NAME = \"TinyTree\""));
+        assert!(module.contains("PROJECTION_METADATA = {"));
+        assert!(module.contains("\"stomata\": {\"lower\": 0, \"upper\": \"g_max\"},"));
         assert!(module.contains("OBSERVATION_SPECS = {"));
         assert!(module.contains("def step(state, forcing, constants, slot_providers, dt):"));
         assert!(module.contains("def rollout(initial_state, forcing_steps, constants, slot_providers, dt):"));
         assert!(module.contains("def obs_loss(trajectory, observations):"));
+        assert!(module.contains("def consistency_loss(trajectory):"));
         assert!(module.contains("def total_loss(trajectory, observations):"));
-        assert!(module.contains("current[\"stomata\"] = slot_providers[\"controller\"]("));
+        assert!(module.contains("current[\"stomata\"] = _project_output(\"stomata\", slot_providers[\"controller\"]("));
+        assert!(module.contains("current[\"_alternatives\"].setdefault(\"transpiration\", []).append("));
         assert!(module.contains("current[\"transpiration\"] = (current[\"stomata\"] * current[\"vpd_scale\"])"));
         assert!(module.contains("next_state[\"water\"] = (current[\"water\"] - (dt * current[\"transpiration\"]))"));
     }

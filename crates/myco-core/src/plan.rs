@@ -43,12 +43,19 @@ pub struct AlternativePath {
     pub source: PlanSource,
     pub direction: CandidateDirection,
     pub cost: u32,
+    pub payload: AlternativePayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanSource {
     Slot(String),
     Equation(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AlternativePayload {
+    Slot { inputs: Vec<QuantityId> },
+    Equation { expression: CoreExpr },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +166,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                     source: candidate.source.clone(),
                     direction: candidate.direction,
                     cost: candidate.cost,
+                    payload: candidate.alternative_payload(),
                 });
             }
             continue;
@@ -171,6 +179,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                     source: candidate.source.clone(),
                     direction: candidate.direction,
                     cost: candidate.cost,
+                    payload: candidate.alternative_payload(),
                 });
             }
         }
@@ -460,6 +469,17 @@ impl Candidate {
 
     fn primary_output_rank(&self) -> usize {
         self.outputs.first().map(|quantity| quantity.0).unwrap_or(usize::MAX)
+    }
+
+    fn alternative_payload(&self) -> AlternativePayload {
+        match &self.payload {
+            CandidatePayload::Slot { inputs, .. } => AlternativePayload::Slot {
+                inputs: inputs.clone(),
+            },
+            CandidatePayload::Equation { expression, .. } => AlternativePayload::Equation {
+                expression: expression.clone(),
+            },
+        }
     }
 }
 
