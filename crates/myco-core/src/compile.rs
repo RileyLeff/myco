@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     diagnostics::Diagnostic,
-    equality::{EqualityEquation, EqualityModel, EqualitySlot, Quantity, QuantityId},
+    equality::{EqualityModel, EqualitySlot, Quantity, QuantityId},
     syntax::QuantityKind,
 };
 
@@ -74,12 +74,12 @@ pub enum ObservationSchedule {
     Sparse(Vec<usize>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct BoundModel {
     pub mode: CompileMode,
     pub horizon_steps: usize,
     pub quantities: Vec<BoundQuantity>,
-    pub equations: Vec<EqualityEquation>,
+    pub core: std::sync::Arc<crate::egraph::EqualityCore>,
     pub direct_bindings: Vec<ResolvedDirectBinding>,
     pub slot_bindings: Vec<ResolvedSlotBinding>,
     pub observations: Vec<ResolvedObservation>,
@@ -288,7 +288,7 @@ pub fn bind_compile_spec(
         mode: spec.mode,
         horizon_steps: spec.horizon_steps,
         quantities,
-        equations: model.equations.clone(),
+        core: std::sync::Arc::clone(&model.core),
         direct_bindings,
         slot_bindings,
         observations,

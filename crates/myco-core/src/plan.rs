@@ -118,8 +118,8 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         .collect::<Vec<_>>();
     let mut temporal_candidates = Vec::new();
 
-    for equation in &bound.equations {
-        match Candidate::from_equation_directions(equation) {
+    for registration in &bound.core.equations {
+        match Candidate::from_equation_directions(&registration.equation) {
             Ok(candidates) => {
                 for candidate in candidates {
                     match candidate.timing {

@@ -11,14 +11,14 @@ use crate::{
     syntax::{self, ModelFile},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct LoadedModel {
     pub syntax: ModelFile,
     pub semantic: SemanticModel,
     pub equality: EqualityModel,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PreparedExperiment {
     pub model: LoadedModel,
     pub bound: BoundModel,
@@ -139,9 +139,10 @@ impl LoadedModel {
 
         let mut relation_names = self
             .equality
+            .core
             .equations
             .iter()
-            .map(|equation| equation.block_name.clone())
+            .map(|registration| registration.equation.block_name.clone())
             .collect::<Vec<_>>();
         relation_names.sort();
         relation_names.dedup();
@@ -174,9 +175,15 @@ impl LoadedModel {
             .count();
         let temporal_count = self
             .equality
+            .core
             .equations
             .iter()
-            .filter(|equation| matches!(equation.kind, crate::syntax::BlockKind::Temporal))
+            .filter(|registration| {
+                matches!(
+                    registration.equation.kind,
+                    crate::syntax::BlockKind::Temporal
+                )
+            })
             .count();
 
         ModelSummary {

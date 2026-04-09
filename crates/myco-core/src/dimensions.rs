@@ -118,7 +118,8 @@ pub fn validate_model_dimensions(model: &EqualityModel) -> Result<(), Vec<Diagno
         }
     }
 
-    for equation in &model.equations {
+    for registration in &model.core.equations {
+        let equation = &registration.equation;
         let lhs = infer_expr_dimension(
             model,
             &equation.lhs,

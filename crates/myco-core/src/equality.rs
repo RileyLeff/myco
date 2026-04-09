@@ -1,18 +1,19 @@
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use crate::{
     constraints::QuantityConstraintSet,
     diagnostics::{Diagnostic, SourceSpan},
     dimensions::QuantityTypeInfo,
+    egraph::{self, EqualityCore},
     semantic::{BinaryOp, Equation, Expr, SemanticModel},
     syntax::{BlockKind, QuantityKind},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct EqualityModel {
     pub name: String,
     pub quantities: Vec<Quantity>,
-    pub equations: Vec<EqualityEquation>,
+    pub core: Arc<EqualityCore>,
     pub slots: Vec<EqualitySlot>,
 }
 
@@ -191,10 +192,11 @@ pub fn lower_model(model: &SemanticModel) -> Result<EqualityModel, Vec<Diagnosti
     }
 
     if diagnostics.is_empty() {
+        let core = Arc::new(egraph::build_core(&equations));
         Ok(EqualityModel {
             name: model.name.clone(),
             quantities,
-            equations,
+            core,
             slots,
         })
     } else {
@@ -310,16 +312,17 @@ mod tests {
 
         assert_eq!(equality.name, "TinyTree");
         assert_eq!(equality.quantities.len(), 8);
-        assert_eq!(equality.equations.len(), 3);
+        assert_eq!(equality.core.equations.len(), 3);
         assert_eq!(equality.slots.len(), 1);
 
         let supply = equality
+            .core
             .equations
             .iter()
-            .find(|equation| equation.block_name == "supply_transpiration")
+            .find(|registration| registration.equation.block_name == "supply_transpiration")
             .expect("supply equation should exist");
         assert!(matches!(
-            supply.lhs,
+            supply.equation.lhs,
             CoreExpr::Quantity(QuantityRef {
                 time: TimeReference::Implicit,
                 ..
@@ -334,20 +337,21 @@ mod tests {
         let equality = lower_model(&semantic).expect("equality lowering should succeed");
 
         let water_step = equality
+            .core
             .equations
             .iter()
-            .find(|equation| equation.block_name == "water_step")
+            .find(|registration| registration.equation.block_name == "water_step")
             .expect("water step should exist");
 
         assert_eq!(
-            water_step.lhs,
+            water_step.equation.lhs,
             CoreExpr::Quantity(QuantityRef {
                 quantity: QuantityId(3),
                 time: TimeReference::Relative(1),
             })
         );
 
-        let rhs_text = water_step.rhs.to_string();
+        let rhs_text = water_step.equation.rhs.to_string();
         assert!(rhs_text.contains("dt"));
     }
 

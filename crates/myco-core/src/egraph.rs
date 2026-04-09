@@ -2,9 +2,22 @@ use egg::{
     AstSize, EGraph, Extractor, Id, RecExpr, Runner, Symbol, define_language, rewrite as rw,
 };
 
-use crate::equality::{
-    CoreExpr, EqualityEquation, EqualityModel, QuantityRef, SpecialRef, TimeReference,
-};
+use crate::equality::{CoreExpr, EqualityEquation, QuantityRef, SpecialRef, TimeReference};
+
+#[derive(Debug, Clone)]
+pub struct EqualityCore {
+    pub egraph: EGraph<ArithmeticLang, ()>,
+    pub equations: Vec<EquationRegistration>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EquationRegistration {
+    pub equation: EqualityEquation,
+    pub lhs_id: Id,
+    pub rhs_id: Id,
+    pub lhs_class: Id,
+    pub rhs_class: Id,
+}
 
 define_language! {
     pub enum ArithmeticLang {
@@ -16,12 +29,23 @@ define_language! {
     }
 }
 
-pub fn build_egraph(model: &EqualityModel) -> EGraph<ArithmeticLang, ()> {
+pub fn build_core(equations: &[EqualityEquation]) -> EqualityCore {
     let mut egraph = EGraph::<ArithmeticLang, ()>::default();
+    let mut registrations = Vec::new();
 
-    for equation in &model.equations {
-        add_equation(&mut egraph, equation);
+    for equation in equations {
+        let lhs_id = add_expr(&mut egraph, &equation.lhs);
+        let rhs_id = add_expr(&mut egraph, &equation.rhs);
+        egraph.union(lhs_id, rhs_id);
+        registrations.push(EquationRegistration {
+            equation: equation.clone(),
+            lhs_id,
+            rhs_id,
+            lhs_class: lhs_id,
+            rhs_class: rhs_id,
+        });
     }
+    egraph.rebuild();
 
     let rewrites = vec![
         rw!("commute-add"; "(+ ?a ?b)" => "(+ ?b ?a)"),
@@ -29,7 +53,16 @@ pub fn build_egraph(model: &EqualityModel) -> EGraph<ArithmeticLang, ()> {
     ];
 
     let runner = Runner::default().with_egraph(egraph).run(&rewrites);
-    runner.egraph
+    let egraph = runner.egraph;
+    for registration in &mut registrations {
+        registration.lhs_class = egraph.find(registration.lhs_id);
+        registration.rhs_class = egraph.find(registration.rhs_id);
+    }
+
+    EqualityCore {
+        egraph,
+        equations: registrations,
+    }
 }
 
 pub fn add_expr(egraph: &mut EGraph<ArithmeticLang, ()>, expr: &CoreExpr) -> Id {
@@ -45,13 +78,6 @@ pub fn extract_best(expr: &CoreExpr, egraph: &EGraph<ArithmeticLang, ()>) -> Str
     let extractor = Extractor::new(egraph, AstSize);
     let (_, best) = extractor.find_best(id);
     best.to_string()
-}
-
-fn add_equation(egraph: &mut EGraph<ArithmeticLang, ()>, equation: &EqualityEquation) {
-    let lhs = add_expr(egraph, &equation.lhs);
-    let rhs = add_expr(egraph, &equation.rhs);
-    egraph.union(lhs, rhs);
-    egraph.rebuild();
 }
 
 fn to_recexpr(expr: &CoreExpr) -> RecExpr<ArithmeticLang> {
@@ -103,16 +129,17 @@ mod tests {
         let syntax = parse_and_validate(TINY_TREE).expect("syntax");
         let semantic = semantic::lower_model(&syntax).expect("semantic");
         let equality = equality::lower_model(&semantic).expect("equality");
-        let mut egraph = build_egraph(&equality);
+        let mut egraph = equality.core.egraph.clone();
 
         let equation = equality
+            .core
             .equations
             .iter()
-            .find(|equation| equation.block_name == "demand_transpiration")
+            .find(|registration| registration.equation.block_name == "demand_transpiration")
             .expect("equation");
 
-        let lhs = add_expr(&mut egraph, &equation.lhs);
-        let rhs = add_expr(&mut egraph, &equation.rhs);
+        let lhs = add_expr(&mut egraph, &equation.equation.lhs);
+        let rhs = add_expr(&mut egraph, &equation.equation.rhs);
         assert_eq!(egraph.find(lhs), egraph.find(rhs));
     }
 
@@ -132,7 +159,7 @@ relation pair:
         let syntax = parse_and_validate(source).expect("syntax");
         let semantic = semantic::lower_model(&syntax).expect("semantic");
         let equality = equality::lower_model(&semantic).expect("equality");
-        let mut egraph = build_egraph(&equality);
+        let mut egraph = equality.core.egraph.clone();
 
         let swapped = CoreExpr::Binary {
             op: crate::semantic::BinaryOp::Add,
@@ -148,11 +175,12 @@ relation pair:
 
         let swapped_id = add_expr(&mut egraph, &swapped);
         let canonical = equality
+            .core
             .equations
             .iter()
-            .find(|equation| equation.block_name == "pair")
+            .find(|registration| registration.equation.block_name == "pair")
             .expect("equation");
-        let rhs_id = add_expr(&mut egraph, &canonical.rhs);
+        let rhs_id = add_expr(&mut egraph, &canonical.equation.rhs);
         assert_eq!(egraph.find(swapped_id), egraph.find(rhs_id));
     }
 }
