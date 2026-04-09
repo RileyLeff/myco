@@ -61,6 +61,68 @@ def test_experiment_builder_compiles_real_spec():
     assert "def total_loss(" in artifact.source
 
 
+def test_experiment_explain_plan_returns_typed_paths():
+    model = myco.load(FIXTURE)
+    experiment = model.experiment(mode="train", horizon_steps=24)
+    experiment.bind_data_series("vpd_scale", range(24))
+    experiment.bind_data_series("soil_water", range(24))
+    experiment.bind_constant("hydraulic_cond")
+    experiment.bind_constant("g_max")
+    experiment.bind_initial_state("water")
+    experiment.bind_initial_state("carbon")
+    experiment.bind_slot("controller", kind="learned")
+    experiment.observe_dense("transpiration")
+
+    explanation = experiment.explain_plan()
+
+    assert "transpiration" in explanation.available_current
+    assert any(path.source == "controller" for path in explanation.chosen_current)
+    assert any(
+        alternative.source == "supply_transpiration"
+        for alternative in explanation.alternatives
+    )
+    assert explanation.unresolved == ()
+
+
+def test_experiment_explain_quantity_surfaces_alternatives_and_unresolved():
+    model = myco.load(FIXTURE)
+
+    resolved = model.experiment(mode="train", horizon_steps=24)
+    resolved.bind_data_series("vpd_scale", range(24))
+    resolved.bind_data_series("soil_water", range(24))
+    resolved.bind_constant("hydraulic_cond")
+    resolved.bind_constant("g_max")
+    resolved.bind_initial_state("water")
+    resolved.bind_initial_state("carbon")
+    resolved.bind_slot("controller", kind="learned")
+    resolved.observe_dense("transpiration")
+
+    transpiration = resolved.explain_quantity("transpiration")
+    assert transpiration.quantity == "transpiration"
+    assert transpiration.observed is True
+    assert transpiration.unresolved is False
+    assert transpiration.chosen_current is not None
+    assert transpiration.chosen_current.source == "demand_transpiration"
+    assert any(
+        alternative.source == "supply_transpiration"
+        for alternative in transpiration.alternatives
+    )
+
+    unresolved = model.experiment(mode="train", horizon_steps=24)
+    unresolved.bind_data_series("vpd_scale", range(24))
+    unresolved.bind_data_series("soil_water", range(24))
+    unresolved.bind_constant("hydraulic_cond")
+    unresolved.bind_initial_state("water")
+    unresolved.bind_initial_state("carbon")
+    unresolved.bind_slot("controller", kind="learned")
+    unresolved.observe_dense("transpiration")
+
+    g_max = unresolved.explain_quantity("g_max")
+    assert g_max.unresolved is True
+    assert g_max.chosen_current is None
+    assert g_max.direct_binding is None
+
+
 def test_structured_myco_error_exposes_diagnostics():
     model = myco.load(FIXTURE)
     experiment = model.experiment(mode="train", horizon_steps=24)

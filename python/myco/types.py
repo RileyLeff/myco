@@ -73,6 +73,149 @@ class ExperimentSummary:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PathExplanation:
+    output: str
+    source: str
+    direction: str
+    cost: int
+    dependencies: tuple[str, ...]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "PathExplanation":
+        return cls(
+            output=str(payload["output"]),
+            source=str(payload["source"]),
+            direction=str(payload["direction"]),
+            cost=int(payload["cost"]),
+            dependencies=tuple(payload["dependencies"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AlternativeExplanation:
+    output: str
+    source: str
+    direction: str
+    cost: int
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "AlternativeExplanation":
+        return cls(
+            output=str(payload["output"]),
+            source=str(payload["source"]),
+            direction=str(payload["direction"]),
+            cost=int(payload["cost"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BlockedCandidateExplanation:
+    output: str
+    source: str
+    direction: str
+    cost: int
+    missing_dependencies: tuple[str, ...]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "BlockedCandidateExplanation":
+        return cls(
+            output=str(payload["output"]),
+            source=str(payload["source"]),
+            direction=str(payload["direction"]),
+            cost=int(payload["cost"]),
+            missing_dependencies=tuple(payload["missing_dependencies"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UnresolvedQuantityExplanation:
+    quantity: str
+    blocked_candidates: tuple[BlockedCandidateExplanation, ...]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "UnresolvedQuantityExplanation":
+        return cls(
+            quantity=str(payload["quantity"]),
+            blocked_candidates=tuple(
+                BlockedCandidateExplanation.from_payload(item)
+                for item in payload["blocked_candidates"]
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PlanExplanation:
+    available_current: tuple[str, ...]
+    chosen_current: tuple[PathExplanation, ...]
+    chosen_temporal: tuple[PathExplanation, ...]
+    alternatives: tuple[AlternativeExplanation, ...]
+    unresolved: tuple[UnresolvedQuantityExplanation, ...]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "PlanExplanation":
+        return cls(
+            available_current=tuple(payload["available_current"]),
+            chosen_current=tuple(
+                PathExplanation.from_payload(item) for item in payload["chosen_current"]
+            ),
+            chosen_temporal=tuple(
+                PathExplanation.from_payload(item) for item in payload["chosen_temporal"]
+            ),
+            alternatives=tuple(
+                AlternativeExplanation.from_payload(item)
+                for item in payload["alternatives"]
+            ),
+            unresolved=tuple(
+                UnresolvedQuantityExplanation.from_payload(item)
+                for item in payload["unresolved"]
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QuantityExplanation:
+    quantity: str
+    direct_binding: str | None
+    slot_provider: str | None
+    observed: bool
+    chosen_current: PathExplanation | None
+    chosen_temporal: PathExplanation | None
+    alternatives: tuple[AlternativeExplanation, ...]
+    blocked_candidates: tuple[BlockedCandidateExplanation, ...]
+    unresolved: bool
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "QuantityExplanation":
+        current = payload.get("chosen_current")
+        temporal = payload.get("chosen_temporal")
+        return cls(
+            quantity=str(payload["quantity"]),
+            direct_binding=payload.get("direct_binding"),
+            slot_provider=payload.get("slot_provider"),
+            observed=bool(payload["observed"]),
+            chosen_current=(
+                PathExplanation.from_payload(current)
+                if isinstance(current, dict)
+                else None
+            ),
+            chosen_temporal=(
+                PathExplanation.from_payload(temporal)
+                if isinstance(temporal, dict)
+                else None
+            ),
+            alternatives=tuple(
+                AlternativeExplanation.from_payload(item)
+                for item in payload["alternatives"]
+            ),
+            blocked_candidates=tuple(
+                BlockedCandidateExplanation.from_payload(item)
+                for item in payload["blocked_candidates"]
+            ),
+            unresolved=bool(payload["unresolved"]),
+        )
+
+
 @dataclass(slots=True)
 class DirectBinding:
     quantity: str

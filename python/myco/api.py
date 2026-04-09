@@ -8,6 +8,10 @@ from ._myco_py import (
     compile_demo_source as _compile_demo_source,
     compile_path_with_spec as _compile_path_with_spec,
     compile_source_with_spec as _compile_source_with_spec,
+    explain_plan_path as _explain_plan_path,
+    explain_plan_source as _explain_plan_source,
+    explain_quantity_path as _explain_quantity_path,
+    explain_quantity_source as _explain_quantity_source,
     load_model_path as _load_model_path,
     load_model_source as _load_model_source,
     prepare_experiment_path as _prepare_experiment_path,
@@ -23,6 +27,8 @@ from .types import (
     ExperimentSummary,
     ModelSummary,
     Observation,
+    PlanExplanation,
+    QuantityExplanation,
     SlotBinding,
     load_spec,
 )
@@ -98,6 +104,16 @@ class Experiment:
         payload = bridge_call(_prepare_experiment_source, self.model.source, self.spec.to_dict())
         return _experiment_summary(payload)
 
+    def explain_plan(self) -> PlanExplanation:
+        payload = bridge_call(_explain_plan_source, self.model.source, self.spec.to_dict())
+        return PlanExplanation.from_payload(payload)
+
+    def explain_quantity(self, quantity: str) -> QuantityExplanation:
+        payload = bridge_call(
+            _explain_quantity_source, self.model.source, self.spec.to_dict(), quantity
+        )
+        return QuantityExplanation.from_payload(payload)
+
     def compile(self, backend: Backend = "jax") -> Artifact:
         payload = bridge_call(
             _compile_source_with_spec,
@@ -137,6 +153,34 @@ def prepare_experiment_source(source: str, spec: CompileSpec) -> ExperimentSumma
 
 def prepare_experiment_path(path: str | Path, spec: CompileSpec) -> ExperimentSummary:
     return _experiment_summary(bridge_call(_prepare_experiment_path, str(path), spec.to_dict()))
+
+
+def explain_plan_source(source: str, spec: CompileSpec) -> PlanExplanation:
+    return PlanExplanation.from_payload(
+        bridge_call(_explain_plan_source, source, spec.to_dict())
+    )
+
+
+def explain_plan_path(path: str | Path, spec: CompileSpec) -> PlanExplanation:
+    return PlanExplanation.from_payload(
+        bridge_call(_explain_plan_path, str(path), spec.to_dict())
+    )
+
+
+def explain_quantity_source(
+    source: str, spec: CompileSpec, quantity: str
+) -> QuantityExplanation:
+    return QuantityExplanation.from_payload(
+        bridge_call(_explain_quantity_source, source, spec.to_dict(), quantity)
+    )
+
+
+def explain_quantity_path(
+    path: str | Path, spec: CompileSpec, quantity: str
+) -> QuantityExplanation:
+    return QuantityExplanation.from_payload(
+        bridge_call(_explain_quantity_path, str(path), spec.to_dict(), quantity)
+    )
 
 
 def compile_source(source: str, spec: CompileSpec, backend: Backend = "jax") -> Artifact:

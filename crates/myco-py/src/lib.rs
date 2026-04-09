@@ -15,7 +15,7 @@ use pyo3::{
     create_exception,
     exceptions::{PyIOError, PyValueError},
     prelude::*,
-    types::{PyAny, PyDict},
+    types::{PyAny, PyBool, PyDict, PyList},
 };
 use serde::Serialize;
 
@@ -107,6 +107,47 @@ fn prepare_experiment_path(
 }
 
 #[pyfunction]
+fn explain_plan_source(
+    py: Python<'_>,
+    source: &str,
+    spec: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let spec = parse_compile_spec(spec)?;
+    let experiment = prepare_experiment_from_spec(source, &spec)?;
+    serialize_to_py(py, &experiment.explain_plan())
+}
+
+#[pyfunction]
+fn explain_plan_path(py: Python<'_>, path: &str, spec: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let source = read_source(path)?;
+    explain_plan_source(py, &source, spec)
+}
+
+#[pyfunction]
+fn explain_quantity_source(
+    py: Python<'_>,
+    source: &str,
+    spec: &Bound<'_, PyAny>,
+    quantity: &str,
+) -> PyResult<Py<PyAny>> {
+    let spec = parse_compile_spec(spec)?;
+    let experiment = prepare_experiment_from_spec(source, &spec)?;
+    let explanation = experiment.explain_quantity(quantity).map_err(myco_error)?;
+    serialize_to_py(py, &explanation)
+}
+
+#[pyfunction]
+fn explain_quantity_path(
+    py: Python<'_>,
+    path: &str,
+    spec: &Bound<'_, PyAny>,
+    quantity: &str,
+) -> PyResult<Py<PyAny>> {
+    let source = read_source(path)?;
+    explain_quantity_source(py, &source, spec, quantity)
+}
+
+#[pyfunction]
 #[pyo3(signature = (source, spec, backend="jax"))]
 fn compile_source_with_spec(
     py: Python<'_>,
@@ -164,6 +205,10 @@ fn _myco_py(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compile_demo_path, m)?)?;
     m.add_function(wrap_pyfunction!(prepare_experiment_source, m)?)?;
     m.add_function(wrap_pyfunction!(prepare_experiment_path, m)?)?;
+    m.add_function(wrap_pyfunction!(explain_plan_source, m)?)?;
+    m.add_function(wrap_pyfunction!(explain_plan_path, m)?)?;
+    m.add_function(wrap_pyfunction!(explain_quantity_source, m)?)?;
+    m.add_function(wrap_pyfunction!(explain_quantity_path, m)?)?;
     m.add_function(wrap_pyfunction!(compile_source_with_spec, m)?)?;
     m.add_function(wrap_pyfunction!(compile_path_with_spec, m)?)?;
     m.add_function(wrap_pyfunction!(write_demo_path, m)?)?;
@@ -187,6 +232,14 @@ fn compile_with_spec(
 ) -> PyResult<CompiledArtifact> {
     let backend = parse_backend(backend)?;
     pipeline::compile_source(source, spec, backend).map_err(myco_error)
+}
+
+fn prepare_experiment_from_spec(
+    source: &str,
+    spec: &CompileSpec,
+) -> PyResult<pipeline::PreparedExperiment> {
+    let model = pipeline::load_model(source).map_err(myco_error)?;
+    pipeline::prepare_experiment(&model, spec).map_err(myco_error)
 }
 
 fn parse_backend(name: &str) -> PyResult<BackendTarget> {
@@ -397,6 +450,51 @@ fn artifact_dict(py: Python<'_>, artifact: &CompiledArtifact) -> PyResult<Py<PyD
     dict.set_item("suggested_filename", artifact.suggested_filename())?;
     dict.set_item("source", &artifact.source)?;
     Ok(dict.unbind())
+}
+
+fn serialize_to_py<T: Serialize>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>> {
+    let value = serde_json::to_value(value)
+        .map_err(|err| PyValueError::new_err(format!("failed to serialize payload: {err}")))?;
+    json_value_to_py(py, &value)
+}
+
+fn json_value_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
+    match value {
+        serde_json::Value::Null => Ok(py.None()),
+        serde_json::Value::Bool(value) => {
+            Ok(PyBool::new(py, *value).to_owned().unbind().into_any())
+        }
+        serde_json::Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                Ok(value.into_pyobject(py)?.unbind().into_any())
+            } else if let Some(value) = number.as_u64() {
+                Ok(value.into_pyobject(py)?.unbind().into_any())
+            } else if let Some(value) = number.as_f64() {
+                Ok(value.into_pyobject(py)?.unbind().into_any())
+            } else {
+                Err(PyValueError::new_err("unsupported numeric payload"))
+            }
+        }
+        serde_json::Value::String(value) => Ok(value.into_pyobject(py)?.unbind().into_any()),
+        serde_json::Value::Array(values) => {
+            let items = values
+                .iter()
+                .map(|item| json_value_to_py(py, item))
+                .collect::<PyResult<Vec<_>>>()?;
+            let list = PyList::empty(py);
+            for item in items {
+                list.append(item)?;
+            }
+            Ok(list.unbind().into_any())
+        }
+        serde_json::Value::Object(values) => {
+            let dict = PyDict::new(py);
+            for (key, value) in values {
+                dict.set_item(key, json_value_to_py(py, value)?)?;
+            }
+            Ok(dict.unbind().into_any())
+        }
+    }
 }
 
 fn backend_name(backend: BackendTarget) -> &'static str {
