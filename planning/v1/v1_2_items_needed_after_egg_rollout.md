@@ -46,7 +46,7 @@ Three of the original `v1.2` issues are now closed:
 
 The main remaining issues are now:
 
-- planner cost reporting and explanation fidelity still need final cleanup after the `egg` extraction rewrite
+- provenance resolution is still mostly block-level in some places, even though expression text and source spans are now surfaced
 - richer slot metadata is now available on compiled artifacts, but the remaining question is whether any further interface-shape detail is actually required for honest `v1`
 
 So the project is now best described as:
@@ -61,8 +61,8 @@ At this point, I do **not** recommend broadening the frontend language, changing
 
 The next order should be:
 
-1. Tighten planner cost reporting and explanation fidelity after the `egg` extraction rewrite.
-2. Decide whether the current artifact-level slot metadata is already sufficient for honest `v1`, or whether further interface detail is still needed.
+1. Decide whether the current artifact-level slot metadata is already sufficient for honest `v1`, or whether further interface detail is still needed.
+2. Decide whether block-level provenance is already sufficient for honest `v1`, or whether finer-grained equation identity still needs to be introduced.
 3. Re-run external review once those remaining semantics are narrow and explicit.
 
 This order matters because the remaining gaps are mostly semantic mismatches between what the API promises and what emitted code actually does.
@@ -233,9 +233,8 @@ That is enough to explain the TinyTree recovery path and point back to the origi
 
 ### What Still Needs Cleanup
 
-Two smaller gaps remain:
+One smaller gap remains:
 
-- some reported costs still reflect candidate defaults rather than final extracted costs in blocked-path reporting
 - provenance lookup is still block-level in places where a finer-grained equation identity would be cleaner
 
 ### Acceptance Criteria

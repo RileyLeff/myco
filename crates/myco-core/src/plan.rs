@@ -284,7 +284,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
             .map_err(|diagnostic| vec![diagnostic])?
         else {
             let missing = candidate
-                .missing_current_dependencies(&available_current)
+                .missing_current_dependencies(bound, &available_current)
                 .into_iter()
                 .filter_map(|quantity| quantity_names.get(&quantity).copied())
                 .collect::<Vec<_>>()
@@ -325,15 +325,38 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
 
     let blocked_current = unresolved_current_candidates
         .iter()
-        .map(|candidate| BlockedCandidate {
-            name: candidate.name.clone(),
-            source: candidate.source.clone(),
-            direction: candidate.direction,
-            outputs: candidate.outputs.clone(),
-            missing_current: candidate.missing_current_dependencies(&available_current),
-            cost: candidate.cost,
+        .map(|candidate| {
+            let best_case = candidate.best_case(bound)?;
+            let missing_current = match &best_case {
+                Some(resolved) => resolved
+                    .dependencies
+                    .iter()
+                    .filter_map(
+                        |dependency| match (dependency.timing, dependency.quantity) {
+                            (DependencyTiming::Current, Some(quantity))
+                                if !available_current.contains(&quantity) =>
+                            {
+                                Some(quantity)
+                            }
+                            _ => None,
+                        },
+                    )
+                    .collect(),
+                None => candidate.missing_current_dependencies(bound, &available_current),
+            };
+            Ok(BlockedCandidate {
+                name: candidate.name.clone(),
+                source: candidate.source.clone(),
+                direction: candidate.direction,
+                outputs: candidate.outputs.clone(),
+                missing_current,
+                cost: best_case
+                    .map(|resolved| resolved.cost)
+                    .unwrap_or(candidate.cost),
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, Diagnostic>>()
+        .map_err(|diagnostic| vec![diagnostic])?;
 
     let unresolved_current = unresolved_current_candidates
         .into_iter()
@@ -546,6 +569,7 @@ impl Candidate {
 
     fn missing_current_dependencies(
         &self,
+        bound: &BoundModel,
         available_current: &HashSet<QuantityId>,
     ) -> Vec<QuantityId> {
         match &self.payload {
@@ -557,22 +581,68 @@ impl Candidate {
                     .filter(|quantity| !available_current.contains(quantity))
                     .collect(),
             },
-            CandidatePayload::Equation { registration } => {
-                collect_dependencies(&registration.seed_expression)
-                    .ok()
-                    .map(|dependencies| {
-                        dependencies
-                            .iter()
-                            .filter_map(|dependency| match dependency {
-                                Dependency {
-                                    timing: DependencyTiming::Current,
-                                    quantity: Some(quantity),
-                                } if !available_current.contains(quantity) => Some(*quantity),
+            CandidatePayload::Equation { .. } => self
+                .best_case(bound)
+                .ok()
+                .flatten()
+                .map(|resolved| {
+                    resolved
+                        .dependencies
+                        .iter()
+                        .filter_map(
+                            |dependency| match (dependency.timing, dependency.quantity) {
+                                (DependencyTiming::Current, Some(quantity))
+                                    if !available_current.contains(&quantity) =>
+                                {
+                                    Some(quantity)
+                                }
                                 _ => None,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
+                            },
+                        )
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    fn best_case(&self, bound: &BoundModel) -> Result<Option<ResolvedCandidate>, Diagnostic> {
+        match &self.payload {
+            CandidatePayload::Slot { kind, inputs } => {
+                let dependencies = match kind {
+                    SlotBindingKind::DataSeries | SlotBindingKind::Constant => Vec::new(),
+                    SlotBindingKind::Learned => inputs
+                        .iter()
+                        .copied()
+                        .map(|quantity| Dependency {
+                            quantity: Some(quantity),
+                            timing: DependencyTiming::Current,
+                        })
+                        .collect(),
+                };
+
+                Ok(Some(ResolvedCandidate {
+                    expression: None,
+                    dependencies,
+                    cost: self.cost,
+                }))
+            }
+            CandidatePayload::Equation { registration } => {
+                let all_current = bound
+                    .quantities
+                    .iter()
+                    .map(|quantity| quantity.quantity.id)
+                    .collect::<HashSet<_>>();
+                let extracted =
+                    extract_available_expression(&bound.core, registration, &all_current, true)?;
+                let Some(extracted) = extracted else {
+                    return Ok(None);
+                };
+                let dependencies = collect_dependencies(&extracted.expression)?;
+                Ok(Some(ResolvedCandidate {
+                    expression: Some(extracted.expression),
+                    dependencies,
+                    cost: registration.base_cost + extracted.structural_cost,
+                }))
             }
         }
     }

@@ -654,6 +654,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn explains_blocked_quantity_with_extracted_expression_and_cost() {
+        let source = r#"
+model BlockedEquation
+
+external x : scalar
+node w : scalar
+node u : scalar
+node y : scalar
+
+relation blocked:
+  y = (x + w) * (u + 1)
+"#;
+
+        let model = load_model(source).expect("model should load");
+        let experiment = prepare_experiment(&model, &blocked_equation_spec()).expect("experiment");
+
+        let y = explain_quantity(&experiment, "y").expect("quantity");
+        assert!(y.unresolved);
+        assert!(!y.blocked_candidates.is_empty());
+        assert!(y.blocked_candidates.iter().any(|candidate| {
+            candidate.source == "blocked"
+                && candidate.cost > 0
+                && candidate.expression.as_deref() == Some("((x + w) * (u + 1))")
+        }));
+    }
+
     fn tiny_tree_spec() -> CompileSpec {
         CompileSpec {
             mode: CompileMode::Train,
@@ -713,6 +740,26 @@ mod tests {
                 .filter(|binding| binding.quantity != "g_max")
                 .collect(),
             ..tiny_tree_spec()
+        }
+    }
+
+    fn blocked_equation_spec() -> CompileSpec {
+        CompileSpec {
+            mode: CompileMode::Simulate,
+            horizon_steps: 1,
+            consistency_policy: ConsistencyPolicy::Off,
+            direct_bindings: vec![
+                DirectBindingSpec {
+                    quantity: "w".to_string(),
+                    kind: DirectBindingKind::Constant,
+                },
+                DirectBindingSpec {
+                    quantity: "u".to_string(),
+                    kind: DirectBindingKind::Constant,
+                },
+            ],
+            slot_bindings: vec![],
+            observations: vec![],
         }
     }
 }
