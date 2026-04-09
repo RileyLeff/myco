@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     compile::{BoundModel, ResolvedSlotBinding, SlotBindingKind},
     diagnostics::Diagnostic,
-    equality::{CoreExpr, EqualityEquation, QuantityId, QuantityRef, SpecialRef, TimeReference},
+    egraph::{DirectionalRegistration, ExpressionDirection, extract_available_expression},
+    equality::{CoreExpr, QuantityId, QuantityRef, SpecialRef, TimeReference},
     syntax::BlockKind,
 };
 
@@ -118,16 +119,12 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         .collect::<Vec<_>>();
     let mut temporal_candidates = Vec::new();
 
-    for registration in &bound.core.equations {
-        match Candidate::from_equation_directions(&registration.equation) {
-            Ok(candidates) => {
-                for candidate in candidates {
-                    match candidate.timing {
-                        CandidateTiming::Current => current_candidates.push(candidate),
-                        CandidateTiming::Next => temporal_candidates.push(candidate),
-                    }
-                }
-            }
+    for registration in &bound.core.directional {
+        match Candidate::from_directional_registration(registration.clone()) {
+            Ok(candidate) => match candidate.timing {
+                CandidateTiming::Current => current_candidates.push(candidate),
+                CandidateTiming::Next => temporal_candidates.push(candidate),
+            },
             Err(mut errs) => diagnostics.append(&mut errs),
         }
     }
@@ -144,23 +141,41 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         let mut ready = current_candidates
             .iter()
             .enumerate()
-            .filter(|(_, candidate)| {
-                !candidate.scheduled && candidate.dependencies_ready(&available_current)
+            .filter(|(_, candidate)| !candidate.scheduled)
+            .filter_map(|(index, candidate)| {
+                candidate
+                    .resolve(bound, &available_current)
+                    .transpose()
+                    .map(|result| {
+                        result.map(|resolved| ReadyCandidate {
+                            index,
+                            cost: resolved.cost,
+                            source_rank: candidate.source_rank(),
+                            name: candidate.name.clone(),
+                            output_rank: candidate.primary_output_rank(),
+                            resolved_expression: resolved.expression,
+                            resolved_dependencies: resolved.dependencies,
+                        })
+                    })
             })
-            .map(|(index, candidate)| ReadyCandidate {
-                index,
-                cost: candidate.cost,
-                source_rank: candidate.source_rank(),
-                name: candidate.name.clone(),
-                output_rank: candidate.primary_output_rank(),
-            })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|diagnostic| vec![diagnostic])?;
 
         if ready.is_empty() {
             break;
         }
 
-        ready.sort();
+        ready.sort_by(|left, right| {
+            (left.cost, left.source_rank, left.name.as_str(), left.output_rank, left.index).cmp(
+                &(
+                    right.cost,
+                    right.source_rank,
+                    right.name.as_str(),
+                    right.output_rank,
+                    right.index,
+                ),
+            )
+        });
         let entry = ready.remove(0);
         let candidate = &mut current_candidates[entry.index];
 
@@ -212,17 +227,18 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                 });
             }
             CandidatePayload::Equation {
-                kind,
-                expression,
-                dependencies,
+                registration,
             } => {
                 let output = unresolved_outputs[0];
                 planned_equations.push(PlannedEquation {
                     block_name: candidate.name.clone(),
-                    kind: *kind,
+                    kind: registration.kind,
                     output,
-                    dependencies: dependencies.clone(),
-                    expression: expression.clone(),
+                    dependencies: entry.resolved_dependencies.clone(),
+                    expression: entry
+                        .resolved_expression
+                        .clone()
+                        .expect("equation candidate must resolve to an expression"),
                     direction: match candidate.direction {
                         CandidateDirection::Forward => EquationDirection::Forward,
                         CandidateDirection::Inverted => EquationDirection::Inverted,
@@ -254,7 +270,10 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
 
     let mut temporal_steps = Vec::new();
     for candidate in &temporal_candidates {
-        if !candidate.dependencies_ready(&available_current) {
+        let Some(resolved) = candidate
+            .resolve(bound, &available_current)
+            .map_err(|diagnostic| vec![diagnostic])?
+        else {
             let missing = candidate
                 .missing_current_dependencies(&available_current)
                 .into_iter()
@@ -266,22 +285,20 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                 candidate.name, missing
             )));
             continue;
-        }
+        };
 
         match &candidate.payload {
-            CandidatePayload::Equation {
-                kind,
-                expression,
-                dependencies,
-            } => {
+            CandidatePayload::Equation { registration } => {
                 temporal_steps.push(PlannedEquation {
                     block_name: candidate.name.clone(),
-                    kind: *kind,
+                    kind: registration.kind,
                     output: candidate.outputs[0],
-                    dependencies: dependencies.clone(),
-                    expression: expression.clone(),
+                    dependencies: resolved.dependencies,
+                    expression: resolved
+                        .expression
+                        .expect("temporal equation candidate must resolve to an expression"),
                     direction: EquationDirection::Forward,
-                    cost: candidate.cost,
+                    cost: resolved.cost,
                 });
             }
             CandidatePayload::Slot { .. } => {
@@ -350,9 +367,7 @@ enum CandidatePayload {
         inputs: Vec<QuantityId>,
     },
     Equation {
-        kind: BlockKind,
-        expression: CoreExpr,
-        dependencies: Vec<Dependency>,
+        registration: DirectionalRegistration,
     },
 }
 
@@ -362,13 +377,22 @@ enum CandidateTiming {
     Next,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ReadyCandidate {
     cost: u32,
     source_rank: u8,
     name: String,
     output_rank: usize,
     index: usize,
+    resolved_expression: Option<CoreExpr>,
+    resolved_dependencies: Vec<Dependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedCandidate {
+    expression: Option<CoreExpr>,
+    dependencies: Vec<Dependency>,
+    cost: u32,
 }
 
 impl Candidate {
@@ -388,54 +412,68 @@ impl Candidate {
         }
     }
 
-    fn from_equation_directions(equation: &EqualityEquation) -> Result<Vec<Self>, Vec<Diagnostic>> {
-        let mut diagnostics = Vec::new();
-        let mut candidates = Vec::new();
-
-        let Some(lhs_ref) = lhs_quantity_ref(equation) else {
-            return Err(vec![Diagnostic::error(format!(
-                "equation '{}' does not assign to a quantity reference on the lhs",
-                equation.block_name
-            ))]);
+    fn from_directional_registration(
+        registration: DirectionalRegistration,
+    ) -> Result<Self, Vec<Diagnostic>> {
+        let timing = timing_from_reference(&registration.output, &registration.block_name)
+            .map_err(|diag| vec![diag])?;
+        let output = registration.output.quantity;
+        let direction = match registration.direction {
+            ExpressionDirection::Forward => CandidateDirection::Forward,
+            ExpressionDirection::Inverted => CandidateDirection::Inverted,
         };
 
-        let forward_deps = collect_dependencies(&equation.rhs).map_err(|diag| vec![diag])?;
-        candidates.push(Self {
-            name: equation.block_name.clone(),
-            source: PlanSource::Equation(equation.block_name.clone()),
-            direction: CandidateDirection::Forward,
-            timing: timing_from_reference(&lhs_ref, equation).map_err(|diag| vec![diag])?,
-            outputs: vec![lhs_ref.quantity],
-            payload: CandidatePayload::Equation {
-                kind: equation.kind,
-                expression: equation.rhs.clone(),
-                dependencies: forward_deps,
-            },
-            cost: 10,
+        Ok(Self {
+            name: registration.block_name.clone(),
+            source: PlanSource::Equation(registration.block_name.clone()),
+            direction,
+            timing,
+            outputs: vec![output],
+            payload: CandidatePayload::Equation { registration },
+            cost: 0,
             scheduled: false,
-        });
-
-        if equation.kind == BlockKind::Relation {
-            match inverted_candidates(equation, lhs_ref) {
-                Ok(mut more) => candidates.append(&mut more),
-                Err(err) => diagnostics.push(err),
-            }
-        }
-
-        if diagnostics.is_empty() {
-            Ok(candidates)
-        } else {
-            Err(diagnostics)
-        }
+        })
     }
 
-    fn dependencies_ready(&self, available_current: &HashSet<QuantityId>) -> bool {
+    fn resolve(
+        &self,
+        bound: &BoundModel,
+        available_current: &HashSet<QuantityId>,
+    ) -> Result<Option<ResolvedCandidate>, Diagnostic> {
         match &self.payload {
-            CandidatePayload::Slot { inputs, .. } => inputs
-                .iter()
-                .all(|quantity| available_current.contains(quantity)),
-            CandidatePayload::Equation { dependencies, .. } => {
-                dependencies.iter().all(|dependency| match dependency {
+            CandidatePayload::Slot { inputs, .. } => {
+                if inputs
+                    .iter()
+                    .all(|quantity| available_current.contains(quantity))
+                {
+                    Ok(Some(ResolvedCandidate {
+                        expression: None,
+                        dependencies: inputs
+                            .iter()
+                            .copied()
+                            .map(|quantity| Dependency {
+                                quantity: Some(quantity),
+                                timing: DependencyTiming::Current,
+                            })
+                            .collect(),
+                        cost: self.cost,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+            CandidatePayload::Equation { registration } => {
+                let extracted = extract_available_expression(
+                    &bound.core,
+                    registration,
+                    available_current,
+                    true,
+                )?;
+                let Some(extracted) = extracted else {
+                    return Ok(None);
+                };
+                let dependencies = collect_dependencies(&extracted.expression)?;
+                if dependencies.iter().all(|dependency| match dependency {
                     Dependency {
                         timing: DependencyTiming::Current,
                         quantity: Some(quantity),
@@ -449,7 +487,15 @@ impl Candidate {
                         ..
                     } => false,
                     Dependency { quantity: None, .. } => true,
-                })
+                }) {
+                    Ok(Some(ResolvedCandidate {
+                        expression: Some(extracted.expression),
+                        dependencies,
+                        cost: registration.base_cost + extracted.structural_cost,
+                    }))
+                } else {
+                    Ok(None)
+                }
             }
         }
     }
@@ -457,16 +503,23 @@ impl Candidate {
     fn current_dependencies(&self) -> Vec<QuantityId> {
         match &self.payload {
             CandidatePayload::Slot { inputs, .. } => inputs.clone(),
-            CandidatePayload::Equation { dependencies, .. } => dependencies
-                .iter()
-                .filter_map(|dependency| match dependency {
-                    Dependency {
-                        timing: DependencyTiming::Current,
-                        quantity: Some(quantity),
-                    } => Some(*quantity),
-                    _ => None,
-                })
-                .collect(),
+            CandidatePayload::Equation { registration } => {
+                collect_dependencies(&registration.seed_expression)
+                    .ok()
+                    .map(|dependencies| {
+                        dependencies
+                            .iter()
+                            .filter_map(|dependency| match dependency {
+                                Dependency {
+                                    timing: DependencyTiming::Current,
+                                    quantity: Some(quantity),
+                                } => Some(*quantity),
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
         }
     }
 
@@ -480,16 +533,23 @@ impl Candidate {
                 .copied()
                 .filter(|quantity| !available_current.contains(quantity))
                 .collect(),
-            CandidatePayload::Equation { dependencies, .. } => dependencies
-                .iter()
-                .filter_map(|dependency| match dependency {
-                    Dependency {
-                        timing: DependencyTiming::Current,
-                        quantity: Some(quantity),
-                    } if !available_current.contains(quantity) => Some(*quantity),
-                    _ => None,
-                })
-                .collect(),
+            CandidatePayload::Equation { registration } => collect_dependencies(
+                &registration.seed_expression,
+            )
+            .ok()
+            .map(|dependencies| {
+                dependencies
+                    .iter()
+                    .filter_map(|dependency| match dependency {
+                        Dependency {
+                            timing: DependencyTiming::Current,
+                            quantity: Some(quantity),
+                        } if !available_current.contains(quantity) => Some(*quantity),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         }
     }
 
@@ -512,163 +572,24 @@ impl Candidate {
             CandidatePayload::Slot { inputs, .. } => AlternativePayload::Slot {
                 inputs: inputs.clone(),
             },
-            CandidatePayload::Equation { expression, .. } => AlternativePayload::Equation {
-                expression: expression.clone(),
+            CandidatePayload::Equation { registration } => AlternativePayload::Equation {
+                expression: registration.seed_expression.clone(),
             },
         }
     }
 }
 
-fn lhs_quantity_ref(equation: &EqualityEquation) -> Option<QuantityRef> {
-    match &equation.lhs {
-        CoreExpr::Quantity(reference) => Some(reference.clone()),
-        _ => None,
-    }
-}
-
 fn timing_from_reference(
     reference: &QuantityRef,
-    equation: &EqualityEquation,
+    block_name: &str,
 ) -> Result<CandidateTiming, Diagnostic> {
     match reference.time {
         TimeReference::Implicit | TimeReference::Relative(0) => Ok(CandidateTiming::Current),
         TimeReference::Relative(1) => Ok(CandidateTiming::Next),
         other => Err(Diagnostic::error(format!(
             "equation '{}' uses unsupported lhs time reference {:?} in v1",
-            equation.block_name, other
+            block_name, other
         ))),
-    }
-}
-
-fn inverted_candidates(
-    equation: &EqualityEquation,
-    lhs_ref: QuantityRef,
-) -> Result<Vec<Candidate>, Diagnostic> {
-    if !matches!(
-        lhs_ref.time,
-        TimeReference::Implicit | TimeReference::Relative(0)
-    ) {
-        return Ok(Vec::new());
-    }
-
-    let lhs_expr = CoreExpr::Quantity(lhs_ref);
-    let CoreExpr::Binary { op, left, right } = &equation.rhs else {
-        return Ok(Vec::new());
-    };
-
-    let mut candidates = Vec::new();
-
-    if let Some(target) = invertible_target(left) {
-        let expression = invert_for_left(*op, lhs_expr.clone(), (**right).clone());
-        let dependencies = collect_dependencies(&expression)?;
-        candidates.push(Candidate {
-            name: equation.block_name.clone(),
-            source: PlanSource::Equation(equation.block_name.clone()),
-            direction: CandidateDirection::Inverted,
-            timing: CandidateTiming::Current,
-            outputs: vec![target],
-            payload: CandidatePayload::Equation {
-                kind: equation.kind,
-                expression,
-                dependencies,
-            },
-            cost: 20,
-            scheduled: false,
-        });
-    }
-
-    if let Some(target) = invertible_target(right) {
-        let expression = invert_for_right(*op, lhs_expr, (**left).clone(), (**right).clone());
-        let dependencies = collect_dependencies(&expression)?;
-        candidates.push(Candidate {
-            name: equation.block_name.clone(),
-            source: PlanSource::Equation(equation.block_name.clone()),
-            direction: CandidateDirection::Inverted,
-            timing: CandidateTiming::Current,
-            outputs: vec![target],
-            payload: CandidatePayload::Equation {
-                kind: equation.kind,
-                expression,
-                dependencies,
-            },
-            cost: 20,
-            scheduled: false,
-        });
-    }
-
-    Ok(candidates)
-}
-
-fn invertible_target(expr: &CoreExpr) -> Option<QuantityId> {
-    match expr {
-        CoreExpr::Quantity(reference)
-            if matches!(
-                reference.time,
-                TimeReference::Implicit | TimeReference::Relative(0)
-            ) =>
-        {
-            Some(reference.quantity)
-        }
-        _ => None,
-    }
-}
-
-fn invert_for_left(op: crate::semantic::BinaryOp, lhs: CoreExpr, right: CoreExpr) -> CoreExpr {
-    use crate::semantic::BinaryOp;
-
-    match op {
-        BinaryOp::Add => CoreExpr::Binary {
-            op: BinaryOp::Sub,
-            left: Box::new(lhs),
-            right: Box::new(right),
-        },
-        BinaryOp::Sub => CoreExpr::Binary {
-            op: BinaryOp::Add,
-            left: Box::new(lhs),
-            right: Box::new(right),
-        },
-        BinaryOp::Mul => CoreExpr::Binary {
-            op: BinaryOp::Div,
-            left: Box::new(lhs),
-            right: Box::new(right),
-        },
-        BinaryOp::Div => CoreExpr::Binary {
-            op: BinaryOp::Mul,
-            left: Box::new(lhs),
-            right: Box::new(right),
-        },
-    }
-}
-
-fn invert_for_right(
-    op: crate::semantic::BinaryOp,
-    lhs: CoreExpr,
-    left: CoreExpr,
-    _right: CoreExpr,
-) -> CoreExpr {
-    use crate::semantic::BinaryOp;
-
-    match op {
-        BinaryOp::Add => CoreExpr::Binary {
-            op: BinaryOp::Sub,
-            left: Box::new(lhs),
-            right: Box::new(left),
-        },
-        BinaryOp::Sub => CoreExpr::Binary {
-            op: BinaryOp::Sub,
-            left: Box::new(left),
-            right: Box::new(lhs),
-        },
-        BinaryOp::Mul => CoreExpr::Binary {
-            op: BinaryOp::Div,
-            left: Box::new(lhs),
-            right: Box::new(left),
-        },
-        BinaryOp::Div => CoreExpr::Binary {
-            op: BinaryOp::Div,
-            left: Box::new(left),
-            right: Box::new(lhs),
-        },
     }
 }
 
