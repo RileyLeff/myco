@@ -1,4 +1,4 @@
-use std::{env, fs, process::ExitCode};
+use std::{env, fs, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {
     match run() {
@@ -69,6 +69,40 @@ fn run() -> Result<(), String> {
                 Err(diagnostics) => fail_with_diagnostics(&path, diagnostics),
             }
         }
+        "emit-demo" => {
+            let backend = args.next().ok_or_else(usage)?;
+            let path = args.next().ok_or_else(usage)?;
+            let output = args.next();
+            if args.next().is_some() {
+                return Err(usage());
+            }
+
+            let backend = parse_backend(&backend)?;
+            let source =
+                fs::read_to_string(&path).map_err(|err| format!("failed to read {path}: {err}"))?;
+            let model =
+                myco_core::pipeline::load_model(&source).map_err(|diagnostics| render_diagnostics(&path, diagnostics))?;
+            let artifact = myco_core::pipeline::compile_model(
+                &model,
+                &myco_core::demo::tiny_tree_training_spec(),
+                backend,
+            )
+            .map_err(|diagnostics| render_diagnostics(&path, diagnostics))?;
+
+            let output_path = output
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(artifact.suggested_filename()));
+            artifact
+                .write_to_path(&output_path)
+                .map_err(|err| format!("failed to write {}: {err}", output_path.display()))?;
+            println!(
+                "wrote {} artifact for model '{}' to {}",
+                backend_name(backend),
+                artifact.model_name,
+                output_path.display()
+            );
+            Ok(())
+        }
         _ => Err(usage()),
     }
 }
@@ -77,12 +111,31 @@ fn fail_with_diagnostics(
     path: &str,
     diagnostics: Vec<myco_core::diagnostics::Diagnostic>,
 ) -> Result<(), String> {
+    Err(render_diagnostics(path, diagnostics))
+}
+
+fn render_diagnostics(path: &str, diagnostics: Vec<myco_core::diagnostics::Diagnostic>) -> String {
     for diagnostic in diagnostics {
         eprintln!("{diagnostic}");
     }
-    Err(format!("command failed for {path}"))
+    format!("command failed for {path}")
+}
+
+fn parse_backend(value: &str) -> Result<myco_core::pipeline::BackendTarget, String> {
+    match value {
+        "python" => Ok(myco_core::pipeline::BackendTarget::Python),
+        "jax" => Ok(myco_core::pipeline::BackendTarget::Jax),
+        _ => Err("backend must be one of: python, jax".to_string()),
+    }
+}
+
+fn backend_name(value: myco_core::pipeline::BackendTarget) -> &'static str {
+    match value {
+        myco_core::pipeline::BackendTarget::Python => "python",
+        myco_core::pipeline::BackendTarget::Jax => "jax",
+    }
 }
 
 fn usage() -> String {
-    "usage: myco <check|inspect> <path>".to_string()
+    "usage: myco <check|inspect> <path>\n       myco emit-demo <python|jax> <path> [output]".to_string()
 }
