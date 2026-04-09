@@ -25,6 +25,8 @@ DEFAULT_TINY_TREE_MODEL_PATH = (
 class TrainingResult:
     initial_loss: float
     final_loss: float
+    initial_obs_loss: float
+    final_obs_loss: float
     holdout_transpiration_mse: float
     holdout_water_mse: float
     learned_params: dict[str, jax.Array]
@@ -126,6 +128,7 @@ def run_tiny_tree_training_demo(
     horizon_steps: int = 64,
     train_steps: int = 200,
     learning_rate: float = 0.05,
+    consistency_weight: float = 0.01,
     dt: float = 0.02,
     seed: int = 0,
     model_path: str | Path = DEFAULT_TINY_TREE_MODEL_PATH,
@@ -153,7 +156,7 @@ def run_tiny_tree_training_demo(
     optimizer = optax.adam(learning_rate)
     opt_state = optimizer.init(learned_params)
 
-    def observation_loss(params):
+    def loss_components(params):
         slot_providers = {"controller": controller_from_params(params)}
         _, history = module.rollout(
             initial_state,
@@ -162,16 +165,35 @@ def run_tiny_tree_training_demo(
             slot_providers,
             jnp.asarray(dt),
         )
-        return module.obs_loss(history, train_observations)
+        return module.loss_components(
+            history,
+            train_observations,
+            forcing_series=forcing_train,
+            constants=constants,
+            slot_providers=slot_providers,
+        )
 
-    initial_loss = float(observation_loss(learned_params))
+    def training_loss(params):
+        components = loss_components(params)
+        return (
+            components["obs_loss"]
+            + consistency_weight
+            * (components["consistency_loss"] / jnp.asarray(max(horizon_steps, 1)))
+            + components["soft_penalty_loss"]
+        )
+
+    initial_components = loss_components(learned_params)
+    initial_loss = float(training_loss(learned_params))
+    initial_obs_loss = float(initial_components["obs_loss"])
 
     for _ in range(train_steps):
-        loss, grads = jax.value_and_grad(observation_loss)(learned_params)
+        loss, grads = jax.value_and_grad(training_loss)(learned_params)
         updates, opt_state = optimizer.update(grads, opt_state, learned_params)
         learned_params = optax.apply_updates(learned_params, updates)
 
-    final_loss = float(observation_loss(learned_params))
+    final_components = loss_components(learned_params)
+    final_loss = float(training_loss(learned_params))
+    final_obs_loss = float(final_components["obs_loss"])
 
     learned_slot_providers = {"controller": controller_from_params(learned_params)}
     _, history_holdout_true = module.rollout(
@@ -202,6 +224,8 @@ def run_tiny_tree_training_demo(
     return TrainingResult(
         initial_loss=initial_loss,
         final_loss=final_loss,
+        initial_obs_loss=initial_obs_loss,
+        final_obs_loss=final_obs_loss,
         holdout_transpiration_mse=holdout_transpiration_mse,
         holdout_water_mse=holdout_water_mse,
         learned_params=learned_params,

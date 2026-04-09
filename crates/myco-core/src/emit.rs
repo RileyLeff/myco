@@ -286,6 +286,8 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
             lines.push("        raise KeyError('missing observation payload')".to_string());
             lines.push("    _values = _obs[\"values\"]".to_string());
             lines.push("    _mask = _obs[\"mask\"]".to_string());
+            lines.push("    observed_total = 0.0".to_string());
+            lines.push("    observed_count = 0".to_string());
             lines.push("    for step_index, frame in enumerate(trajectory):".to_string());
             lines.push("        if not _mask[step_index]:".to_string());
             lines.push("            continue".to_string());
@@ -295,12 +297,14 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
             ));
             match observation.loss {
                 crate::compile::LossKind::Mse => {
-                    lines.push("        total += residual * residual".to_string());
+                    lines.push("        observed_total += residual * residual".to_string());
                 }
                 crate::compile::LossKind::Huber => {
-                    lines.push("        total += _huber_loss(residual)".to_string());
+                    lines.push("        observed_total += _huber_loss(residual)".to_string());
                 }
             }
+            lines.push("        observed_count += 1".to_string());
+            lines.push("    total += observed_total / max(observed_count, 1)".to_string());
         }
         lines.push("    return total".to_string());
         lines.push(String::new());
@@ -648,16 +652,17 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
                 "    _residual = history[{name}] - _values",
                 name = py_string(&name)
             ));
+            lines.push("    _count = jnp.maximum(jnp.sum(_mask), 1)".to_string());
             match observation.loss {
                 crate::compile::LossKind::Mse => {
                     lines.push(
-                        "    total += jnp.sum(jnp.where(_mask, _residual * _residual, 0.0))"
+                        "    total += jnp.sum(jnp.where(_mask, _residual * _residual, 0.0)) / _count"
                             .to_string(),
                     );
                 }
                 crate::compile::LossKind::Huber => {
                     lines.push(
-                        "    total += jnp.sum(jnp.where(_mask, _huber_loss(_residual), 0.0))"
+                        "    total += jnp.sum(jnp.where(_mask, _huber_loss(_residual), 0.0)) / _count"
                             .to_string(),
                     );
                 }
@@ -1333,6 +1338,7 @@ mod tests {
             "def rollout(initial_state, forcing_steps, constants, slot_providers, dt, params=None):"
         ));
         assert!(module.contains("def obs_loss(trajectory, observations):"));
+        assert!(module.contains("observed_total / max(observed_count, 1)"));
         assert!(module.contains(
             "def consistency_loss(trajectory, forcing_steps=None, constants=None, slot_providers=None):"
         ));
@@ -1366,6 +1372,7 @@ mod tests {
         assert!(module.contains("TRAINABLE_METADATA = {\"learned_initial_state\": [], \"learned_slots\": [\"controller\"]}"));
         assert!(module.contains("return lax.scan(_scan_step, initial_state, forcing_series)"));
         assert!(module.contains("jnp.where"));
+        assert!(module.contains("jnp.maximum(jnp.sum(_mask), 1)"));
         assert!(module.contains("jnn.sigmoid"));
         assert!(module.contains("jnn.softplus"));
         assert!(module.contains(
