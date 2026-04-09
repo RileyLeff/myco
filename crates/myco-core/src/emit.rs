@@ -52,6 +52,25 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push(format!("CONSTANT_NAMES = {}", render_py_string_list(&constant_names)));
     lines.push(String::new());
 
+    lines.push("OBSERVATION_SPECS = {".to_string());
+    for observation in &bound.observations {
+        let name = quantity_name(experiment, observation.quantity);
+        lines.push(format!(
+            "    {name}: {{\"loss\": {loss}, \"schedule\": {schedule}}},",
+            name = py_string(&name),
+            loss = py_string(match observation.loss {
+                crate::compile::LossKind::Mse => "mse",
+                crate::compile::LossKind::Huber => "huber",
+            }),
+            schedule = py_string(match &observation.schedule {
+                crate::compile::ObservationSchedule::DensePerStep => "dense_per_step",
+                crate::compile::ObservationSchedule::Sparse(_) => "sparse",
+            })
+        ));
+    }
+    lines.push("}".to_string());
+    lines.push(String::new());
+
     lines.push("SLOT_INTERFACES = {".to_string());
     for slot in &bound.slot_bindings {
         let input_names = slot
@@ -96,6 +115,13 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return {}".to_string());
     lines.push(String::new());
 
+    lines.push("def _huber_loss(residual, delta=1.0):".to_string());
+    lines.push("    abs_residual = abs(residual)".to_string());
+    lines.push("    if abs_residual <= delta:".to_string());
+    lines.push("        return 0.5 * residual * residual".to_string());
+    lines.push("    return delta * (abs_residual - 0.5 * delta)".to_string());
+    lines.push(String::new());
+
     lines.push("def step(state, forcing, constants, slot_providers, dt):".to_string());
     lines.push("    current = {}".to_string());
     lines.push("    current.update(constants)".to_string());
@@ -124,6 +150,58 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("        state, current = step(state, forcing, constants, slot_providers, dt)".to_string());
     lines.push("        trajectory.append({\"current\": dict(current), \"state\": dict(state)})".to_string());
     lines.push("    return trajectory".to_string());
+    lines.push(String::new());
+
+    lines.push("def obs_loss(trajectory, observations):".to_string());
+    lines.push("    total = 0.0".to_string());
+    for observation in &bound.observations {
+        let name = quantity_name(experiment, observation.quantity);
+        lines.push(format!("    _obs = observations.get({})", py_string(&name)));
+        lines.push("    if _obs is None:".to_string());
+        lines.push("        raise KeyError('missing observation payload')".to_string());
+        lines.push("    _values = _obs[\"values\"]".to_string());
+        lines.push("    _mask = _obs[\"mask\"]".to_string());
+        lines.push("    for step_index, frame in enumerate(trajectory):".to_string());
+        lines.push("        if not _mask[step_index]:".to_string());
+        lines.push("            continue".to_string());
+        lines.push(format!(
+            "        residual = frame[\"current\"][{name}] - _values[step_index]",
+            name = py_string(&name)
+        ));
+        match observation.loss {
+            crate::compile::LossKind::Mse => {
+                lines.push("        total += residual * residual".to_string());
+            }
+            crate::compile::LossKind::Huber => {
+                lines.push("        total += _huber_loss(residual)".to_string());
+            }
+        }
+    }
+    lines.push("    return total".to_string());
+    lines.push(String::new());
+
+    lines.push("def consistency_loss(trajectory):".to_string());
+    lines.push("    return 0.0".to_string());
+    lines.push(String::new());
+
+    lines.push("def soft_penalty_loss(trajectory):".to_string());
+    lines.push("    return 0.0".to_string());
+    lines.push(String::new());
+
+    lines.push("def loss_components(trajectory, observations):".to_string());
+    lines.push("    obs = obs_loss(trajectory, observations)".to_string());
+    lines.push("    consistency = consistency_loss(trajectory)".to_string());
+    lines.push("    soft_penalty = soft_penalty_loss(trajectory)".to_string());
+    lines.push("    return {".to_string());
+    lines.push("        \"obs_loss\": obs,".to_string());
+    lines.push("        \"consistency_loss\": consistency,".to_string());
+    lines.push("        \"soft_penalty_loss\": soft_penalty,".to_string());
+    lines.push("        \"total_loss\": obs + consistency + soft_penalty,".to_string());
+    lines.push("    }".to_string());
+    lines.push(String::new());
+
+    lines.push("def total_loss(trajectory, observations):".to_string());
+    lines.push("    return loss_components(trajectory, observations)[\"total_loss\"]".to_string());
     lines.push(String::new());
 
     lines.join("\n")
@@ -253,8 +331,11 @@ mod tests {
         let module = emit_python_module(&experiment);
 
         assert!(module.contains("MODEL_NAME = \"TinyTree\""));
+        assert!(module.contains("OBSERVATION_SPECS = {"));
         assert!(module.contains("def step(state, forcing, constants, slot_providers, dt):"));
         assert!(module.contains("def rollout(initial_state, forcing_steps, constants, slot_providers, dt):"));
+        assert!(module.contains("def obs_loss(trajectory, observations):"));
+        assert!(module.contains("def total_loss(trajectory, observations):"));
         assert!(module.contains("current[\"stomata\"] = slot_providers[\"controller\"]("));
         assert!(module.contains("current[\"transpiration\"] = (current[\"stomata\"] * current[\"vpd_scale\"])"));
         assert!(module.contains("next_state[\"water\"] = (current[\"water\"] - (dt * current[\"transpiration\"]))"));
