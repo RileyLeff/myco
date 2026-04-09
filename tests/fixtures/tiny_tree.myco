@@ -1,0 +1,28 @@
+model TinyTree
+
+external vpd_scale : scalar
+external soil_water : potential
+external hydraulic_cond : conductance
+
+state water : potential { self <= 0 }
+state carbon : carbon_mass { self >= 0 }
+
+node stomata : conductance {
+  self >= 0
+  self <= g_max
+}
+
+node transpiration : water_flux { self >= 0 }
+node g_max : scalar { self >= 0 }
+
+relation demand_transpiration:
+  transpiration = stomata * vpd_scale
+
+relation supply_transpiration:
+  transpiration = hydraulic_cond * (soil_water - water)
+
+slot controller provides [stomata]:
+  inputs = [water, carbon, vpd_scale, soil_water, hydraulic_cond, g_max]
+
+temporal water_step:
+  water[t+1] = water[t] - dt * transpiration[t]

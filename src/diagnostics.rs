@@ -1,17 +1,31 @@
+use std::fmt;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
     Warning,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourcePosition {
+    pub line: usize,
+    pub column: usize,
 }
 
-impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
+impl SourcePosition {
+    pub fn new(line: usize, column: usize) -> Self {
+        Self { line, column }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceSpan {
+    pub start: SourcePosition,
+    pub end: SourcePosition,
+}
+
+impl SourceSpan {
+    pub fn new(start: SourcePosition, end: SourcePosition) -> Self {
         Self { start, end }
     }
 }
@@ -20,7 +34,7 @@ impl Span {
 pub struct Diagnostic {
     pub severity: Severity,
     pub message: String,
-    pub span: Option<Span>,
+    pub span: Option<SourceSpan>,
 }
 
 impl Diagnostic {
@@ -32,8 +46,26 @@ impl Diagnostic {
         }
     }
 
-    pub fn with_span(mut self, span: Span) -> Self {
+    pub fn with_span(mut self, span: SourceSpan) -> Self {
         self.span = Some(span);
         self
+    }
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.span {
+            Some(span) => write!(
+                f,
+                "{:?} at {}:{}-{}:{}: {}",
+                self.severity,
+                span.start.line,
+                span.start.column,
+                span.end.line,
+                span.end.column,
+                self.message
+            ),
+            None => write!(f, "{:?}: {}", self.severity, self.message),
+        }
     }
 }
