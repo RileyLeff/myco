@@ -94,7 +94,50 @@ The important distinction is that parameters are:
 
 They are stable within a rollout, but often trainable across experiments.
 
-### 3. Function Registry
+### 3. Semantic Schemas And Component Types
+
+One thing that likely wants to get clearer after `v1` is the separation between:
+
+- base quantity types and shapes
+- semantic wrappers or component schemas
+- relationships and functions over those quantities
+
+Right now Myco has a useful but still relatively flat notion of quantities and relations.
+
+Longer-term, it may be valuable to support semantic component definitions that expand into more basal pieces and are mostly erased by the compiler.
+
+Examples:
+
+- `Leaf`
+- `RootSegment`
+- `CanopyLayer`
+- `Tree`
+
+These would not primarily be "types" in the physical-dimension sense. They would be semantic schemas or bundles that could contain:
+
+- quantities
+- parameters
+- defaults
+- constraints
+- observation operators
+- functions
+- relations
+
+This is what could eventually make things like the following feel natural:
+
+- import a package that exports only types or component schemas
+- import a package that exports only functions
+- import a package that exports a full model bundle
+- instantiate something like `Sperry_2017_Tree` with traits and parameters rather than rebuilding it manually
+
+The important design instinct here is:
+
+- the user-facing semantic structure can be rich
+- the compiler core can still erase it into a flatter IR for planning and emission
+
+That feels like a powerful UX direction, but it should likely be layered above the current core rather than baked directly into the lowest-level compiler representation.
+
+### 4. Function Registry
 
 This is probably the single biggest unlock after `v1`.
 
@@ -119,7 +162,7 @@ This is how Myco could represent things like:
 
 The registry matters because it lets the compiler stay small while the domain library grows richer.
 
-### 4. Local Solve Blocks
+### 5. Local Solve Blocks
 
 Real plant models often contain same-step coupling that should not be rejected forever as an algebraic loop.
 
@@ -142,7 +185,7 @@ This would still fit a discrete-time global model:
 - temporal rollout remains explicit
 - local implicit solves happen inside a step
 
-### 5. Observation Operators
+### 6. Observation Operators
 
 `v1` observations are close to identity-on-node.
 
@@ -164,7 +207,34 @@ So `v2` likely needs:
 
 This is important because many real datasets do not observe state variables directly.
 
-### 6. Demand-Driven Planning
+### 7. Data And Observation Indexing
+
+Another place that likely wants a cleaner long-term story is assignment of sparse or irregular data into a rollout grid.
+
+`v1` made the right simplification:
+
+- dense forcing
+- masked observations
+
+But real workflows will often want:
+
+- multiple sparse vectors
+- observation series shorter than the compile horizon
+- explicit assignment of values to timestep indices
+- eventually timestamp-based alignment
+
+So `v2` or soon after likely needs a clearer indexing model for bindings and observations.
+
+Potential directions:
+
+- explicit timestep index arrays
+- named schedules reusable across bindings
+- timestamp arrays aligned to a compile grid
+- observation operators with attached index metadata
+
+This matters because otherwise "here are four short vectors" becomes ambiguous very quickly.
+
+### 8. Demand-Driven Planning
 
 `v1` plans the single-step graph in a mostly whole-graph way.
 
@@ -179,7 +249,7 @@ But `v2` should probably move toward demand-driven compilation:
 
 That will matter once a model has many variables and multiple optional substructures.
 
-### 7. Better Runtime Contracts
+### 9. Better Runtime Contracts
 
 The current generated artifacts are already usable, but `v2` will probably want stronger contracts around:
 
@@ -190,6 +260,70 @@ The current generated artifacts are already usable, but `v2` will probably want 
 - batched evaluation
 
 This is especially important if Myco starts being used for repeated scientific training workflows rather than only one-off demos.
+
+### 10. Better Binding Ergonomics
+
+The current Python binding API is explicit and semantically honest, which was the right choice for `v1`.
+
+But it is also fairly verbose.
+
+That is not necessarily a crisis, especially in an agent-assisted world, but it is probably not the final UX.
+
+Later layers may want:
+
+- bulk binding from mappings
+- grouped forcing binding helpers
+- grouped observation binding helpers
+- adapters from `pandas`, `xarray`, or other structured containers
+- more declarative experiment constructors
+
+This should be approached carefully. The current explicitness is valuable. The goal should be to reduce repetition without making the binding semantics fuzzy again.
+
+### 11. Richer Constraint Design Space
+
+Constraints are another area where `v1` intentionally stayed narrow.
+
+Longer-term, it would be useful to think much more broadly about what kinds of constraints Myco might want to express, even before all of them are implemented.
+
+Possible classes include:
+
+- simple bounds
+- simplex and sum-to-one constraints
+- monotonicity constraints
+- smoothness and total-variation penalties
+- rate constraints
+- ordering constraints
+- conservation constraints
+- temporal coupling constraints
+- structural parameter-family constraints
+- custom registry-backed constraints
+
+The important thing is that these do not all have the same runtime meaning.
+
+Different constraints may lower to:
+
+- compile-time checks
+- projections
+- penalties
+- assertions
+- solver-side conditions
+
+So the future direction is probably not "one giant generic constraint system." It is a richer catalog of constraint kinds with explicit lowering semantics.
+
+### 12. Teaching Demos For Constraint Structure
+
+There is also value in building better demo and teaching examples, not just richer features.
+
+Especially useful would be examples showing:
+
+- overdetermined quantities
+- underdetermined quantities
+- partially constrained latent quantities
+- difficult or non-invertible functions
+- what Myco can infer automatically
+- what it cannot infer without additional assumptions or solve machinery
+
+These examples would help shape both the language and the user mental model.
 
 ## Candidate V2 Model Shapes
 
@@ -248,6 +382,68 @@ Why it is risky:
 
 If momentum matters most, a hydraulic or water-carbon model is probably the better first `v2` target.
 
+## Backend Direction
+
+One important strategic question is whether Myco should become deeply JAX-specific or remain fundamentally backend-agnostic.
+
+My current view is:
+
+- Myco core should remain backend-agnostic
+- JAX should remain the first-class and best-supported backend for the near term
+
+That means:
+
+- the compiler should target an internal representation and plan that are not inherently JAX-only
+- backend emitters should remain replaceable
+- scientific function registries may carry backend-specific implementations
+
+This matters because there are plausible future backends beyond JAX:
+
+- PyTorch
+- a Rust-native backend such as Burn
+- maybe other ML or simulation runtimes later
+
+At the same time, it would be a mistake to pretend all backends are equally important right now.
+
+JAX is currently the strongest fit for the project because it already supports:
+
+- functional rollout style
+- `scan`
+- autodiff through compiled dynamics
+- a clean scientific-ML workflow
+
+So the healthy stance is probably:
+
+- backend-agnostic architecture
+- JAX-first product quality
+- other backends only when a concrete use case demands them
+
+In practice that likely means:
+
+- keep core planning and equality reasoning independent of backend concerns
+- treat emitted runtime contracts as a backend-neutral interface
+- let each backend own its own artifact shape, runtime helpers, and performance strategy
+
+## Registry And Package Ecosystem
+
+Once Myco grows a function registry or semantic component layer, it will likely also want a package and dependency story.
+
+Longer-term, useful directions might include:
+
+- versioned package dependencies declared by models
+- packages that export only schemas or semantic component types
+- packages that export only scientific functions
+- packages that export complete model bundles
+- registry resolution pinned to explicit versions
+
+This is what could make workflows like these feel natural:
+
+- import a named plant model family and fill in parameters
+- reuse a published package across projects
+- depend on a domain library without copying all of its internals into one repo
+
+This should likely be designed as a layer above the core compiler, not as a requirement for the core itself to understand package management deeply.
+
 ## What Probably Belongs After V2
 
 These are things that feel important, but not necessarily immediate.
@@ -302,6 +498,7 @@ Potential later directions:
 - structural inequalities
 - piecewise policies
 - richer penalty families
+- richer semantic type or schema-level constraints
 
 This should be driven by real model needs rather than by abstract type-system ambition.
 
@@ -346,6 +543,8 @@ The healthiest long-term shape may be layered:
 
 - `myco-core`
 - `myco-jax`
+- maybe `myco-torch`
+- maybe `myco-burn`
 - one or more domain libraries like a `myco-plant`
 
 That would keep the compiler general while letting real scientific building blocks accumulate in a domain-specific way.
@@ -383,6 +582,7 @@ Longer-term UX ideas:
 - compile-plan visual inspection
 - model debugging notebooks
 - auto-generated docs from `.myco` models
+- registry browsing and schema exploration tools
 
 These are not core to scientific correctness, but they could make the system much more usable.
 
@@ -406,6 +606,8 @@ The compiler core should stay focused on:
 - emission
 
 It should not absorb every scientific equation family directly.
+
+The same caution applies to schemas, registries, and package ecosystems: they are important, but they should sit on top of a small core rather than collapse into it.
 
 ### 3. Overcommitting To Continuous-Time Too Early
 
@@ -431,6 +633,7 @@ A good `v2` would probably mean something like:
 - one real plant-relevant model family implemented cleanly
 - one or two carefully chosen new compiler capabilities added
 - stronger scientific data interfaces
+- a clearer story for semantic schemas, function packages, or both
 - a credible path from TinyTree to a paper-relevant workflow
 
 A good long-term outcome would mean:
