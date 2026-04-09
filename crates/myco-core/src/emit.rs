@@ -53,10 +53,21 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         "CONSTANT_NAMES = {}",
         render_py_string_list(&constant_names)
     ));
+    lines.push(format!("HORIZON_STEPS = {}", bound.horizon_steps));
     let learned_initial_state_names = learned_initial_state_names(bound, experiment);
+    let required_initial_state_names = required_initial_state_names(bound, experiment);
+    let learned_slot_names = learned_slot_names(bound);
     lines.push(format!(
         "LEARNED_INITIAL_STATE_NAMES = {}",
         render_py_string_list(&learned_initial_state_names)
+    ));
+    lines.push(format!(
+        "REQUIRED_INITIAL_STATE_NAMES = {}",
+        render_py_string_list(&required_initial_state_names)
+    ));
+    lines.push(format!(
+        "LEARNED_SLOT_NAMES = {}",
+        render_py_string_list(&learned_slot_names)
     ));
     lines.push(format!(
         "CONSISTENCY_POLICY = {:?}",
@@ -84,7 +95,6 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("}".to_string());
     lines.push(String::new());
 
-    let learned_slot_names = learned_slot_names(bound);
     lines.push(format!(
         "TRAINABLE_METADATA = {{\"learned_initial_state\": {}, \"learned_slots\": {}}}",
         render_py_string_list(&learned_initial_state_names),
@@ -198,6 +208,14 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return bound".to_string());
     lines.push(String::new());
 
+    lines.push("def _require_keys(mapping, required, label):".to_string());
+    lines.push("    mapping = {} if mapping is None else mapping".to_string());
+    lines.push("    for name in required:".to_string());
+    lines.push("        if name not in mapping:".to_string());
+    lines.push("            raise KeyError(f\"missing {label} value for {name!r}\")".to_string());
+    lines.push("    return mapping".to_string());
+    lines.push(String::new());
+
     lines.push("def _project_output(name, value, current):".to_string());
     lines.push("    spec = PROJECTION_METADATA.get(name)".to_string());
     lines.push("    if spec is None:".to_string());
@@ -232,6 +250,63 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return state".to_string());
     lines.push(String::new());
 
+    lines.push(
+        "def validate_rollout_inputs(initial_state, forcing_steps, constants, slot_providers, params=None):"
+            .to_string(),
+    );
+    lines.push("    constants = _require_keys(constants, CONSTANT_NAMES, \"constant\")".to_string());
+    lines.push("    slot_providers = {} if slot_providers is None else slot_providers".to_string());
+    lines.push("    for slot_name in LEARNED_SLOT_NAMES:".to_string());
+    lines.push("        if slot_name not in slot_providers:".to_string());
+    lines.push(
+        "            raise KeyError(f\"missing learned slot provider for {slot_name!r}\")"
+            .to_string(),
+    );
+    lines.push("    if forcing_steps is None:".to_string());
+    lines.push("        raise KeyError(\"missing forcing steps\")".to_string());
+    lines.push("    if len(forcing_steps) != HORIZON_STEPS:".to_string());
+    lines.push(
+        "        raise ValueError(f\"forcing step count {len(forcing_steps)} does not match compile horizon {HORIZON_STEPS}\")"
+            .to_string(),
+    );
+    lines.push("    for step_index, forcing in enumerate(forcing_steps):".to_string());
+    lines.push(
+        "        _require_keys(forcing, FORCING_NAMES, f\"forcing step {step_index}\")".to_string(),
+    );
+    lines.push("    initial_state = {} if initial_state is None else initial_state".to_string());
+    lines.push(
+        "    _require_keys(initial_state, REQUIRED_INITIAL_STATE_NAMES, \"initial state\")"
+            .to_string(),
+    );
+    lines.push("    resolve_initial_state(initial_state, constants, params=params)".to_string());
+    lines.push(String::new());
+
+    if mode_emits_loss_helpers(bound.mode) {
+        lines.push("def validate_observations(observations):".to_string());
+        lines.push("    observations = {} if observations is None else observations".to_string());
+        lines.push(
+            "    _require_keys(observations, OBSERVATION_SPECS.keys(), \"observation payload\")"
+                .to_string(),
+        );
+        lines.push("    for name in OBSERVATION_SPECS:".to_string());
+        lines.push("        payload = observations[name]".to_string());
+        lines.push(
+            "        _require_keys(payload, [\"values\", \"mask\"], f\"observation {name}\")"
+                .to_string(),
+        );
+        lines.push("        if len(payload[\"values\"]) != HORIZON_STEPS:".to_string());
+        lines.push(
+            "            raise ValueError(f\"observation {name!r} values length does not match compile horizon {HORIZON_STEPS}\")"
+                .to_string(),
+        );
+        lines.push("        if len(payload[\"mask\"]) != HORIZON_STEPS:".to_string());
+        lines.push(
+            "            raise ValueError(f\"observation {name!r} mask length does not match compile horizon {HORIZON_STEPS}\")"
+                .to_string(),
+        );
+        lines.push(String::new());
+    }
+
     lines.push("def step(state, forcing, constants, slot_providers, dt):".to_string());
     lines.push("    current = {}".to_string());
     lines.push("    current[\"_alternatives\"] = {}".to_string());
@@ -262,6 +337,10 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
             .to_string(),
     );
     lines.push(
+        "    validate_rollout_inputs(initial_state, forcing_steps, constants, slot_providers, params=params)"
+            .to_string(),
+    );
+    lines.push(
         "    state = resolve_initial_state(initial_state, constants, params=params)".to_string(),
     );
     lines.push("    trajectory = []".to_string());
@@ -278,6 +357,7 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
 
     if mode_emits_loss_helpers(bound.mode) {
         lines.push("def obs_loss(trajectory, observations):".to_string());
+        lines.push("    validate_observations(observations)".to_string());
         lines.push("    total = 0.0".to_string());
         for observation in &bound.observations {
             let name = quantity_name(experiment, observation.quantity);
@@ -419,10 +499,21 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         "CONSTANT_NAMES = {}",
         render_py_string_list(&constant_names)
     ));
+    lines.push(format!("HORIZON_STEPS = {}", bound.horizon_steps));
     let learned_initial_state_names = learned_initial_state_names(bound, experiment);
+    let required_initial_state_names = required_initial_state_names(bound, experiment);
+    let learned_slot_names = learned_slot_names(bound);
     lines.push(format!(
         "LEARNED_INITIAL_STATE_NAMES = {}",
         render_py_string_list(&learned_initial_state_names)
+    ));
+    lines.push(format!(
+        "REQUIRED_INITIAL_STATE_NAMES = {}",
+        render_py_string_list(&required_initial_state_names)
+    ));
+    lines.push(format!(
+        "LEARNED_SLOT_NAMES = {}",
+        render_py_string_list(&learned_slot_names)
     ));
     lines.push(format!(
         "CONSISTENCY_POLICY = {:?}",
@@ -450,7 +541,6 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("}".to_string());
     lines.push(String::new());
 
-    let learned_slot_names = learned_slot_names(bound);
     lines.push(format!(
         "TRAINABLE_METADATA = {{\"learned_initial_state\": {}, \"learned_slots\": {}}}",
         render_py_string_list(&learned_initial_state_names),
@@ -560,6 +650,14 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return jnp.asarray(bound)".to_string());
     lines.push(String::new());
 
+    lines.push("def _require_keys(mapping, required, label):".to_string());
+    lines.push("    mapping = {} if mapping is None else mapping".to_string());
+    lines.push("    for name in required:".to_string());
+    lines.push("        if name not in mapping:".to_string());
+    lines.push("            raise KeyError(f\"missing {label} value for {name!r}\")".to_string());
+    lines.push("    return mapping".to_string());
+    lines.push(String::new());
+
     lines.push("def _project_output(name, value, current):".to_string());
     lines.push("    spec = PROJECTION_METADATA.get(name)".to_string());
     lines.push("    if spec is None:".to_string());
@@ -601,6 +699,59 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return state".to_string());
     lines.push(String::new());
 
+    lines.push(
+        "def validate_rollout_inputs(initial_state, forcing_series, constants, slot_providers, params=None):"
+            .to_string(),
+    );
+    lines.push("    constants = _require_keys(constants, CONSTANT_NAMES, \"constant\")".to_string());
+    lines.push("    forcing_series = _require_keys(forcing_series, FORCING_NAMES, \"forcing\")".to_string());
+    lines.push("    slot_providers = {} if slot_providers is None else slot_providers".to_string());
+    lines.push("    for slot_name in LEARNED_SLOT_NAMES:".to_string());
+    lines.push("        if slot_name not in slot_providers:".to_string());
+    lines.push(
+        "            raise KeyError(f\"missing learned slot provider for {slot_name!r}\")"
+            .to_string(),
+    );
+    lines.push("    for name in FORCING_NAMES:".to_string());
+    lines.push("        if forcing_series[name].shape[0] != HORIZON_STEPS:".to_string());
+    lines.push(
+        "            raise ValueError(f\"forcing series for {name!r} does not match compile horizon {HORIZON_STEPS}\")"
+            .to_string(),
+    );
+    lines.push("    initial_state = {} if initial_state is None else initial_state".to_string());
+    lines.push(
+        "    _require_keys(initial_state, REQUIRED_INITIAL_STATE_NAMES, \"initial state\")"
+            .to_string(),
+    );
+    lines.push("    resolve_initial_state(initial_state, constants, params=params)".to_string());
+    lines.push(String::new());
+
+    if mode_emits_loss_helpers(bound.mode) {
+        lines.push("def validate_observations(observations):".to_string());
+        lines.push("    observations = {} if observations is None else observations".to_string());
+        lines.push(
+            "    _require_keys(observations, OBSERVATION_SPECS.keys(), \"observation payload\")"
+                .to_string(),
+        );
+        lines.push("    for name in OBSERVATION_SPECS:".to_string());
+        lines.push("        payload = observations[name]".to_string());
+        lines.push(
+            "        _require_keys(payload, [\"values\", \"mask\"], f\"observation {name}\")"
+                .to_string(),
+        );
+        lines.push("        if payload[\"values\"].shape[0] != HORIZON_STEPS:".to_string());
+        lines.push(
+            "            raise ValueError(f\"observation {name!r} values length does not match compile horizon {HORIZON_STEPS}\")"
+                .to_string(),
+        );
+        lines.push("        if payload[\"mask\"].shape[0] != HORIZON_STEPS:".to_string());
+        lines.push(
+            "            raise ValueError(f\"observation {name!r} mask length does not match compile horizon {HORIZON_STEPS}\")"
+                .to_string(),
+        );
+        lines.push(String::new());
+    }
+
     lines.push("def _huber_loss(residual, delta=1.0):".to_string());
     lines.push("    abs_residual = jnp.abs(residual)".to_string());
     lines.push("    return jnp.where(abs_residual <= delta, 0.5 * residual * residual, delta * (abs_residual - 0.5 * delta))".to_string());
@@ -625,6 +776,10 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         "def rollout(initial_state, forcing_series, constants, slot_providers, dt, params=None):"
             .to_string(),
     );
+    lines.push(
+        "    validate_rollout_inputs(initial_state, forcing_series, constants, slot_providers, params=params)"
+            .to_string(),
+    );
     lines.push("    def _scan_step(state, forcing_t):".to_string());
     lines.push(
         "        next_state, current = step(state, forcing_t, constants, slot_providers, dt)"
@@ -640,6 +795,7 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
 
     if mode_emits_loss_helpers(bound.mode) {
         lines.push("def obs_loss(history, observations):".to_string());
+        lines.push("    validate_observations(observations)".to_string());
         lines.push("    total = 0.0".to_string());
         for observation in &bound.observations {
             let name = quantity_name(experiment, observation.quantity);
@@ -1083,6 +1239,26 @@ fn learned_initial_state_names(
     names
 }
 
+fn required_initial_state_names(
+    bound: &crate::compile::BoundModel,
+    experiment: &PreparedExperiment,
+) -> Vec<String> {
+    let mut names = bound
+        .direct_bindings
+        .iter()
+        .filter_map(|binding| match binding.kind {
+            DirectBindingKind::InitialState {
+                source: InitialStateSource::Learned,
+            } => None,
+            DirectBindingKind::InitialState { .. } => Some(quantity_name(experiment, binding.quantity)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
 fn learned_slot_names(bound: &crate::compile::BoundModel) -> Vec<String> {
     let mut names = bound
         .slot_bindings
@@ -1329,15 +1505,26 @@ mod tests {
         assert!(module.contains("MODEL_NAME = \"TinyTree\""));
         assert!(module.contains("COMPILE_MODE = \"train\""));
         assert!(module.contains("LOSS_HELPERS_ENABLED = True"));
+        assert!(module.contains("HORIZON_STEPS = 24"));
+        assert!(module.contains("REQUIRED_INITIAL_STATE_NAMES = [\"carbon\", \"water\"]"));
+        assert!(module.contains("LEARNED_SLOT_NAMES = [\"controller\"]"));
         assert!(module.contains("TRAINABLE_METADATA = {\"learned_initial_state\": [], \"learned_slots\": [\"controller\"]}"));
         assert!(module.contains("PROJECTION_METADATA = {"));
         assert!(module.contains("\"stomata\": {\"lower\": 0, \"upper\": \"g_max\"},"));
         assert!(module.contains("OBSERVATION_SPECS = {"));
+        assert!(module.contains(
+            "def validate_rollout_inputs(initial_state, forcing_steps, constants, slot_providers, params=None):"
+        ));
+        assert!(module.contains("def validate_observations(observations):"));
         assert!(module.contains("def step(state, forcing, constants, slot_providers, dt):"));
         assert!(module.contains(
             "def rollout(initial_state, forcing_steps, constants, slot_providers, dt, params=None):"
         ));
+        assert!(module.contains(
+            "validate_rollout_inputs(initial_state, forcing_steps, constants, slot_providers, params=params)"
+        ));
         assert!(module.contains("def obs_loss(trajectory, observations):"));
+        assert!(module.contains("validate_observations(observations)"));
         assert!(module.contains("observed_total / max(observed_count, 1)"));
         assert!(module.contains(
             "def consistency_loss(trajectory, forcing_steps=None, constants=None, slot_providers=None):"
@@ -1369,8 +1556,18 @@ mod tests {
         assert!(module.contains("from jax import lax"));
         assert!(module.contains("COMPILE_MODE = \"train\""));
         assert!(module.contains("LOSS_HELPERS_ENABLED = True"));
+        assert!(module.contains("HORIZON_STEPS = 24"));
+        assert!(module.contains("REQUIRED_INITIAL_STATE_NAMES = [\"carbon\", \"water\"]"));
+        assert!(module.contains("LEARNED_SLOT_NAMES = [\"controller\"]"));
         assert!(module.contains("TRAINABLE_METADATA = {\"learned_initial_state\": [], \"learned_slots\": [\"controller\"]}"));
+        assert!(module.contains(
+            "def validate_rollout_inputs(initial_state, forcing_series, constants, slot_providers, params=None):"
+        ));
+        assert!(module.contains("def validate_observations(observations):"));
         assert!(module.contains("return lax.scan(_scan_step, initial_state, forcing_series)"));
+        assert!(module.contains(
+            "validate_rollout_inputs(initial_state, forcing_series, constants, slot_providers, params=params)"
+        ));
         assert!(module.contains("jnp.where"));
         assert!(module.contains("jnp.maximum(jnp.sum(_mask), 1)"));
         assert!(module.contains("jnn.sigmoid"));

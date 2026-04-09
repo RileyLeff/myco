@@ -359,6 +359,14 @@ fn validate_direct_binding(
                 "direct binding",
                 diagnostics,
             );
+            let expected = (0..horizon_steps).collect::<HashSet<_>>();
+            let actual = steps.iter().copied().collect::<HashSet<_>>();
+            if actual != expected {
+                diagnostics.push(Diagnostic::error(format!(
+                    "v1 data-series binding for '{}' must cover every step in the compile horizon",
+                    quantity.name
+                )));
+            }
         }
         DirectBindingKind::Constant => {}
         DirectBindingKind::InitialState { .. } => {
@@ -529,6 +537,50 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message.contains("multiple direct bindings"))
         );
+    }
+
+    #[test]
+    fn rejects_sparse_direct_data_series_in_v1() {
+        let model = tiny_tree_equality_model();
+        let spec = CompileSpec {
+            mode: CompileMode::Simulate,
+            horizon_steps: 4,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
+            direct_bindings: vec![
+                DirectBindingSpec {
+                    quantity: "vpd_scale".to_string(),
+                    kind: DirectBindingKind::DataSeries { steps: vec![0, 2, 3] },
+                },
+                DirectBindingSpec {
+                    quantity: "soil_water".to_string(),
+                    kind: DirectBindingKind::DataSeries {
+                        steps: (0..4).collect(),
+                    },
+                },
+                DirectBindingSpec {
+                    quantity: "hydraulic_cond".to_string(),
+                    kind: DirectBindingKind::Constant,
+                },
+                DirectBindingSpec {
+                    quantity: "g_max".to_string(),
+                    kind: DirectBindingKind::Constant,
+                },
+                initial_state("water"),
+                initial_state("carbon"),
+            ],
+            slot_bindings: vec![SlotBindingSpec {
+                slot: "controller".to_string(),
+                kind: SlotBindingKind::Learned,
+            }],
+            observations: Vec::new(),
+        };
+
+        let diagnostics = bind_compile_spec(&model, &spec).expect_err("binding should fail");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("must cover every step in the compile horizon")
+        }));
     }
 
     #[test]

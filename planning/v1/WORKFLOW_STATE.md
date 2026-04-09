@@ -1,6 +1,6 @@
 # Workflow State
 
-Current phase: `v1.2` parity cleanup after the `egg` rollout, with compile-surface/runtime semantics now being tightened
+Current phase: `v1.3` pre-`v2` hardening, focused on correctness and runtime-contract tightening before widening model scope
 
 ## Completed
 
@@ -23,19 +23,26 @@ Current phase: `v1.2` parity cleanup after the `egg` rollout, with compile-surfa
 - compiled artifacts now expose typed slot-interface and trainable metadata through the Python package
 - blocked-path explanations now use extracted expressions and extracted costs rather than stale candidate defaults
 - equation provenance now flows through stable per-equation IDs rather than block-name lookup alone
+- observation losses are now normalized by valid-point count
+- the TinyTree training demo now includes a small consistency regularization term
+- a `v1.3` planning note now captures the remaining pre-`v2` fixes
+- equation candidates now resolve through candidate-local `egg` extraction rather than a shared output e-class
+- direct `DataSeries` bindings now require dense full-horizon coverage in `v1`
+- emitted Python and JAX artifacts now expose runtime validation for rollout inputs and observation payloads
 
 ## In Progress
 
-- remaining `v1.2` parity work after the compile/emitter honesty pass
-- decide whether current artifact metadata is already sufficient for honest `v1`
+- deciding and implementing a narrow runtime policy for mechanistic/state-output constraint handling
+- tracking the small parser/runtime cleanup items needed before the first real model family
 
 ## Open Risks
 
-- the remaining slot-metadata question is now sufficiency, not availability
+- mechanistic outputs and temporal state updates still do not have an explicit bound-violation runtime policy
+- parser/runtime support is still narrow for the first nontrivial model family (for example scientific notation)
 
 ## Next Action
 
-1. land the next `v1.2` slice:
-   make a concrete sufficiency decision on artifact metadata
-2. rerun external review once the remaining `v1.2` gaps are narrower
-3. keep avoiding frontend-language expansion until the parity cleanup is done
+1. land the next `v1.3` slice:
+   explicit runtime policy for mechanistic/state-output constraint violations
+2. decide which small parser/runtime fixes should land before the first real model family
+3. keep avoiding broad frontend-language expansion until the pre-`v2` fixes are done
