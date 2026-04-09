@@ -169,3 +169,21 @@ def test_experiment_can_set_consistency_policy():
     artifact = experiment.compile(backend="jax")
 
     assert "CONSISTENCY_POLICY = \"off\"" in artifact.source
+
+
+def test_simulate_mode_omits_loss_helpers():
+    model = myco.load(FIXTURE)
+    experiment = model.experiment(mode="simulate", horizon_steps=24)
+    experiment.bind_data_series("vpd_scale", range(24))
+    experiment.bind_data_series("soil_water", range(24))
+    experiment.bind_constant("hydraulic_cond")
+    experiment.bind_constant("g_max")
+    experiment.bind_initial_state("water")
+    experiment.bind_initial_state("carbon")
+    experiment.bind_slot("controller", kind="learned")
+
+    artifact = experiment.compile(backend="jax")
+
+    assert "LOSS_HELPERS_ENABLED = False" in artifact.source
+    assert "def obs_loss(" not in artifact.source
+    assert "def total_loss(" not in artifact.source

@@ -62,6 +62,14 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         "CONSISTENCY_POLICY = {:?}",
         consistency_policy_name(bound.consistency_policy)
     ));
+    lines.push(format!(
+        "LOSS_HELPERS_ENABLED = {}",
+        if mode_emits_loss_helpers(bound.mode) {
+            "True"
+        } else {
+            "False"
+        }
+    ));
     lines.push(String::new());
 
     lines.push("PROJECTION_METADATA = {".to_string());
@@ -74,6 +82,14 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         }
     }
     lines.push("}".to_string());
+    lines.push(String::new());
+
+    let learned_slot_names = learned_slot_names(bound);
+    lines.push(format!(
+        "TRAINABLE_METADATA = {{\"learned_initial_state\": {}, \"learned_slots\": {}}}",
+        render_py_string_list(&learned_initial_state_names),
+        render_py_string_list(&learned_slot_names)
+    ));
     lines.push(String::new());
 
     lines.push("PENALTY_METADATA = {".to_string());
@@ -260,86 +276,91 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return trajectory".to_string());
     lines.push(String::new());
 
-    lines.push("def obs_loss(trajectory, observations):".to_string());
-    lines.push("    total = 0.0".to_string());
-    for observation in &bound.observations {
-        let name = quantity_name(experiment, observation.quantity);
-        lines.push(format!("    _obs = observations.get({})", py_string(&name)));
-        lines.push("    if _obs is None:".to_string());
-        lines.push("        raise KeyError('missing observation payload')".to_string());
-        lines.push("    _values = _obs[\"values\"]".to_string());
-        lines.push("    _mask = _obs[\"mask\"]".to_string());
-        lines.push("    for step_index, frame in enumerate(trajectory):".to_string());
-        lines.push("        if not _mask[step_index]:".to_string());
-        lines.push("            continue".to_string());
-        lines.push(format!(
-            "        residual = frame[\"current\"][{name}] - _values[step_index]",
-            name = py_string(&name)
-        ));
-        match observation.loss {
-            crate::compile::LossKind::Mse => {
-                lines.push("        total += residual * residual".to_string());
-            }
-            crate::compile::LossKind::Huber => {
-                lines.push("        total += _huber_loss(residual)".to_string());
+    if mode_emits_loss_helpers(bound.mode) {
+        lines.push("def obs_loss(trajectory, observations):".to_string());
+        lines.push("    total = 0.0".to_string());
+        for observation in &bound.observations {
+            let name = quantity_name(experiment, observation.quantity);
+            lines.push(format!("    _obs = observations.get({})", py_string(&name)));
+            lines.push("    if _obs is None:".to_string());
+            lines.push("        raise KeyError('missing observation payload')".to_string());
+            lines.push("    _values = _obs[\"values\"]".to_string());
+            lines.push("    _mask = _obs[\"mask\"]".to_string());
+            lines.push("    for step_index, frame in enumerate(trajectory):".to_string());
+            lines.push("        if not _mask[step_index]:".to_string());
+            lines.push("            continue".to_string());
+            lines.push(format!(
+                "        residual = frame[\"current\"][{name}] - _values[step_index]",
+                name = py_string(&name)
+            ));
+            match observation.loss {
+                crate::compile::LossKind::Mse => {
+                    lines.push("        total += residual * residual".to_string());
+                }
+                crate::compile::LossKind::Huber => {
+                    lines.push("        total += _huber_loss(residual)".to_string());
+                }
             }
         }
-    }
-    lines.push("    return total".to_string());
-    lines.push(String::new());
-
-    let python_consistency_alternatives = consistency_alternatives(experiment);
-    lines.push(
-        "def consistency_loss(trajectory, forcing_steps=None, constants=None, slot_providers=None):"
-            .to_string(),
-    );
-    if python_consistency_alternatives.is_empty() {
-        lines.push("    return 0.0".to_string());
-        lines.push(String::new());
-    } else {
-        lines.push("    total = 0.0".to_string());
-        lines.push("    for frame in trajectory:".to_string());
-        lines.push(
-            "        alternatives = frame[\"current\"].get(\"_alternatives\", {})".to_string(),
-        );
-        lines.push("        for output_name, entries in alternatives.items():".to_string());
-        lines.push("            canonical = frame[\"current\"][output_name]".to_string());
-        lines.push("            for entry in entries:".to_string());
-        lines.push("                residual = canonical - entry[\"value\"]".to_string());
-        lines.push("                total += residual * residual".to_string());
         lines.push("    return total".to_string());
         lines.push(String::new());
+
+        let python_consistency_alternatives = consistency_alternatives(experiment);
+        lines.push(
+            "def consistency_loss(trajectory, forcing_steps=None, constants=None, slot_providers=None):"
+                .to_string(),
+        );
+        if python_consistency_alternatives.is_empty() {
+            lines.push("    return 0.0".to_string());
+            lines.push(String::new());
+        } else {
+            lines.push("    total = 0.0".to_string());
+            lines.push("    for frame in trajectory:".to_string());
+            lines.push(
+                "        alternatives = frame[\"current\"].get(\"_alternatives\", {})".to_string(),
+            );
+            lines.push("        for output_name, entries in alternatives.items():".to_string());
+            lines.push("            canonical = frame[\"current\"][output_name]".to_string());
+            lines.push("            for entry in entries:".to_string());
+            lines.push("                residual = canonical - entry[\"value\"]".to_string());
+            lines.push("                total += residual * residual".to_string());
+            lines.push("    return total".to_string());
+            lines.push(String::new());
+        }
+
+        lines.push("def soft_penalty_loss(trajectory):".to_string());
+        lines.push("    total = 0.0".to_string());
+        lines.push("    for name, penalties in PENALTY_METADATA.items():".to_string());
+        lines.push("        for penalty in penalties:".to_string());
+        lines.push("            if penalty[\"kind\"] == \"smooth\":".to_string());
+        lines.push(
+            "                values = [frame[\"current\"][name] for frame in trajectory]"
+                .to_string(),
+        );
+        lines.push("                for prev, curr in zip(values, values[1:]):".to_string());
+        lines.push("                    delta = curr - prev".to_string());
+        lines.push("                    total += penalty[\"weight\"] * delta * delta".to_string());
+        lines.push("    return total".to_string());
+        lines.push(String::new());
+
+        lines.push("def loss_components(trajectory, observations):".to_string());
+        lines.push("    obs = obs_loss(trajectory, observations)".to_string());
+        lines.push("    consistency = consistency_loss(trajectory)".to_string());
+        lines.push("    soft_penalty = soft_penalty_loss(trajectory)".to_string());
+        lines.push("    return {".to_string());
+        lines.push("        \"obs_loss\": obs,".to_string());
+        lines.push("        \"consistency_loss\": consistency,".to_string());
+        lines.push("        \"soft_penalty_loss\": soft_penalty,".to_string());
+        lines.push("        \"total_loss\": obs + consistency + soft_penalty,".to_string());
+        lines.push("    }".to_string());
+        lines.push(String::new());
+
+        lines.push("def total_loss(trajectory, observations):".to_string());
+        lines.push(
+            "    return loss_components(trajectory, observations)[\"total_loss\"]".to_string(),
+        );
+        lines.push(String::new());
     }
-
-    lines.push("def soft_penalty_loss(trajectory):".to_string());
-    lines.push("    total = 0.0".to_string());
-    lines.push("    for name, penalties in PENALTY_METADATA.items():".to_string());
-    lines.push("        for penalty in penalties:".to_string());
-    lines.push("            if penalty[\"kind\"] == \"smooth\":".to_string());
-    lines.push(
-        "                values = [frame[\"current\"][name] for frame in trajectory]".to_string(),
-    );
-    lines.push("                for prev, curr in zip(values, values[1:]):".to_string());
-    lines.push("                    delta = curr - prev".to_string());
-    lines.push("                    total += penalty[\"weight\"] * delta * delta".to_string());
-    lines.push("    return total".to_string());
-    lines.push(String::new());
-
-    lines.push("def loss_components(trajectory, observations):".to_string());
-    lines.push("    obs = obs_loss(trajectory, observations)".to_string());
-    lines.push("    consistency = consistency_loss(trajectory)".to_string());
-    lines.push("    soft_penalty = soft_penalty_loss(trajectory)".to_string());
-    lines.push("    return {".to_string());
-    lines.push("        \"obs_loss\": obs,".to_string());
-    lines.push("        \"consistency_loss\": consistency,".to_string());
-    lines.push("        \"soft_penalty_loss\": soft_penalty,".to_string());
-    lines.push("        \"total_loss\": obs + consistency + soft_penalty,".to_string());
-    lines.push("    }".to_string());
-    lines.push(String::new());
-
-    lines.push("def total_loss(trajectory, observations):".to_string());
-    lines.push("    return loss_components(trajectory, observations)[\"total_loss\"]".to_string());
-    lines.push(String::new());
 
     lines.join("\n")
 }
@@ -403,6 +424,14 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         "CONSISTENCY_POLICY = {:?}",
         consistency_policy_name(bound.consistency_policy)
     ));
+    lines.push(format!(
+        "LOSS_HELPERS_ENABLED = {}",
+        if mode_emits_loss_helpers(bound.mode) {
+            "True"
+        } else {
+            "False"
+        }
+    ));
     lines.push(String::new());
 
     lines.push("PROJECTION_METADATA = {".to_string());
@@ -415,6 +444,14 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         }
     }
     lines.push("}".to_string());
+    lines.push(String::new());
+
+    let learned_slot_names = learned_slot_names(bound);
+    lines.push(format!(
+        "TRAINABLE_METADATA = {{\"learned_initial_state\": {}, \"learned_slots\": {}}}",
+        render_py_string_list(&learned_initial_state_names),
+        render_py_string_list(&learned_slot_names)
+    ));
     lines.push(String::new());
 
     lines.push("PENALTY_METADATA = {".to_string());
@@ -597,126 +634,136 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return lax.scan(_scan_step, initial_state, forcing_series)".to_string());
     lines.push(String::new());
 
-    lines.push("def obs_loss(history, observations):".to_string());
-    lines.push("    total = 0.0".to_string());
-    for observation in &bound.observations {
-        let name = quantity_name(experiment, observation.quantity);
-        lines.push(format!("    _obs = observations.get({})", py_string(&name)));
-        lines.push("    if _obs is None:".to_string());
-        lines.push("        raise KeyError('missing observation payload')".to_string());
-        lines.push("    _values = jnp.asarray(_obs[\"values\"])".to_string());
-        lines.push("    _mask = jnp.asarray(_obs[\"mask\"])".to_string());
-        lines.push(format!(
-            "    _residual = history[{name}] - _values",
-            name = py_string(&name)
-        ));
-        match observation.loss {
-            crate::compile::LossKind::Mse => {
-                lines.push(
-                    "    total += jnp.sum(jnp.where(_mask, _residual * _residual, 0.0))"
-                        .to_string(),
-                );
-            }
-            crate::compile::LossKind::Huber => {
-                lines.push(
-                    "    total += jnp.sum(jnp.where(_mask, _huber_loss(_residual), 0.0))"
-                        .to_string(),
-                );
+    if mode_emits_loss_helpers(bound.mode) {
+        lines.push("def obs_loss(history, observations):".to_string());
+        lines.push("    total = 0.0".to_string());
+        for observation in &bound.observations {
+            let name = quantity_name(experiment, observation.quantity);
+            lines.push(format!("    _obs = observations.get({})", py_string(&name)));
+            lines.push("    if _obs is None:".to_string());
+            lines.push("        raise KeyError('missing observation payload')".to_string());
+            lines.push("    _values = jnp.asarray(_obs[\"values\"])".to_string());
+            lines.push("    _mask = jnp.asarray(_obs[\"mask\"])".to_string());
+            lines.push(format!(
+                "    _residual = history[{name}] - _values",
+                name = py_string(&name)
+            ));
+            match observation.loss {
+                crate::compile::LossKind::Mse => {
+                    lines.push(
+                        "    total += jnp.sum(jnp.where(_mask, _residual * _residual, 0.0))"
+                            .to_string(),
+                    );
+                }
+                crate::compile::LossKind::Huber => {
+                    lines.push(
+                        "    total += jnp.sum(jnp.where(_mask, _huber_loss(_residual), 0.0))"
+                            .to_string(),
+                    );
+                }
             }
         }
-    }
-    lines.push("    return total".to_string());
-    lines.push(String::new());
-
-    let jax_consistency_alternatives = consistency_alternatives(experiment);
-    lines.push(
-        "def consistency_loss(history, forcing_series=None, constants=None, slot_providers=None):"
-            .to_string(),
-    );
-    if jax_consistency_alternatives.is_empty() {
-        lines.push("    return jnp.asarray(0.0)".to_string());
+        lines.push("    return total".to_string());
         lines.push(String::new());
-    } else {
+
+        let jax_consistency_alternatives = consistency_alternatives(experiment);
         lines.push(
-            "    forcing_series = {} if forcing_series is None else forcing_series".to_string(),
+            "def consistency_loss(history, forcing_series=None, constants=None, slot_providers=None):"
+                .to_string(),
+        );
+        if jax_consistency_alternatives.is_empty() {
+            lines.push("    return jnp.asarray(0.0)".to_string());
+            lines.push(String::new());
+        } else {
+            lines.push(
+                "    forcing_series = {} if forcing_series is None else forcing_series".to_string(),
+            );
+            lines.push("    constants = {} if constants is None else constants".to_string());
+            lines.push(
+                "    slot_providers = {} if slot_providers is None else slot_providers".to_string(),
+            );
+            lines.push("    total = jnp.asarray(0.0)".to_string());
+            for alternative in &jax_consistency_alternatives {
+                if let AlternativePayload::Equation { expression } = &alternative.payload {
+                    let output_name = quantity_name(experiment, alternative.output);
+                    let alt_expr = render_history_expr_for_output_unit(
+                        experiment,
+                        alternative.output,
+                        expression,
+                    );
+                    lines.push(format!(
+                        "    _residual = history[{output}] - ({alt_expr})",
+                        output = py_string(&output_name)
+                    ));
+                    lines.push("    total += jnp.sum(_residual * _residual)".to_string());
+                } else if let AlternativePayload::Slot {
+                    kind,
+                    inputs,
+                    output_index,
+                } = &alternative.payload
+                {
+                    let output_name = quantity_name(experiment, alternative.output);
+                    let alt_expr = render_slot_output_expr_for_history(
+                        experiment,
+                        &alternative.source,
+                        *kind,
+                        inputs,
+                        alternative.output,
+                        *output_index,
+                    );
+                    lines.push(format!(
+                        "    _residual = history[{output}] - ({alt_expr})",
+                        output = py_string(&output_name)
+                    ));
+                    lines.push("    total += jnp.sum(_residual * _residual)".to_string());
+                }
+            }
+            lines.push("    return total".to_string());
+            lines.push(String::new());
+        }
+
+        lines.push("def soft_penalty_loss(history):".to_string());
+        lines.push("    total = 0.0".to_string());
+        lines.push("    for name, penalties in PENALTY_METADATA.items():".to_string());
+        lines.push("        values = history[name]".to_string());
+        lines.push("        for penalty in penalties:".to_string());
+        lines.push("            if penalty[\"kind\"] == \"smooth\":".to_string());
+        lines.push("                delta = values[1:] - values[:-1]".to_string());
+        lines.push(
+            "                total += penalty[\"weight\"] * jnp.sum(delta * delta)".to_string(),
+        );
+        lines.push("    return total".to_string());
+        lines.push(String::new());
+
+        lines.push(
+            "def loss_components(history, observations, forcing_series=None, constants=None, slot_providers=None):"
+                .to_string(),
         );
         lines.push("    constants = {} if constants is None else constants".to_string());
         lines.push(
             "    slot_providers = {} if slot_providers is None else slot_providers".to_string(),
         );
-        lines.push("    total = jnp.asarray(0.0)".to_string());
-        for alternative in &jax_consistency_alternatives {
-            if let AlternativePayload::Equation { expression } = &alternative.payload {
-                let output_name = quantity_name(experiment, alternative.output);
-                let alt_expr =
-                    render_history_expr_for_output_unit(experiment, alternative.output, expression);
-                lines.push(format!(
-                    "    _residual = history[{output}] - ({alt_expr})",
-                    output = py_string(&output_name)
-                ));
-                lines.push("    total += jnp.sum(_residual * _residual)".to_string());
-            } else if let AlternativePayload::Slot {
-                kind,
-                inputs,
-                output_index,
-            } = &alternative.payload
-            {
-                let output_name = quantity_name(experiment, alternative.output);
-                let alt_expr = render_slot_output_expr_for_history(
-                    experiment,
-                    &alternative.source,
-                    *kind,
-                    inputs,
-                    alternative.output,
-                    *output_index,
-                );
-                lines.push(format!(
-                    "    _residual = history[{output}] - ({alt_expr})",
-                    output = py_string(&output_name)
-                ));
-                lines.push("    total += jnp.sum(_residual * _residual)".to_string());
-            }
-        }
-        lines.push("    return total".to_string());
+        lines.push("    obs = obs_loss(history, observations)".to_string());
+        lines.push(
+            "    consistency = consistency_loss(history, forcing_series=forcing_series, constants=constants, slot_providers=slot_providers)"
+                .to_string(),
+        );
+        lines.push("    soft_penalty = soft_penalty_loss(history)".to_string());
+        lines.push("    return {".to_string());
+        lines.push("        \"obs_loss\": obs,".to_string());
+        lines.push("        \"consistency_loss\": consistency,".to_string());
+        lines.push("        \"soft_penalty_loss\": soft_penalty,".to_string());
+        lines.push("        \"total_loss\": obs + consistency + soft_penalty,".to_string());
+        lines.push("    }".to_string());
+        lines.push(String::new());
+
+        lines.push(
+            "def total_loss(history, observations, forcing_series=None, constants=None, slot_providers=None):"
+                .to_string(),
+        );
+        lines.push("    return loss_components(history, observations, forcing_series=forcing_series, constants=constants, slot_providers=slot_providers)[\"total_loss\"]".to_string());
         lines.push(String::new());
     }
-
-    lines.push("def soft_penalty_loss(history):".to_string());
-    lines.push("    total = 0.0".to_string());
-    lines.push("    for name, penalties in PENALTY_METADATA.items():".to_string());
-    lines.push("        values = history[name]".to_string());
-    lines.push("        for penalty in penalties:".to_string());
-    lines.push("            if penalty[\"kind\"] == \"smooth\":".to_string());
-    lines.push("                delta = values[1:] - values[:-1]".to_string());
-    lines.push("                total += penalty[\"weight\"] * jnp.sum(delta * delta)".to_string());
-    lines.push("    return total".to_string());
-    lines.push(String::new());
-
-    lines.push(
-        "def loss_components(history, observations, forcing_series=None, constants=None, slot_providers=None):"
-            .to_string(),
-    );
-    lines.push("    constants = {} if constants is None else constants".to_string());
-    lines.push("    slot_providers = {} if slot_providers is None else slot_providers".to_string());
-    lines.push("    obs = obs_loss(history, observations)".to_string());
-    lines.push(
-        "    consistency = consistency_loss(history, forcing_series=forcing_series, constants=constants, slot_providers=slot_providers)"
-            .to_string(),
-    );
-    lines.push("    soft_penalty = soft_penalty_loss(history)".to_string());
-    lines.push("    return {".to_string());
-    lines.push("        \"obs_loss\": obs,".to_string());
-    lines.push("        \"consistency_loss\": consistency,".to_string());
-    lines.push("        \"soft_penalty_loss\": soft_penalty,".to_string());
-    lines.push("        \"total_loss\": obs + consistency + soft_penalty,".to_string());
-    lines.push("    }".to_string());
-    lines.push(String::new());
-
-    lines.push(
-        "def total_loss(history, observations, forcing_series=None, constants=None, slot_providers=None):".to_string(),
-    );
-    lines.push("    return loss_components(history, observations, forcing_series=forcing_series, constants=constants, slot_providers=slot_providers)[\"total_loss\"]".to_string());
-    lines.push(String::new());
 
     lines.join("\n")
 }
@@ -1032,12 +1079,28 @@ fn learned_initial_state_names(
     names
 }
 
+fn learned_slot_names(bound: &crate::compile::BoundModel) -> Vec<String> {
+    let mut names = bound
+        .slot_bindings
+        .iter()
+        .filter(|slot| slot.kind == SlotBindingKind::Learned)
+        .map(|slot| slot.slot.clone())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
 fn consistency_policy_name(policy: ConsistencyPolicy) -> &'static str {
     match policy {
         ConsistencyPolicy::Off => "off",
         ConsistencyPolicy::EquationOnly => "equation_only",
         ConsistencyPolicy::All => "all",
     }
+}
+
+fn mode_emits_loss_helpers(mode: crate::compile::CompileMode) -> bool {
+    !matches!(mode, crate::compile::CompileMode::Simulate)
 }
 
 fn consistency_alternatives<'a>(
@@ -1261,6 +1324,8 @@ mod tests {
 
         assert!(module.contains("MODEL_NAME = \"TinyTree\""));
         assert!(module.contains("COMPILE_MODE = \"train\""));
+        assert!(module.contains("LOSS_HELPERS_ENABLED = True"));
+        assert!(module.contains("TRAINABLE_METADATA = {\"learned_initial_state\": [], \"learned_slots\": [\"controller\"]}"));
         assert!(module.contains("PROJECTION_METADATA = {"));
         assert!(module.contains("\"stomata\": {\"lower\": 0, \"upper\": \"g_max\"},"));
         assert!(module.contains("OBSERVATION_SPECS = {"));
@@ -1298,6 +1363,8 @@ mod tests {
         assert!(module.contains("import jax.nn as jnn"));
         assert!(module.contains("from jax import lax"));
         assert!(module.contains("COMPILE_MODE = \"train\""));
+        assert!(module.contains("LOSS_HELPERS_ENABLED = True"));
+        assert!(module.contains("TRAINABLE_METADATA = {\"learned_initial_state\": [], \"learned_slots\": [\"controller\"]}"));
         assert!(module.contains("return lax.scan(_scan_step, initial_state, forcing_series)"));
         assert!(module.contains("jnp.where"));
         assert!(module.contains("jnn.sigmoid"));
@@ -1610,6 +1677,27 @@ temporal water_step:
         assert!(jax_module.contains("CONSISTENCY_POLICY = \"off\""));
         assert!(jax_module.contains("def consistency_loss(history, forcing_series=None, constants=None, slot_providers=None):"));
         assert!(jax_module.contains("    return jnp.asarray(0.0)"));
+    }
+
+    #[test]
+    fn simulate_mode_omits_loss_helpers() {
+        let model = load_model(TINY_TREE).expect("model should load");
+        let mut spec = tiny_tree_spec();
+        spec.mode = CompileMode::Simulate;
+        spec.observations.clear();
+        let experiment = prepare_experiment(&model, &spec).expect("experiment should prepare");
+
+        let python_module = emit_python_module(&experiment);
+        assert!(python_module.contains("COMPILE_MODE = \"simulate\""));
+        assert!(python_module.contains("LOSS_HELPERS_ENABLED = False"));
+        assert!(!python_module.contains("def obs_loss("));
+        assert!(!python_module.contains("def total_loss("));
+
+        let jax_module = emit_jax_module(&experiment);
+        assert!(jax_module.contains("COMPILE_MODE = \"simulate\""));
+        assert!(jax_module.contains("LOSS_HELPERS_ENABLED = False"));
+        assert!(!jax_module.contains("def obs_loss("));
+        assert!(!jax_module.contains("def total_loss("));
     }
 
     #[test]

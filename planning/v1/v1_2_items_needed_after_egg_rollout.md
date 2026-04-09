@@ -46,7 +46,6 @@ Three of the original `v1.2` issues are now closed:
 
 The main remaining issues are now:
 
-- compile modes are still mostly validation-only rather than meaningfully mode-aware in emitted artifacts
 - introspection still explains chosen paths only shallowly and does not surface extracted expressions or stable provenance links deeply enough
 - planner cost reporting and explanation fidelity still need cleanup after the `egg` extraction rewrite
 - slot interface metadata is better, but still not yet as rich as the spec intends
@@ -63,10 +62,9 @@ At this point, I do **not** recommend broadening the frontend language, changing
 
 The next order should be:
 
-1. Make compile modes affect emitted artifact shape clearly enough to match the spec.
-2. Deepen provenance/introspection just enough that the first real model remains debuggable without compiler archaeology.
-3. Tighten planner cost reporting and explanation fidelity after the `egg` extraction rewrite.
-4. Decide how much richer slot/interface metadata really needs to be for honest `v1`.
+1. Deepen provenance/introspection just enough that the first real model remains debuggable without compiler archaeology.
+2. Tighten planner cost reporting and explanation fidelity after the `egg` extraction rewrite.
+3. Decide how much richer slot/interface metadata really needs to be for honest `v1`.
 
 This order matters because the remaining gaps are mostly semantic mismatches between what the API promises and what emitted code actually does.
 
@@ -201,7 +199,7 @@ or an equivalent simple switch in the compile layer.
 - Python and JAX backends agree on what counts as a consistency contributor
 - mixed slot/mechanistic overdetermination is handled intentionally rather than by omission
 
-## 4. Compile Modes Need To Affect Emitted Artifacts
+## 4. Compile Modes Need To Affect Emitted Artifacts (Closed)
 
 ### Current State
 
