@@ -2,6 +2,7 @@ pub mod compile;
 pub mod constraints;
 pub mod demo;
 pub mod diagnostics;
+pub mod dimensions;
 pub mod emit;
 pub mod equality;
 pub mod introspect;

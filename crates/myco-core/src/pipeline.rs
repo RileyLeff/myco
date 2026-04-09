@@ -3,7 +3,7 @@ use std::{fs, io, path::Path};
 use crate::{
     compile::{BoundModel, CompileSpec, bind_compile_spec},
     diagnostics::Diagnostic,
-    emit,
+    dimensions, emit,
     equality::{self, EqualityModel},
     introspect,
     plan::{SingleStepPlan, build_single_step_plan},
@@ -70,6 +70,7 @@ pub fn load_model(source: &str) -> Result<LoadedModel, Vec<Diagnostic>> {
     let syntax = syntax::parse_and_validate(source)?;
     let semantic = semantic::lower_model(&syntax)?;
     let equality = equality::lower_model(&semantic)?;
+    dimensions::validate_model_dimensions(&equality)?;
 
     Ok(LoadedModel {
         syntax,

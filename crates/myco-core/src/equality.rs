@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt};
 use crate::{
     constraints::QuantityConstraintSet,
     diagnostics::{Diagnostic, SourceSpan},
+    dimensions::QuantityTypeInfo,
     semantic::{BinaryOp, Equation, Expr, SemanticModel},
     syntax::{BlockKind, QuantityKind},
 };
@@ -30,6 +31,8 @@ pub struct Quantity {
     pub kind: QuantityKind,
     pub name: String,
     pub ty: String,
+    pub type_info: QuantityTypeInfo,
+    pub dimension: crate::dimensions::Dimension,
     pub raw_constraints: Vec<String>,
     pub constraint_set: QuantityConstraintSet,
     pub provenance: Provenance,
@@ -118,12 +121,15 @@ pub fn lower_model(model: &SemanticModel) -> Result<EqualityModel, Vec<Diagnosti
 
     for (index, declaration) in model.declarations.iter().enumerate() {
         let id = QuantityId(index);
+        let type_info = crate::dimensions::parse_quantity_type(&declaration.ty);
         quantity_ids.insert(declaration.name.clone(), id);
         quantities.push(Quantity {
             id,
             kind: declaration.kind,
             name: declaration.name.clone(),
             ty: declaration.ty.clone(),
+            dimension: type_info.dimension.clone(),
+            type_info,
             raw_constraints: declaration.constraints.clone(),
             constraint_set: crate::constraints::parse_constraint_set(&declaration.constraints),
             provenance: Provenance {
