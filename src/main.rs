@@ -27,10 +27,18 @@ fn run() -> Result<(), String> {
                 fs::read_to_string(&path).map_err(|err| format!("failed to read {path}: {err}"))?;
 
             match myco::syntax::parse_and_validate(&source) {
-                Ok(model) => {
-                    println!("ok: model '{}' parsed and validated", model.name);
-                    Ok(())
-                }
+                Ok(model) => match myco::semantic::lower_model(&model) {
+                    Ok(_) => {
+                        println!("ok: model '{}' parsed, validated, and lowered", model.name);
+                        Ok(())
+                    }
+                    Err(diagnostics) => {
+                        for diagnostic in diagnostics {
+                            eprintln!("{diagnostic}");
+                        }
+                        Err(format!("check failed for {path}"))
+                    }
+                },
                 Err(diagnostics) => {
                     for diagnostic in diagnostics {
                         eprintln!("{diagnostic}");
