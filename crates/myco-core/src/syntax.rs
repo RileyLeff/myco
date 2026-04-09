@@ -301,7 +301,10 @@ impl<'a> Parser<'a> {
             .strip_prefix(keyword)
             .expect("caller must guard keyword");
 
-        let (before_constraints, inline_constraints, multiline_open) = parse_constraint_shape(rest);
+        let (before_constraints, inline_constraints, multiline_open) =
+            parse_constraint_shape(rest).map_err(|message| {
+                Diagnostic::error(message).with_span(line.span())
+            })?;
         let (name, ty) = parse_name_and_type(before_constraints).ok_or_else(|| {
             Diagnostic::error("expected `<name> : <type>`").with_span(line.span())
         })?;
@@ -311,11 +314,13 @@ impl<'a> Parser<'a> {
         let mut span_end = line.span().end;
 
         if multiline_open {
+            let mut closed = false;
             while cursor < self.lines.len() {
                 let current = &self.lines[cursor];
                 if current.trimmed() == "}" {
                     span_end = current.span().end;
                     cursor += 1;
+                    closed = true;
                     break;
                 }
                 if current.trimmed().is_empty() {
@@ -325,6 +330,13 @@ impl<'a> Parser<'a> {
                 constraints.push(current.trimmed().to_string());
                 span_end = current.span().end;
                 cursor += 1;
+            }
+
+            if !closed {
+                return Err(
+                    Diagnostic::error("unterminated constraint block; expected '}'")
+                        .with_span(line.span()),
+                );
             }
         }
 
@@ -485,10 +497,10 @@ fn parse_name_and_type(input: &str) -> Option<(&str, &str)> {
     Some((name, ty))
 }
 
-fn parse_constraint_shape(input: &str) -> (&str, Vec<String>, bool) {
+fn parse_constraint_shape(input: &str) -> Result<(&str, Vec<String>, bool), String> {
     let trimmed = input.trim_end();
     let Some(open_idx) = trimmed.find('{') else {
-        return (trimmed, Vec::new(), false);
+        return Ok((trimmed, Vec::new(), false));
     };
 
     let before = trimmed[..open_idx].trim_end();
@@ -496,14 +508,18 @@ fn parse_constraint_shape(input: &str) -> (&str, Vec<String>, bool) {
 
     if let Some(close_idx) = after.find('}') {
         let inside = after[..close_idx].trim();
+        let trailing = after[close_idx + 1..].trim();
+        if !trailing.is_empty() {
+            return Err("unexpected trailing content after inline constraint block".to_string());
+        }
         let constraints = if inside.is_empty() {
             Vec::new()
         } else {
             vec![inside.to_string()]
         };
-        (before, constraints, false)
+        Ok((before, constraints, false))
     } else {
-        (before, Vec::new(), true)
+        Ok((before, Vec::new(), true))
     }
 }
 
@@ -592,6 +608,35 @@ slot provider provides [x]:
         assert!(diagnostics.iter().any(|diag| {
             diag.message
                 .contains("first non-empty line must declare a model")
+        }));
+    }
+
+    #[test]
+    fn rejects_unterminated_constraint_block() {
+        let source = r#"
+model Bad
+
+node x : scalar {
+  self >= 0
+"#;
+        let diagnostics = parse_model(source).expect_err("parse should fail");
+        assert!(diagnostics.iter().any(|diag| {
+            diag.message
+                .contains("unterminated constraint block; expected '}'")
+        }));
+    }
+
+    #[test]
+    fn rejects_trailing_content_after_inline_constraint_block() {
+        let source = r#"
+model Bad
+
+node x : scalar { self >= 0 } trailing
+"#;
+        let diagnostics = parse_model(source).expect_err("parse should fail");
+        assert!(diagnostics.iter().any(|diag| {
+            diag.message
+                .contains("unexpected trailing content after inline constraint block")
         }));
     }
 }

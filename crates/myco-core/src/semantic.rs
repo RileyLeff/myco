@@ -225,6 +225,25 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 while idx < chars.len() && (chars[idx].is_ascii_digit() || chars[idx] == '.') {
                     idx += 1;
                 }
+                if idx < chars.len() && matches!(chars[idx], 'e' | 'E') {
+                    let exponent_idx = idx;
+                    idx += 1;
+                    if idx < chars.len() && matches!(chars[idx], '+' | '-') {
+                        idx += 1;
+                    }
+                    let exponent_start = idx;
+                    while idx < chars.len() && chars[idx].is_ascii_digit() {
+                        idx += 1;
+                    }
+                    if exponent_start == idx {
+                        return Err(format!(
+                            "invalid scientific notation near '{}'",
+                            chars[start..idx.max(exponent_idx + 1)]
+                                .iter()
+                                .collect::<String>()
+                        ));
+                    }
+                }
                 tokens.push(Token::Number(chars[start..idx].iter().collect()));
             }
             c if is_symbol_start(c) => {
@@ -410,6 +429,19 @@ mod tests {
     fn rejects_bad_expression() {
         let err = parse_expr("a * )").expect_err("expression should fail");
         assert!(err.contains("expected expression") || err.contains("expected ')'"));
+    }
+
+    #[test]
+    fn parses_scientific_notation_numbers() {
+        let expr = parse_expr("1e-3 * x").expect("expression should parse");
+        assert_eq!(
+            expr,
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                left: Box::new(Expr::Number("1e-3".to_string())),
+                right: Box::new(Expr::Symbol("x".to_string())),
+            }
+        );
     }
 
     fn dummy_span() -> SourceSpan {

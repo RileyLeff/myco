@@ -1,6 +1,6 @@
 # Workflow State
 
-Current phase: `v1.3` pre-`v2` hardening, focused on correctness and runtime-contract tightening before widening model scope
+Current phase: post-`v1.3` checkpoint; pre-`v2` hardening is complete and the next step is a focused `v2` plan
 
 ## Completed
 
@@ -32,17 +32,20 @@ Current phase: `v1.3` pre-`v2` hardening, focused on correctness and runtime-con
 - explicit runtime constraint policy now exists for mechanistic/state outputs:
   Python raises on violations and JAX surfaces `constraint_violation_loss`
 - compiled artifact metadata now exposes the backend-specific constraint runtime policy
+- expression parsing now supports scientific notation
+- syntax diagnostics now catch unterminated and malformed constraint blocks explicitly
+- emitted Python and JAX artifacts now use explicit safe-division helpers
 
 ## In Progress
 
-- tracking the small parser/runtime cleanup items needed before the first real model family
+- choosing the first concrete `v2` plant-model family and writing the corresponding implementation plan
 
 ## Open Risks
 
-- parser/runtime support is still narrow for the first nontrivial model family (for example scientific notation)
+- the remaining risks are now mostly `v2` scope choices, not pre-`v2` correctness gaps
 
 ## Next Action
 
-1. decide which small parser/runtime fixes should land before the first real model family
-2. keep avoiding broad frontend-language expansion until the pre-`v2` fixes are done
-3. once that list is handled, open a dedicated `v2` plan around one real plant-model family
+1. open a dedicated `v2` plan around one real plant-model family
+2. keep avoiding broad frontend-language expansion outside that concrete target
+3. use the next external review round to pressure-test the `v2` target rather than the `v1` core

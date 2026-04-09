@@ -1,6 +1,6 @@
 # Pre-`v2` And Pre-Real-Plant-Model Fixes
 
-Status: `v1` is real, but there are still correctness and runtime-contract fixes worth landing before widening scope.
+Status: `v1` is real, and the pre-`v2` correctness/runtime-contract hardening pass is now complete.
 
 Audience: project authors
 
@@ -24,7 +24,7 @@ The goal here is not to add more capability for capability's sake. The goal is t
 - Sparse observations, dense rollout, differentiable projections, and consistency regularization all work together.
 - Introspection and provenance are useful enough to debug the current TinyTree workflow.
 
-### What Still Needs To Be Tightened
+### What Was Tightened
 
 The remaining work is mostly about correctness and honesty, not missing architecture.
 
@@ -36,7 +36,7 @@ The highest-value items are:
 4. stronger constraint/runtime policy for mechanistic/state outputs
 5. small parser/runtime cleanup items that will matter immediately on larger models
 
-The first four of these have now landed in the implementation.
+All five of these have now landed in the implementation.
 
 ## Recommended Sequence
 
@@ -44,7 +44,7 @@ The first four of these have now landed in the implementation.
 2. Tighten `DataSeries` semantics so `v1` means dense per-step forcing over the horizon. (Done)
 3. Add runtime validation on emitted artifacts or the Python wrapper for keys, shapes, masks, and horizon agreement. (Done)
 4. Decide and implement a narrow runtime policy for mechanistic/state-output constraint handling. (Done)
-5. Land small parser/runtime quality fixes that unblock the first real model family.
+5. Land small parser/runtime quality fixes that unblock the first real model family. (Done)
 
 This order matters because the first three items are about correctness and trust. They should land before any `v2` language or model-scope work.
 
@@ -194,15 +194,24 @@ The implementation now makes the policy explicit and backend-visible:
 - the compiler/runtime behavior for bound-constrained mechanistic and state quantities is explicit
 - violations do not silently disappear without any signal
 
-## 5. Small Parser And Runtime Fixes Before A Real Model
+## 5. Small Parser And Runtime Fixes Before A Real Model (Done)
 
-These are not architectural blockers, but they are likely to matter quickly:
+These were not architectural blockers, but they were likely to matter quickly:
 
 - scientific notation in expressions
 - better missing-brace / malformed inline-constraint diagnostics
 - safe division warnings or guards for automatically extracted inverted paths
 
-Not all of these have to land before the first real model, but they should be tracked explicitly rather than rediscovered ad hoc.
+### What Landed
+
+The implementation now includes:
+
+- scientific notation support in the expression tokenizer
+- explicit diagnostics for unterminated multiline constraint blocks
+- explicit diagnostics for malformed inline-constraint trailing content
+- emitted safe-division helpers in both Python and JAX artifacts
+
+This is enough to stop treating these as open pre-`v2` risks.
 
 ## What This Note Is Not
 
@@ -218,3 +227,9 @@ It does **not** include:
 - production-grade JAX backend structures
 
 Those belong in the next planning document after the current implementation is trustworthy enough to serve as a base for the first real plant-model family.
+
+## Conclusion
+
+At this point, the pre-`v2` hardening pass is complete.
+
+The next planning step should not be another general cleanup note. It should be a focused `v2` plan for one real plant-model family, with the compiler changes driven by that concrete target rather than by abstract language expansion.

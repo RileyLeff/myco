@@ -54,6 +54,7 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         render_py_string_list(&constant_names)
     ));
     lines.push(format!("HORIZON_STEPS = {}", bound.horizon_steps));
+    lines.push("SAFE_DIV_EPS = 1e-8".to_string());
     let learned_initial_state_names = learned_initial_state_names(bound, experiment);
     let required_initial_state_names = required_initial_state_names(bound, experiment);
     let learned_slot_names = learned_slot_names(bound);
@@ -210,6 +211,12 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    if isinstance(bound, str):".to_string());
     lines.push("        return current[bound]".to_string());
     lines.push("    return bound".to_string());
+    lines.push(String::new());
+
+    lines.push("def _safe_div(numerator, denominator):".to_string());
+    lines.push("    if abs(denominator) < SAFE_DIV_EPS:".to_string());
+    lines.push("        raise ZeroDivisionError(\"division denominator is too close to zero\")".to_string());
+    lines.push("    return numerator / denominator".to_string());
     lines.push(String::new());
 
     lines.push("def _bound_violation(name, value, current):".to_string());
@@ -572,6 +579,7 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         render_py_string_list(&constant_names)
     ));
     lines.push(format!("HORIZON_STEPS = {}", bound.horizon_steps));
+    lines.push("SAFE_DIV_EPS = 1e-8".to_string());
     let learned_initial_state_names = learned_initial_state_names(bound, experiment);
     let required_initial_state_names = required_initial_state_names(bound, experiment);
     let learned_slot_names = learned_slot_names(bound);
@@ -724,6 +732,17 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    if isinstance(bound, str):".to_string());
     lines.push("        return current[bound]".to_string());
     lines.push("    return jnp.asarray(bound)".to_string());
+    lines.push(String::new());
+
+    lines.push("def _safe_div(numerator, denominator):".to_string());
+    lines.push("    denominator = jnp.asarray(denominator)".to_string());
+    lines.push("    eps = jnp.asarray(SAFE_DIV_EPS, dtype=denominator.dtype)".to_string());
+    lines.push("    safe_denominator = jnp.where(".to_string());
+    lines.push("        jnp.abs(denominator) < eps,".to_string());
+    lines.push("        jnp.where(denominator >= 0, eps, -eps),".to_string());
+    lines.push("        denominator,".to_string());
+    lines.push("    )".to_string());
+    lines.push("    return numerator / safe_denominator".to_string());
     lines.push(String::new());
 
     lines.push("def _bound_violation(name, value, current):".to_string());
@@ -1195,17 +1214,14 @@ fn render_expr_base(experiment: &PreparedExperiment, expr: &CoreExpr) -> String 
         CoreExpr::Special(SpecialRef::Dt) => "dt".to_string(),
         CoreExpr::Number(number) => number.clone(),
         CoreExpr::Binary { op, left, right } => {
-            let op_str = match op {
-                crate::semantic::BinaryOp::Add => "+",
-                crate::semantic::BinaryOp::Sub => "-",
-                crate::semantic::BinaryOp::Mul => "*",
-                crate::semantic::BinaryOp::Div => "/",
-            };
-            format!(
-                "({left} {op_str} {right})",
-                left = render_expr_base(experiment, left),
-                right = render_expr_base(experiment, right)
-            )
+            let left = render_expr_base(experiment, left);
+            let right = render_expr_base(experiment, right);
+            match op {
+                crate::semantic::BinaryOp::Add => format!("({left} + {right})"),
+                crate::semantic::BinaryOp::Sub => format!("({left} - {right})"),
+                crate::semantic::BinaryOp::Mul => format!("({left} * {right})"),
+                crate::semantic::BinaryOp::Div => format!("_safe_div({left}, {right})"),
+            }
         }
     }
 }
@@ -1241,17 +1257,14 @@ fn render_history_expr_base(experiment: &PreparedExperiment, expr: &CoreExpr) ->
         CoreExpr::Special(SpecialRef::Dt) => "1.0".to_string(),
         CoreExpr::Number(number) => number.clone(),
         CoreExpr::Binary { op, left, right } => {
-            let op_str = match op {
-                crate::semantic::BinaryOp::Add => "+",
-                crate::semantic::BinaryOp::Sub => "-",
-                crate::semantic::BinaryOp::Mul => "*",
-                crate::semantic::BinaryOp::Div => "/",
-            };
-            format!(
-                "({left} {op_str} {right})",
-                left = render_history_expr_base(experiment, left),
-                right = render_history_expr_base(experiment, right)
-            )
+            let left = render_history_expr_base(experiment, left);
+            let right = render_history_expr_base(experiment, right);
+            match op {
+                crate::semantic::BinaryOp::Add => format!("({left} + {right})"),
+                crate::semantic::BinaryOp::Sub => format!("({left} - {right})"),
+                crate::semantic::BinaryOp::Mul => format!("({left} * {right})"),
+                crate::semantic::BinaryOp::Div => format!("_safe_div({left}, {right})"),
+            }
         }
     }
 }
@@ -1670,6 +1683,7 @@ mod tests {
         assert!(module.contains("LOSS_HELPERS_ENABLED = True"));
         assert!(module.contains("CONSTRAINT_RUNTIME_POLICY = \"project_learned_raise_derived\""));
         assert!(module.contains("HORIZON_STEPS = 24"));
+        assert!(module.contains("SAFE_DIV_EPS = 1e-8"));
         assert!(module.contains("REQUIRED_INITIAL_STATE_NAMES = [\"carbon\", \"water\"]"));
         assert!(module.contains("LEARNED_SLOT_NAMES = [\"controller\"]"));
         assert!(module.contains("TRAINABLE_METADATA = {\"learned_initial_state\": [], \"learned_slots\": [\"controller\"]}"));
@@ -1680,6 +1694,7 @@ mod tests {
             "def validate_rollout_inputs(initial_state, forcing_steps, constants, slot_providers, params=None):"
         ));
         assert!(module.contains("def validate_observations(observations):"));
+        assert!(module.contains("def _safe_div(numerator, denominator):"));
         assert!(module.contains("def _assert_valid(name, value, current, label):"));
         assert!(module.contains("def constraint_violation_loss(trajectory):"));
         assert!(module.contains("def step(state, forcing, constants, slot_providers, dt):"));
@@ -1725,6 +1740,7 @@ mod tests {
         assert!(module.contains("LOSS_HELPERS_ENABLED = True"));
         assert!(module.contains("CONSTRAINT_RUNTIME_POLICY = \"project_learned_penalize_derived\""));
         assert!(module.contains("HORIZON_STEPS = 24"));
+        assert!(module.contains("SAFE_DIV_EPS = 1e-8"));
         assert!(module.contains("REQUIRED_INITIAL_STATE_NAMES = [\"carbon\", \"water\"]"));
         assert!(module.contains("LEARNED_SLOT_NAMES = [\"controller\"]"));
         assert!(module.contains("TRAINABLE_METADATA = {\"learned_initial_state\": [], \"learned_slots\": [\"controller\"]}"));
@@ -1732,6 +1748,7 @@ mod tests {
             "def validate_rollout_inputs(initial_state, forcing_series, constants, slot_providers, params=None):"
         ));
         assert!(module.contains("def validate_observations(observations):"));
+        assert!(module.contains("def _safe_div(numerator, denominator):"));
         assert!(module.contains("def _assert_valid(name, value, current, label):"));
         assert!(module.contains("def constraint_violation_loss(history):"));
         assert!(module.contains("return lax.scan(_scan_step, initial_state, forcing_series)"));
@@ -1874,7 +1891,7 @@ temporal water_step:
 
         let module = emit_jax_module(&experiment);
         assert!(module.contains(
-            "current[\"stomata\"] = (current[\"transpiration\"] / current[\"vpd_scale\"])"
+            "current[\"stomata\"] = _safe_div(current[\"transpiration\"], current[\"vpd_scale\"])"
         ));
     }
 
@@ -2189,7 +2206,7 @@ temporal water_step:
 
         let module = emit_python_module(&experiment);
         assert!(module.contains(
-            "current[\"stomata\"] = (current[\"transpiration\"] / current[\"vpd_scale\"])"
+            "current[\"stomata\"] = _safe_div(current[\"transpiration\"], current[\"vpd_scale\"])"
         ));
     }
 
