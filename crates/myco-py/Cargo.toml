@@ -1,0 +1,15 @@
+[package]
+name = "myco-py"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "myco_py"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[dependencies]
+myco-core = { path = "../myco-core" }
+pyo3 = { version = "0.23", features = ["abi3-py39"] }
