@@ -1,11 +1,11 @@
 use std::{fs, io, path::Path};
 
 use crate::{
-    compile::{bind_compile_spec, BoundModel, CompileSpec},
+    compile::{BoundModel, CompileSpec, bind_compile_spec},
     diagnostics::Diagnostic,
     emit,
     equality::{self, EqualityModel},
-    plan::{build_single_step_plan, SingleStepPlan},
+    plan::{SingleStepPlan, build_single_step_plan},
     semantic::{self, SemanticModel},
     syntax::{self, ModelFile},
 };
@@ -245,7 +245,7 @@ mod tests {
     use super::*;
     use crate::compile::{
         CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec, InitialStateSource,
-        LossKind, ObservationSpec, ObservationSchedule, SlotBindingKind, SlotBindingSpec,
+        LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind, SlotBindingSpec,
     };
 
     const TINY_TREE: &str = include_str!("../tests/fixtures/tiny_tree.myco");
@@ -336,12 +336,17 @@ mod tests {
     #[test]
     fn compiles_python_artifact_from_experiment() {
         let model = load_model(TINY_TREE).expect("model should load");
-        let experiment = prepare_experiment(&model, &tiny_tree_spec()).expect("experiment should prepare");
+        let experiment =
+            prepare_experiment(&model, &tiny_tree_spec()).expect("experiment should prepare");
         let artifact = experiment.compile(BackendTarget::Python);
 
         assert_eq!(artifact.backend, BackendTarget::Python);
         assert_eq!(artifact.model_name, "TinyTree");
-        assert!(artifact.source.contains("def step(state, forcing, constants, slot_providers, dt):"));
+        assert!(
+            artifact
+                .source
+                .contains("def step(state, forcing, constants, slot_providers, dt):")
+        );
         assert_eq!(artifact.suggested_filename(), "tinytree_python.py");
     }
 

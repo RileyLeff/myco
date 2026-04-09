@@ -133,7 +133,9 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         let mut ready = current_candidates
             .iter()
             .enumerate()
-            .filter(|(_, candidate)| !candidate.scheduled && candidate.dependencies_ready(&available_current))
+            .filter(|(_, candidate)| {
+                !candidate.scheduled && candidate.dependencies_ready(&available_current)
+            })
             .map(|(index, candidate)| ReadyCandidate {
                 index,
                 cost: candidate.cost,
@@ -213,7 +215,9 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                     direction: match candidate.direction {
                         CandidateDirection::Forward => EquationDirection::Forward,
                         CandidateDirection::Inverted => EquationDirection::Inverted,
-                        CandidateDirection::Provider => unreachable!("equation candidates are not providers"),
+                        CandidateDirection::Provider => {
+                            unreachable!("equation candidates are not providers")
+                        }
                     },
                     cost: candidate.cost,
                 });
@@ -403,24 +407,26 @@ impl Candidate {
 
     fn dependencies_ready(&self, available_current: &HashSet<QuantityId>) -> bool {
         match &self.payload {
-            CandidatePayload::Slot { inputs, .. } => {
-                inputs.iter().all(|quantity| available_current.contains(quantity))
+            CandidatePayload::Slot { inputs, .. } => inputs
+                .iter()
+                .all(|quantity| available_current.contains(quantity)),
+            CandidatePayload::Equation { dependencies, .. } => {
+                dependencies.iter().all(|dependency| match dependency {
+                    Dependency {
+                        timing: DependencyTiming::Current,
+                        quantity: Some(quantity),
+                    } => available_current.contains(quantity),
+                    Dependency {
+                        timing: DependencyTiming::SpecialDt,
+                        ..
+                    } => true,
+                    Dependency {
+                        timing: DependencyTiming::Next,
+                        ..
+                    } => false,
+                    Dependency { quantity: None, .. } => true,
+                })
             }
-            CandidatePayload::Equation { dependencies, .. } => dependencies.iter().all(|dependency| match dependency {
-                Dependency {
-                    timing: DependencyTiming::Current,
-                    quantity: Some(quantity),
-                } => available_current.contains(quantity),
-                Dependency {
-                    timing: DependencyTiming::SpecialDt,
-                    ..
-                } => true,
-                Dependency {
-                    timing: DependencyTiming::Next,
-                    ..
-                } => false,
-                Dependency { quantity: None, .. } => true,
-            }),
         }
     }
 
@@ -440,7 +446,10 @@ impl Candidate {
         }
     }
 
-    fn missing_current_dependencies(&self, available_current: &HashSet<QuantityId>) -> Vec<QuantityId> {
+    fn missing_current_dependencies(
+        &self,
+        available_current: &HashSet<QuantityId>,
+    ) -> Vec<QuantityId> {
         match &self.payload {
             CandidatePayload::Slot { inputs, .. } => inputs
                 .iter()
@@ -468,7 +477,10 @@ impl Candidate {
     }
 
     fn primary_output_rank(&self) -> usize {
-        self.outputs.first().map(|quantity| quantity.0).unwrap_or(usize::MAX)
+        self.outputs
+            .first()
+            .map(|quantity| quantity.0)
+            .unwrap_or(usize::MAX)
     }
 
     fn alternative_payload(&self) -> AlternativePayload {
@@ -508,7 +520,10 @@ fn inverted_candidates(
     equation: &EqualityEquation,
     lhs_ref: QuantityRef,
 ) -> Result<Vec<Candidate>, Diagnostic> {
-    if !matches!(lhs_ref.time, TimeReference::Implicit | TimeReference::Relative(0)) {
+    if !matches!(
+        lhs_ref.time,
+        TimeReference::Implicit | TimeReference::Relative(0)
+    ) {
         return Ok(Vec::new());
     }
 
@@ -563,7 +578,10 @@ fn inverted_candidates(
 fn invertible_target(expr: &CoreExpr) -> Option<QuantityId> {
     match expr {
         CoreExpr::Quantity(reference)
-            if matches!(reference.time, TimeReference::Implicit | TimeReference::Relative(0)) =>
+            if matches!(
+                reference.time,
+                TimeReference::Implicit | TimeReference::Relative(0)
+            ) =>
         {
             Some(reference.quantity)
         }
@@ -649,7 +667,7 @@ fn collect_dependencies_into(
                     return Err(Diagnostic::error(format!(
                         "unsupported rhs time reference {:?} in v1 single-step planning",
                         other
-                    )))
+                    )));
                 }
             };
             dependencies.push(Dependency {
@@ -703,13 +721,7 @@ fn detect_cycle(candidates: &[&Candidate]) -> Option<Vec<QuantityId>> {
     let mut in_stack = HashSet::new();
 
     for node in adjacency.keys().copied() {
-        if let Some(cycle) = dfs_cycle(
-            node,
-            &adjacency,
-            &mut visited,
-            &mut stack,
-            &mut in_stack,
-        ) {
+        if let Some(cycle) = dfs_cycle(node, &adjacency, &mut visited, &mut stack, &mut in_stack) {
             return Some(cycle);
         }
     }
@@ -753,9 +765,9 @@ mod tests {
     use super::*;
     use crate::{
         compile::{
-            bind_compile_spec, CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec,
-            InitialStateSource, LossKind, ObservationSpec, ObservationSchedule, SlotBindingKind,
-            SlotBindingSpec,
+            CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec, InitialStateSource,
+            LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind, SlotBindingSpec,
+            bind_compile_spec,
         },
         equality, semantic,
         syntax::parse_and_validate,

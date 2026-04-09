@@ -21,7 +21,10 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         .iter()
         .map(|quantity| quantity.name.as_str())
         .collect::<Vec<_>>();
-    lines.push(format!("QUANTITY_NAMES = {}", render_py_string_list(&quantity_names)));
+    lines.push(format!(
+        "QUANTITY_NAMES = {}",
+        render_py_string_list(&quantity_names)
+    ));
 
     let state_names = bound
         .quantities
@@ -29,7 +32,10 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         .filter(|quantity| matches!(quantity.quantity.kind, crate::syntax::QuantityKind::State))
         .map(|quantity| quantity.quantity.name.as_str())
         .collect::<Vec<_>>();
-    lines.push(format!("STATE_NAMES = {}", render_py_string_list(&state_names)));
+    lines.push(format!(
+        "STATE_NAMES = {}",
+        render_py_string_list(&state_names)
+    ));
 
     let forcing_names = bound
         .quantities
@@ -39,7 +45,10 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
             _ => None,
         })
         .collect::<Vec<_>>();
-    lines.push(format!("FORCING_NAMES = {}", render_py_string_list(&forcing_names)));
+    lines.push(format!(
+        "FORCING_NAMES = {}",
+        render_py_string_list(&forcing_names)
+    ));
 
     let constant_names = bound
         .quantities
@@ -49,7 +58,10 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
             _ => None,
         })
         .collect::<Vec<_>>();
-    lines.push(format!("CONSTANT_NAMES = {}", render_py_string_list(&constant_names)));
+    lines.push(format!(
+        "CONSTANT_NAMES = {}",
+        render_py_string_list(&constant_names)
+    ));
     lines.push(String::new());
 
     lines.push("PROJECTION_METADATA = {".to_string());
@@ -112,7 +124,10 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push(String::new());
 
     lines.push("PLAN_METADATA = {".to_string());
-    lines.push(format!("    \"planned_slot_steps\": {},", plan.slot_steps.len()));
+    lines.push(format!(
+        "    \"planned_slot_steps\": {},",
+        plan.slot_steps.len()
+    ));
     lines.push(format!(
         "    \"planned_equation_steps\": {},",
         plan.equation_steps.len()
@@ -183,12 +198,19 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return next_state, current".to_string());
     lines.push(String::new());
 
-    lines.push("def rollout(initial_state, forcing_steps, constants, slot_providers, dt):".to_string());
+    lines.push(
+        "def rollout(initial_state, forcing_steps, constants, slot_providers, dt):".to_string(),
+    );
     lines.push("    state = dict(initial_state)".to_string());
     lines.push("    trajectory = []".to_string());
     lines.push("    for forcing in forcing_steps:".to_string());
-    lines.push("        state, current = step(state, forcing, constants, slot_providers, dt)".to_string());
-    lines.push("        trajectory.append({\"current\": dict(current), \"state\": dict(state)})".to_string());
+    lines.push(
+        "        state, current = step(state, forcing, constants, slot_providers, dt)".to_string(),
+    );
+    lines.push(
+        "        trajectory.append({\"current\": dict(current), \"state\": dict(state)})"
+            .to_string(),
+    );
     lines.push("    return trajectory".to_string());
     lines.push(String::new());
 
@@ -274,7 +296,10 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         .iter()
         .map(|quantity| quantity.name.as_str())
         .collect::<Vec<_>>();
-    lines.push(format!("QUANTITY_NAMES = {}", render_py_string_list(&quantity_names)));
+    lines.push(format!(
+        "QUANTITY_NAMES = {}",
+        render_py_string_list(&quantity_names)
+    ));
 
     let state_names = bound
         .quantities
@@ -282,7 +307,10 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         .filter(|quantity| matches!(quantity.quantity.kind, crate::syntax::QuantityKind::State))
         .map(|quantity| quantity.quantity.name.as_str())
         .collect::<Vec<_>>();
-    lines.push(format!("STATE_NAMES = {}", render_py_string_list(&state_names)));
+    lines.push(format!(
+        "STATE_NAMES = {}",
+        render_py_string_list(&state_names)
+    ));
 
     let forcing_names = bound
         .quantities
@@ -292,7 +320,10 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
             _ => None,
         })
         .collect::<Vec<_>>();
-    lines.push(format!("FORCING_NAMES = {}", render_py_string_list(&forcing_names)));
+    lines.push(format!(
+        "FORCING_NAMES = {}",
+        render_py_string_list(&forcing_names)
+    ));
     lines.push(String::new());
 
     lines.push("PROJECTION_METADATA = {".to_string());
@@ -332,7 +363,10 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push(String::new());
 
     lines.push("PLAN_METADATA = {".to_string());
-    lines.push(format!("    \"planned_slot_steps\": {},", plan.slot_steps.len()));
+    lines.push(format!(
+        "    \"planned_slot_steps\": {},",
+        plan.slot_steps.len()
+    ));
     lines.push(format!(
         "    \"planned_equation_steps\": {},",
         plan.equation_steps.len()
@@ -391,9 +425,14 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return next_state, current".to_string());
     lines.push(String::new());
 
-    lines.push("def rollout(initial_state, forcing_series, constants, slot_providers, dt):".to_string());
+    lines.push(
+        "def rollout(initial_state, forcing_series, constants, slot_providers, dt):".to_string(),
+    );
     lines.push("    def _scan_step(state, forcing_t):".to_string());
-    lines.push("        next_state, current = step(state, forcing_t, constants, slot_providers, dt)".to_string());
+    lines.push(
+        "        next_state, current = step(state, forcing_t, constants, slot_providers, dt)"
+            .to_string(),
+    );
     lines.push("        return next_state, current".to_string());
     lines.push("    return lax.scan(_scan_step, initial_state, forcing_series)".to_string());
     lines.push(String::new());
@@ -413,10 +452,16 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         ));
         match observation.loss {
             crate::compile::LossKind::Mse => {
-                lines.push("    total += jnp.sum(jnp.where(_mask, _residual * _residual, 0.0))".to_string());
+                lines.push(
+                    "    total += jnp.sum(jnp.where(_mask, _residual * _residual, 0.0))"
+                        .to_string(),
+                );
             }
             crate::compile::LossKind::Huber => {
-                lines.push("    total += jnp.sum(jnp.where(_mask, _huber_loss(_residual), 0.0))".to_string());
+                lines.push(
+                    "    total += jnp.sum(jnp.where(_mask, _huber_loss(_residual), 0.0))"
+                        .to_string(),
+                );
             }
         }
     }
@@ -443,11 +488,15 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return 0.0".to_string());
     lines.push(String::new());
 
-    lines.push("def loss_components(history, observations, constants=None, slot_providers=None):".to_string());
+    lines.push(
+        "def loss_components(history, observations, constants=None, slot_providers=None):"
+            .to_string(),
+    );
     lines.push("    constants = {} if constants is None else constants".to_string());
     lines.push("    slot_providers = {} if slot_providers is None else slot_providers".to_string());
     lines.push("    obs = obs_loss(history, observations)".to_string());
-    lines.push("    consistency = consistency_loss(history, constants, slot_providers)".to_string());
+    lines
+        .push("    consistency = consistency_loss(history, constants, slot_providers)".to_string());
     lines.push("    soft_penalty = soft_penalty_loss(history)".to_string());
     lines.push("    return {".to_string());
     lines.push("        \"obs_loss\": obs,".to_string());
@@ -457,7 +506,9 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    }".to_string());
     lines.push(String::new());
 
-    lines.push("def total_loss(history, observations, constants=None, slot_providers=None):".to_string());
+    lines.push(
+        "def total_loss(history, observations, constants=None, slot_providers=None):".to_string(),
+    );
     lines.push("    return loss_components(history, observations, constants=constants, slot_providers=slot_providers)[\"total_loss\"]".to_string());
     lines.push(String::new());
 
@@ -471,7 +522,10 @@ fn emit_slot_step(experiment: &PreparedExperiment, slot: &PlannedSlot, lines: &m
         args = slot
             .inputs
             .iter()
-            .map(|quantity| format!("current[{name}]", name = py_string(&quantity_name(experiment, *quantity))))
+            .map(|quantity| format!(
+                "current[{name}]",
+                name = py_string(&quantity_name(experiment, *quantity))
+            ))
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -517,14 +571,19 @@ fn emit_alternative_step(
         AlternativePayload::Slot { inputs } => {
             let slot_name = match &alternative.source {
                 crate::plan::PlanSource::Slot(slot) => slot,
-                crate::plan::PlanSource::Equation(_) => unreachable!("slot payload requires slot source"),
+                crate::plan::PlanSource::Equation(_) => {
+                    unreachable!("slot payload requires slot source")
+                }
             };
             format!(
                 "slot_providers[{name}]({args})",
                 name = py_string(slot_name),
                 args = inputs
                     .iter()
-                    .map(|quantity| format!("current[{name}]", name = py_string(&quantity_name(experiment, *quantity))))
+                    .map(|quantity| format!(
+                        "current[{name}]",
+                        name = py_string(&quantity_name(experiment, *quantity))
+                    ))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -582,7 +641,9 @@ fn render_history_expr(experiment: &PreparedExperiment, expr: &CoreExpr) -> Stri
                 "history[{name}]",
                 name = py_string(&quantity_name(experiment, reference.quantity))
             ),
-            TimeReference::Relative(1) => panic!("next-step references are not supported in JAX history expressions"),
+            TimeReference::Relative(1) => {
+                panic!("next-step references are not supported in JAX history expressions")
+            }
             other => panic!("unsupported time reference in JAX history emitter: {other:?}"),
         },
         CoreExpr::Special(SpecialRef::Dt) => "1.0".to_string(),
@@ -604,7 +665,9 @@ fn render_history_expr(experiment: &PreparedExperiment, expr: &CoreExpr) -> Stri
 }
 
 fn quantity_name(experiment: &PreparedExperiment, quantity: QuantityId) -> String {
-    experiment.model.equality.quantities[quantity.0].name.clone()
+    experiment.model.equality.quantities[quantity.0]
+        .name
+        .clone()
 }
 
 fn render_py_string_list(values: &[impl AsRef<str>]) -> String {
@@ -671,7 +734,10 @@ fn parse_bound_constraint(input: &str, op: &str) -> Option<ProjectionBound> {
     if rhs.is_empty() {
         return None;
     }
-    if rhs.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
+    if rhs
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+    {
         return Some(ProjectionBound::Number(rhs.to_string()));
     }
     if rhs.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
@@ -707,7 +773,7 @@ mod tests {
     use crate::{
         compile::{
             CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec, InitialStateSource,
-            LossKind, ObservationSpec, ObservationSchedule, SlotBindingKind, SlotBindingSpec,
+            LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind, SlotBindingSpec,
         },
         pipeline::{load_model, prepare_experiment},
     };
@@ -717,7 +783,8 @@ mod tests {
     #[test]
     fn emits_python_module_for_tiny_tree() {
         let model = load_model(TINY_TREE).expect("model should load");
-        let experiment = prepare_experiment(&model, &tiny_tree_spec()).expect("experiment should prepare");
+        let experiment =
+            prepare_experiment(&model, &tiny_tree_spec()).expect("experiment should prepare");
         let module = emit_python_module(&experiment);
 
         assert!(module.contains("MODEL_NAME = \"TinyTree\""));
@@ -725,20 +792,33 @@ mod tests {
         assert!(module.contains("\"stomata\": {\"lower\": 0, \"upper\": \"g_max\"},"));
         assert!(module.contains("OBSERVATION_SPECS = {"));
         assert!(module.contains("def step(state, forcing, constants, slot_providers, dt):"));
-        assert!(module.contains("def rollout(initial_state, forcing_steps, constants, slot_providers, dt):"));
+        assert!(
+            module.contains(
+                "def rollout(initial_state, forcing_steps, constants, slot_providers, dt):"
+            )
+        );
         assert!(module.contains("def obs_loss(trajectory, observations):"));
         assert!(module.contains("def consistency_loss(trajectory):"));
         assert!(module.contains("def total_loss(trajectory, observations):"));
-        assert!(module.contains("current[\"stomata\"] = _project_output(\"stomata\", slot_providers[\"controller\"]("));
-        assert!(module.contains("current[\"_alternatives\"].setdefault(\"transpiration\", []).append("));
-        assert!(module.contains("current[\"transpiration\"] = (current[\"stomata\"] * current[\"vpd_scale\"])"));
-        assert!(module.contains("next_state[\"water\"] = (current[\"water\"] - (dt * current[\"transpiration\"]))"));
+        assert!(module.contains(
+            "current[\"stomata\"] = _project_output(\"stomata\", slot_providers[\"controller\"]("
+        ));
+        assert!(
+            module.contains("current[\"_alternatives\"].setdefault(\"transpiration\", []).append(")
+        );
+        assert!(module.contains(
+            "current[\"transpiration\"] = (current[\"stomata\"] * current[\"vpd_scale\"])"
+        ));
+        assert!(module.contains(
+            "next_state[\"water\"] = (current[\"water\"] - (dt * current[\"transpiration\"]))"
+        ));
     }
 
     #[test]
     fn emits_jax_module_for_tiny_tree() {
         let model = load_model(TINY_TREE).expect("model should load");
-        let experiment = prepare_experiment(&model, &tiny_tree_spec()).expect("experiment should prepare");
+        let experiment =
+            prepare_experiment(&model, &tiny_tree_spec()).expect("experiment should prepare");
         let module = emit_jax_module(&experiment);
 
         assert!(module.contains("import jax.numpy as jnp"));
@@ -800,7 +880,9 @@ temporal water_step:
         .expect("experiment should prepare");
 
         let module = emit_jax_module(&experiment);
-        assert!(module.contains("current[\"stomata\"] = (current[\"transpiration\"] / current[\"vpd_scale\"])"));
+        assert!(module.contains(
+            "current[\"stomata\"] = (current[\"transpiration\"] / current[\"vpd_scale\"])"
+        ));
     }
 
     #[test]
@@ -853,7 +935,9 @@ temporal water_step:
         .expect("experiment should prepare");
 
         let module = emit_python_module(&experiment);
-        assert!(module.contains("current[\"stomata\"] = (current[\"transpiration\"] / current[\"vpd_scale\"])"));
+        assert!(module.contains(
+            "current[\"stomata\"] = (current[\"transpiration\"] / current[\"vpd_scale\"])"
+        ));
     }
 
     fn tiny_tree_spec() -> CompileSpec {

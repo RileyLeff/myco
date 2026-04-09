@@ -123,7 +123,9 @@ pub fn bind_compile_spec(
     let mut diagnostics = Vec::new();
 
     if spec.horizon_steps == 0 {
-        diagnostics.push(Diagnostic::error("compile horizon must be greater than zero"));
+        diagnostics.push(Diagnostic::error(
+            "compile horizon must be greater than zero",
+        ));
     }
 
     let quantity_index: HashMap<&str, &Quantity> = model
@@ -149,7 +151,12 @@ pub fn bind_compile_spec(
             continue;
         };
 
-        validate_direct_binding(quantity, &binding.kind, spec.horizon_steps, &mut diagnostics);
+        validate_direct_binding(
+            quantity,
+            &binding.kind,
+            spec.horizon_steps,
+            &mut diagnostics,
+        );
 
         if direct_binding_by_quantity
             .insert(quantity.id, binding.kind.clone())
@@ -198,7 +205,9 @@ pub fn bind_compile_spec(
                 )));
             }
 
-            if let Some(existing_slot) = slot_provider_by_quantity.insert(*provided, slot.name.clone()) {
+            if let Some(existing_slot) =
+                slot_provider_by_quantity.insert(*provided, slot.name.clone())
+            {
                 let quantity_name = &model.quantities[provided.0].name;
                 diagnostics.push(Diagnostic::error(format!(
                     "quantity '{}' is provided by multiple slots ('{}' and '{}')",
@@ -229,7 +238,12 @@ pub fn bind_compile_spec(
             continue;
         };
 
-        validate_observation_schedule(&observation.schedule, spec.horizon_steps, &quantity.name, &mut diagnostics);
+        validate_observation_schedule(
+            &observation.schedule,
+            spec.horizon_steps,
+            &quantity.name,
+            &mut diagnostics,
+        );
         observed_quantities.insert(quantity.id);
         observations.push(ResolvedObservation {
             quantity: quantity.id,
@@ -287,7 +301,13 @@ fn validate_direct_binding(
 ) {
     match kind {
         DirectBindingKind::DataSeries { steps } => {
-            validate_step_list(steps, horizon_steps, &quantity.name, "direct binding", diagnostics);
+            validate_step_list(
+                steps,
+                horizon_steps,
+                &quantity.name,
+                "direct binding",
+                diagnostics,
+            );
         }
         DirectBindingKind::Constant => {}
         DirectBindingKind::InitialState { .. } => {
@@ -310,7 +330,13 @@ fn validate_observation_schedule(
     match schedule {
         ObservationSchedule::DensePerStep => {}
         ObservationSchedule::Sparse(steps) => {
-            validate_step_list(steps, horizon_steps, quantity_name, "observation", diagnostics);
+            validate_step_list(
+                steps,
+                horizon_steps,
+                quantity_name,
+                "observation",
+                diagnostics,
+            );
         }
     }
 }
@@ -445,9 +471,11 @@ mod tests {
         };
 
         let diagnostics = bind_compile_spec(&model, &spec).expect_err("binding should fail");
-        assert!(diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("multiple direct bindings")));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("multiple direct bindings"))
+        );
     }
 
     #[test]
@@ -515,9 +543,9 @@ mod tests {
 
         let diagnostics = bind_compile_spec(&model, &spec).expect_err("binding should fail");
         assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic
-                .message
-                .contains("quantity 'stomata' has both a direct binding and slot provider 'controller'")
+            diagnostic.message.contains(
+                "quantity 'stomata' has both a direct binding and slot provider 'controller'",
+            )
         }));
     }
 

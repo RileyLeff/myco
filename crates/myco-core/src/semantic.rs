@@ -389,13 +389,19 @@ mod tests {
             .find(|block| block.name == "demand_transpiration")
             .expect("demand relation should exist");
         assert_eq!(demand.equations.len(), 1);
-        assert_eq!(demand.equations[0].lhs, Expr::Symbol("transpiration".to_string()));
+        assert_eq!(
+            demand.equations[0].lhs,
+            Expr::Symbol("transpiration".to_string())
+        );
     }
 
     #[test]
     fn parses_temporal_indexed_symbols() {
-        let equation = parse_equation("water[t+1] = water[t] - dt * transpiration[t]", dummy_span())
-            .expect("equation should parse");
+        let equation = parse_equation(
+            "water[t+1] = water[t] - dt * transpiration[t]",
+            dummy_span(),
+        )
+        .expect("equation should parse");
 
         assert_eq!(equation.lhs, Expr::Symbol("water[t+1]".to_string()));
     }
@@ -409,7 +415,10 @@ mod tests {
     fn dummy_span() -> SourceSpan {
         SourceSpan {
             start: crate::diagnostics::SourcePosition { line: 1, column: 1 },
-            end: crate::diagnostics::SourcePosition { line: 1, column: 10 },
+            end: crate::diagnostics::SourcePosition {
+                line: 1,
+                column: 10,
+            },
         }
     }
 }

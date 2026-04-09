@@ -31,7 +31,10 @@ fn run() -> Result<(), String> {
                     let summary = model.summary();
                     println!(
                         "ok: model '{}' parsed, validated, and lowered ({} quantities, {} equations, {} slots)",
-                        summary.name, summary.quantity_count, summary.relation_count, summary.slot_count
+                        summary.name,
+                        summary.quantity_count,
+                        summary.relation_count,
+                        summary.slot_count
                     );
                     Ok(())
                 }
@@ -80,8 +83,8 @@ fn run() -> Result<(), String> {
             let backend = parse_backend(&backend)?;
             let source =
                 fs::read_to_string(&path).map_err(|err| format!("failed to read {path}: {err}"))?;
-            let model =
-                myco_core::pipeline::load_model(&source).map_err(|diagnostics| render_diagnostics(&path, diagnostics))?;
+            let model = myco_core::pipeline::load_model(&source)
+                .map_err(|diagnostics| render_diagnostics(&path, diagnostics))?;
             let artifact = myco_core::pipeline::compile_model(
                 &model,
                 &myco_core::demo::tiny_tree_training_spec(),
@@ -137,5 +140,6 @@ fn backend_name(value: myco_core::pipeline::BackendTarget) -> &'static str {
 }
 
 fn usage() -> String {
-    "usage: myco <check|inspect> <path>\n       myco emit-demo <python|jax> <path> [output]".to_string()
+    "usage: myco <check|inspect> <path>\n       myco emit-demo <python|jax> <path> [output]"
+        .to_string()
 }

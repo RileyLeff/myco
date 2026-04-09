@@ -165,8 +165,7 @@ impl<'a> Parser<'a> {
         let model_name = name.trim();
         if model_name.is_empty() {
             return Err(vec![
-                Diagnostic::error("model declaration must include a name")
-                    .with_span(header.span()),
+                Diagnostic::error("model declaration must include a name").with_span(header.span()),
             ]);
         }
 
@@ -303,8 +302,9 @@ impl<'a> Parser<'a> {
             .expect("caller must guard keyword");
 
         let (before_constraints, inline_constraints, multiline_open) = parse_constraint_shape(rest);
-        let (name, ty) = parse_name_and_type(before_constraints)
-            .ok_or_else(|| Diagnostic::error("expected `<name> : <type>`").with_span(line.span()))?;
+        let (name, ty) = parse_name_and_type(before_constraints).ok_or_else(|| {
+            Diagnostic::error("expected `<name> : <type>`").with_span(line.span())
+        })?;
 
         let mut constraints = inline_constraints;
         let mut cursor = start_idx + 1;
@@ -363,7 +363,9 @@ impl<'a> Parser<'a> {
 
         let name = name.trim();
         if name.is_empty() {
-            return Err(Diagnostic::error("block declaration must include a name").with_span(line.span()));
+            return Err(
+                Diagnostic::error("block declaration must include a name").with_span(line.span())
+            );
         }
 
         let mut lines = Vec::new();
@@ -385,7 +387,10 @@ impl<'a> Parser<'a> {
         }
 
         if lines.is_empty() {
-            return Err(Diagnostic::error("block must contain at least one body line").with_span(line.span()));
+            return Err(
+                Diagnostic::error("block must contain at least one body line")
+                    .with_span(line.span()),
+            );
         }
 
         Ok((
@@ -405,9 +410,9 @@ impl<'a> Parser<'a> {
             .trimmed()
             .strip_prefix("slot ")
             .expect("caller must guard keyword");
-        let (name_part, tail) = rest
-            .split_once(" provides ")
-            .ok_or_else(|| Diagnostic::error("slot declaration must include `provides`").with_span(line.span()))?;
+        let (name_part, tail) = rest.split_once(" provides ").ok_or_else(|| {
+            Diagnostic::error("slot declaration must include `provides`").with_span(line.span())
+        })?;
         let Some(provides_part) = tail.strip_suffix(':') else {
             return Err(
                 Diagnostic::error("slot declaration must end with ':'").with_span(line.span())
@@ -416,11 +421,15 @@ impl<'a> Parser<'a> {
 
         let name = name_part.trim();
         if name.is_empty() {
-            return Err(Diagnostic::error("slot declaration must include a name").with_span(line.span()));
+            return Err(
+                Diagnostic::error("slot declaration must include a name").with_span(line.span())
+            );
         }
 
-        let provides = parse_symbol_list(provides_part)
-            .ok_or_else(|| Diagnostic::error("slot `provides` list must use `[a, b]` syntax").with_span(line.span()))?;
+        let provides = parse_symbol_list(provides_part).ok_or_else(|| {
+            Diagnostic::error("slot `provides` list must use `[a, b]` syntax")
+                .with_span(line.span())
+        })?;
 
         let mut inputs = None;
         let mut cursor = start_idx + 1;
@@ -440,7 +449,8 @@ impl<'a> Parser<'a> {
                 if lhs.trim() == "inputs" {
                     inputs = parse_symbol_list(rhs.trim());
                     if inputs.is_none() {
-                        return Err(Diagnostic::error("slot inputs must use `[a, b]` syntax").with_span(current.span()));
+                        return Err(Diagnostic::error("slot inputs must use `[a, b]` syntax")
+                            .with_span(current.span()));
                     }
                 }
             }
@@ -521,7 +531,11 @@ struct Line<'a> {
 impl<'a> Line<'a> {
     fn new(number: usize, raw: &'a str) -> Self {
         let indent = raw.chars().take_while(|c| c.is_whitespace()).count();
-        Self { number, raw, indent }
+        Self {
+            number,
+            raw,
+            indent,
+        }
     }
 
     fn trimmed(&self) -> &'a str {
@@ -565,16 +579,19 @@ slot provider provides [x]:
   inputs = [y]
 "#;
         let diagnostics = parse_and_validate(bad).expect_err("validation should fail");
-        assert!(diagnostics
-            .iter()
-            .any(|diag| diag.message.contains("unknown input 'y'")));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.message.contains("unknown input 'y'"))
+        );
     }
 
     #[test]
     fn rejects_missing_model_header() {
         let diagnostics = parse_model("node x : scalar").expect_err("parse should fail");
-        assert!(diagnostics
-            .iter()
-            .any(|diag| diag.message.contains("first non-empty line must declare a model")));
+        assert!(diagnostics.iter().any(|diag| {
+            diag.message
+                .contains("first non-empty line must declare a model")
+        }));
     }
 }

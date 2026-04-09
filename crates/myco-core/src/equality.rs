@@ -133,13 +133,7 @@ pub fn lower_model(model: &SemanticModel) -> Result<EqualityModel, Vec<Diagnosti
     let mut equations = Vec::new();
     for block in &model.relations {
         for equation in &block.equations {
-            match lower_equation(
-                equation,
-                block.kind,
-                &block.name,
-                &quantity_ids,
-                block.span,
-            ) {
+            match lower_equation(equation, block.kind, &block.name, &quantity_ids, block.span) {
                 Ok(lowered) => equations.push(lowered),
                 Err(mut errs) => diagnostics.append(&mut errs),
             }
@@ -250,9 +244,8 @@ fn lower_symbol(
         return Ok(CoreExpr::Special(SpecialRef::Dt));
     }
 
-    let (base, time) = parse_symbol_reference(raw).map_err(|message| {
-        vec![Diagnostic::error(message).with_span(span)]
-    })?;
+    let (base, time) = parse_symbol_reference(raw)
+        .map_err(|message| vec![Diagnostic::error(message).with_span(span)])?;
 
     let quantity = quantity_ids.get(base).copied().ok_or_else(|| {
         vec![Diagnostic::error(format!("reference to unknown quantity '{base}'")).with_span(span)]
@@ -365,8 +358,10 @@ relation bad:
         let diagnostics = lower_model(&semantic).expect_err("equality lowering should fail");
 
         assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics[0]
-            .message
-            .contains("reference to unknown quantity 'x'"));
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("reference to unknown quantity 'x'")
+        );
     }
 }
