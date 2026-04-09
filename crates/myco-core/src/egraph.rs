@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use egg::{
-    AstSize, CostFunction, EGraph, Extractor, Id, RecExpr, Runner, Symbol, define_language,
-    rewrite as rw,
+    AstSize, CostFunction, EGraph, Extractor, Id, RecExpr, Rewrite, Runner, Symbol,
+    define_language, rewrite as rw,
 };
 
 use crate::{
@@ -106,19 +106,7 @@ pub fn build_core(equations: &[EqualityEquation]) -> EqualityCore {
     }
     egraph.rebuild();
 
-    let rewrites = vec![
-        rw!("commute-add"; "(+ ?a ?b)" => "(+ ?b ?a)"),
-        rw!("commute-mul"; "(* ?a ?b)" => "(* ?b ?a)"),
-        rw!("sub-add-right"; "(- (+ ?a ?b) ?b)" => "?a"),
-        rw!("sub-add-left"; "(- (+ ?a ?b) ?a)" => "?b"),
-        rw!("add-sub-right"; "(+ (- ?a ?b) ?b)" => "?a"),
-        rw!("sub-self-diff"; "(- ?a (- ?a ?b))" => "?b"),
-        rw!("div-mul-right"; "(/ (* ?a ?b) ?b)" => "?a"),
-        rw!("div-mul-left"; "(/ (* ?a ?b) ?a)" => "?b"),
-        rw!("mul-div-right"; "(* (/ ?a ?b) ?b)" => "?a"),
-        rw!("div-self-ratio"; "(/ ?a (/ ?a ?b))" => "?b"),
-    ];
-
+    let rewrites = arithmetic_rewrites();
     let runner = Runner::default().with_egraph(egraph).run(&rewrites);
     let egraph = runner.egraph;
     for registration in &mut registrations {
@@ -147,19 +135,25 @@ pub fn extract_best(expr: &CoreExpr, egraph: &EGraph<ArithmeticLang, ()>) -> Str
 }
 
 pub fn extract_available_expression(
-    core: &EqualityCore,
+    _core: &EqualityCore,
     registration: &DirectionalRegistration,
     available_current: &HashSet<QuantityId>,
     forbid_output_leaf: bool,
 ) -> Result<Option<ExtractedExpression>, Diagnostic> {
+    let mut local_egraph = EGraph::<ArithmeticLang, ()>::default();
+    let root_id = add_expr(&mut local_egraph, &registration.seed_expression);
+    let rewrites = arithmetic_rewrites();
+    let runner = Runner::default().with_egraph(local_egraph).run(&rewrites);
+    let local_egraph = runner.egraph;
+    let root_class = local_egraph.find(root_id);
     let extractor = Extractor::new(
-        &core.egraph,
+        &local_egraph,
         AvailabilityCost {
             available_current: available_current.clone(),
             forbidden_output: forbid_output_leaf.then_some(registration.output.clone()),
         },
     );
-    let (cost, best) = extractor.find_best(registration.output_class);
+    let (cost, best) = extractor.find_best(root_class);
     if cost >= UNAVAILABLE_PENALTY {
         return Ok(None);
     }
@@ -169,6 +163,21 @@ pub fn extract_available_expression(
         expression,
         structural_cost: cost as u32,
     }))
+}
+
+fn arithmetic_rewrites() -> Vec<Rewrite<ArithmeticLang, ()>> {
+    vec![
+        rw!("commute-add"; "(+ ?a ?b)" => "(+ ?b ?a)"),
+        rw!("commute-mul"; "(* ?a ?b)" => "(* ?b ?a)"),
+        rw!("sub-add-right"; "(- (+ ?a ?b) ?b)" => "?a"),
+        rw!("sub-add-left"; "(- (+ ?a ?b) ?a)" => "?b"),
+        rw!("add-sub-right"; "(+ (- ?a ?b) ?b)" => "?a"),
+        rw!("sub-self-diff"; "(- ?a (- ?a ?b))" => "?b"),
+        rw!("div-mul-right"; "(/ (* ?a ?b) ?b)" => "?a"),
+        rw!("div-mul-left"; "(/ (* ?a ?b) ?a)" => "?b"),
+        rw!("mul-div-right"; "(* (/ ?a ?b) ?b)" => "?a"),
+        rw!("div-self-ratio"; "(/ ?a (/ ?a ?b))" => "?b"),
+    ]
 }
 
 pub fn add_expr(egraph: &mut EGraph<ArithmeticLang, ()>, expr: &CoreExpr) -> Id {
@@ -620,5 +629,74 @@ relation pair:
                 .expect("expression should be available");
 
         assert_eq!(extracted.expression.to_string(), "(q6 / q0)");
+    }
+
+    #[test]
+    fn candidate_extraction_does_not_steal_other_relation_expression() {
+        let source = r#"
+model NoLeak
+
+external a : scalar
+external b : scalar
+external c : scalar
+external d : scalar
+node y : scalar
+
+relation first:
+  y = a + b
+
+relation second:
+  y = c + d
+"#;
+
+        let syntax = parse_and_validate(source).expect("syntax");
+        let semantic = semantic::lower_model(&syntax).expect("semantic");
+        let equality = equality::lower_model(&semantic).expect("equality");
+
+        let first = equality
+            .core
+            .directional
+            .iter()
+            .find(|registration| {
+                registration.block_name == "first"
+                    && registration.output.quantity == QuantityId(4)
+                    && registration.direction == ExpressionDirection::Forward
+            })
+            .expect("first registration");
+        let second = equality
+            .core
+            .directional
+            .iter()
+            .find(|registration| {
+                registration.block_name == "second"
+                    && registration.output.quantity == QuantityId(4)
+                    && registration.direction == ExpressionDirection::Forward
+            })
+            .expect("second registration");
+
+        let only_second_available = HashSet::from([QuantityId(2), QuantityId(3)]);
+
+        let first_extracted =
+            extract_available_expression(&equality.core, first, &only_second_available, true)
+                .expect("first extraction should succeed");
+        let second_extracted =
+            extract_available_expression(&equality.core, second, &only_second_available, true)
+                .expect("second extraction should succeed");
+
+        assert!(first_extracted.is_none());
+        assert_eq!(
+            second_extracted.expect("second path should be available").expression,
+            CoreExpr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(CoreExpr::Quantity(QuantityRef {
+                    quantity: QuantityId(2),
+                    time: TimeReference::Implicit,
+                })),
+                right: Box::new(CoreExpr::Quantity(QuantityRef {
+                    quantity: QuantityId(3),
+                    time: TimeReference::Implicit,
+                })),
+            }
+        );
     }
 }
