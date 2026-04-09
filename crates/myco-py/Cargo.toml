@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [lib]
-name = "myco_py"
+name = "_myco_py"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 test = false

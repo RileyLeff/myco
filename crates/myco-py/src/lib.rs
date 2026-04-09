@@ -14,7 +14,7 @@ use pyo3::{
     types::PyDict,
 };
 
-create_exception!(myco_py, MycoError, pyo3::exceptions::PyException);
+create_exception!(_myco_py, MycoError, pyo3::exceptions::PyException);
 
 #[pyfunction]
 fn load_model_source(py: Python<'_>, source: &str) -> PyResult<Py<PyDict>> {
@@ -68,7 +68,7 @@ fn write_demo_path(path: &str, backend: &str, output_path: Option<&str>) -> PyRe
 }
 
 #[pymodule]
-fn myco_py(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _myco_py(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MycoError", py.get_type::<MycoError>())?;
     m.add_function(wrap_pyfunction!(load_model_source, m)?)?;
     m.add_function(wrap_pyfunction!(load_model_path, m)?)?;
