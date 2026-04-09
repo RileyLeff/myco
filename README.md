@@ -8,11 +8,17 @@ binding, provider-aware planning, and Python/JAX artifact emission.
 This repo includes a `uv`-managed Python client around the `myco-py` PyO3
 extension.
 
+The Python package uses an isolated package root under `python/`, which is
+effectively a source layout for this mixed Rust/Python repo. I prefer this over
+a flat root-level package because it keeps packaging boundaries explicit and
+avoids accidental imports from unrelated repo files.
+
 ```bash
 UV_PROJECT_ENVIRONMENT=venv uv sync
 UV_PROJECT_ENVIRONMENT=venv uv run pytest
 UV_PROJECT_ENVIRONMENT=venv uv run python examples/tiny_tree_demo.py
 UV_PROJECT_ENVIRONMENT=venv uv run python examples/diagnostics_demo.py
+UV_PROJECT_ENVIRONMENT=venv uv run python examples/spec_file_demo.py
 ```
 
 After changing the Rust extension crate, rebuild the editable package with:
@@ -58,3 +64,16 @@ The Python package now has a conventional structure:
 - `myco.api`: high-level model / experiment API
 - `myco.types`: typed summaries, specs, bindings, and artifacts
 - `myco.errors`: structured diagnostics and `MycoError`
+
+Compile specs can also be round-tripped as JSON files:
+
+```python
+import myco
+
+spec = myco.load_spec("examples/tiny_tree_spec.json")
+artifact = myco.compile_spec_path(
+    "crates/myco-core/tests/fixtures/tiny_tree.myco",
+    "examples/tiny_tree_spec.json",
+    backend="jax",
+)
+```
