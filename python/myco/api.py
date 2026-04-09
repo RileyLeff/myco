@@ -24,6 +24,7 @@ from .types import (
     ModelSummary,
     Observation,
     SlotBinding,
+    load_spec,
 )
 
 
@@ -144,6 +145,14 @@ def compile_source(source: str, spec: CompileSpec, backend: Backend = "jax") -> 
 
 def compile_path(path: str | Path, spec: CompileSpec, backend: Backend = "jax") -> Artifact:
     return _artifact(bridge_call(_compile_path_with_spec, str(path), spec.to_dict(), backend))
+
+
+def compile_spec_path(
+    model_path: str | Path,
+    spec_path: str | Path,
+    backend: Backend = "jax",
+) -> Artifact:
+    return compile_path(model_path, load_spec(spec_path), backend=backend)
 
 
 def _model_summary(payload: dict[str, object]) -> ModelSummary:

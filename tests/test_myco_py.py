@@ -11,6 +11,7 @@ FIXTURE = (
     / "fixtures"
     / "tiny_tree.myco"
 )
+SPEC_FIXTURE = Path(__file__).resolve().parents[1] / "examples" / "tiny_tree_spec.json"
 
 
 def test_load_model_path_returns_summary():
@@ -77,3 +78,13 @@ def test_structured_myco_error_exposes_diagnostics():
         assert "requires an explicit initial-state binding" in err.diagnostics[0].message
     else:
         raise AssertionError("expected compile to fail with structured diagnostics")
+
+
+def test_load_spec_and_compile_from_file():
+    spec = myco.load_spec(SPEC_FIXTURE)
+    artifact = myco.compile_spec_path(FIXTURE, SPEC_FIXTURE, backend="jax")
+
+    assert spec.mode == "train"
+    assert spec.horizon_steps == 24
+    assert artifact.backend == "jax"
+    assert "import jax.numpy as jnp" in artifact.source

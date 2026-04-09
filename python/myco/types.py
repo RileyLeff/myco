@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Literal
@@ -86,6 +87,15 @@ class DirectBinding:
             payload["source"] = self.source
         return payload
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> "DirectBinding":
+        return cls(
+            quantity=str(payload["quantity"]),
+            kind=payload["kind"],  # type: ignore[arg-type]
+            steps=[int(step) for step in payload.get("steps", [])],
+            source=payload.get("source"),  # type: ignore[arg-type]
+        )
+
 
 @dataclass(slots=True)
 class SlotBinding:
@@ -94,6 +104,13 @@ class SlotBinding:
 
     def to_dict(self) -> dict[str, object]:
         return {"slot": self.slot, "kind": self.kind}
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> "SlotBinding":
+        return cls(
+            slot=str(payload["slot"]),
+            kind=payload["kind"],  # type: ignore[arg-type]
+        )
 
 
 @dataclass(slots=True)
@@ -113,6 +130,15 @@ class Observation:
             payload["steps"] = list(self.steps)
         return payload
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> "Observation":
+        return cls(
+            quantity=str(payload["quantity"]),
+            loss=payload.get("loss", "mse"),  # type: ignore[arg-type]
+            schedule=payload.get("schedule", "dense_per_step"),  # type: ignore[arg-type]
+            steps=[int(step) for step in payload.get("steps", [])],
+        )
+
 
 @dataclass(slots=True)
 class CompileSpec:
@@ -130,6 +156,44 @@ class CompileSpec:
             "slot_bindings": [binding.to_dict() for binding in self.slot_bindings],
             "observations": [observation.to_dict() for observation in self.observations],
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> "CompileSpec":
+        return cls(
+            mode=payload["mode"],  # type: ignore[arg-type]
+            horizon_steps=int(payload["horizon_steps"]),
+            direct_bindings=[
+                DirectBinding.from_dict(item)
+                for item in payload.get("direct_bindings", [])
+            ],
+            slot_bindings=[
+                SlotBinding.from_dict(item)
+                for item in payload.get("slot_bindings", [])
+            ],
+            observations=[
+                Observation.from_dict(item)
+                for item in payload.get("observations", [])
+            ],
+        )
+
+    def to_json(self, *, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent)
+
+    @classmethod
+    def from_json(cls, payload: str) -> "CompileSpec":
+        raw = json.loads(payload)
+        if not isinstance(raw, dict):
+            raise ValueError("compile spec JSON must decode to an object")
+        return cls.from_dict(raw)
+
+    def write_json(self, path: str | Path, *, indent: int = 2) -> Path:
+        output = Path(path)
+        output.write_text(self.to_json(indent=indent))
+        return output
+
+    @classmethod
+    def read_json(cls, path: str | Path) -> "CompileSpec":
+        return cls.from_json(Path(path).read_text())
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,3 +252,7 @@ def observe_sparse(
         schedule="sparse",
         steps=list(steps),
     )
+
+
+def load_spec(path: str | Path) -> CompileSpec:
+    return CompileSpec.read_json(path)
