@@ -1,6 +1,9 @@
+use std::{fs, io, path::Path};
+
 use crate::{
     compile::{bind_compile_spec, BoundModel, CompileSpec},
     diagnostics::Diagnostic,
+    emit,
     equality::{self, EqualityModel},
     plan::{build_single_step_plan, SingleStepPlan},
     semantic::{self, SemanticModel},
@@ -19,6 +22,19 @@ pub struct PreparedExperiment {
     pub model: LoadedModel,
     pub bound: BoundModel,
     pub plan: SingleStepPlan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendTarget {
+    Python,
+    Jax,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledArtifact {
+    pub model_name: String,
+    pub backend: BackendTarget,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +89,40 @@ pub fn prepare_experiment(
         bound,
         plan,
     })
+}
+
+pub fn compile_experiment(
+    experiment: &PreparedExperiment,
+    backend: BackendTarget,
+) -> CompiledArtifact {
+    let source = match backend {
+        BackendTarget::Python => emit::emit_python_module(experiment),
+        BackendTarget::Jax => emit::emit_jax_module(experiment),
+    };
+
+    CompiledArtifact {
+        model_name: experiment.model.syntax.name.clone(),
+        backend,
+        source,
+    }
+}
+
+pub fn compile_model(
+    model: &LoadedModel,
+    spec: &CompileSpec,
+    backend: BackendTarget,
+) -> Result<CompiledArtifact, Vec<Diagnostic>> {
+    let experiment = prepare_experiment(model, spec)?;
+    Ok(compile_experiment(&experiment, backend))
+}
+
+pub fn compile_source(
+    source: &str,
+    spec: &CompileSpec,
+    backend: BackendTarget,
+) -> Result<CompiledArtifact, Vec<Diagnostic>> {
+    let model = load_model(source)?;
+    compile_model(&model, spec, backend)
 }
 
 impl LoadedModel {
@@ -157,6 +207,37 @@ impl PreparedExperiment {
             unresolved_current_count: self.plan.unresolved_current.len(),
         }
     }
+
+    pub fn compile(&self, backend: BackendTarget) -> CompiledArtifact {
+        compile_experiment(self, backend)
+    }
+}
+
+impl CompiledArtifact {
+    pub fn suggested_filename(&self) -> String {
+        let stem = sanitize_module_name(&self.model_name);
+        let backend_suffix = match self.backend {
+            BackendTarget::Python => "python",
+            BackendTarget::Jax => "jax",
+        };
+        format!("{stem}_{backend_suffix}.py")
+    }
+
+    pub fn write_to_path(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        fs::write(path, &self.source)
+    }
+}
+
+fn sanitize_module_name(input: &str) -> String {
+    let mut out = String::new();
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.trim_matches('_').to_string()
 }
 
 #[cfg(test)]
@@ -250,5 +331,77 @@ mod tests {
         assert_eq!(summary.planned_temporal_steps, 1);
         assert!(summary.alternative_path_count >= 1);
         assert_eq!(summary.unresolved_current_count, 0);
+    }
+
+    #[test]
+    fn compiles_python_artifact_from_experiment() {
+        let model = load_model(TINY_TREE).expect("model should load");
+        let experiment = prepare_experiment(&model, &tiny_tree_spec()).expect("experiment should prepare");
+        let artifact = experiment.compile(BackendTarget::Python);
+
+        assert_eq!(artifact.backend, BackendTarget::Python);
+        assert_eq!(artifact.model_name, "TinyTree");
+        assert!(artifact.source.contains("def step(state, forcing, constants, slot_providers, dt):"));
+        assert_eq!(artifact.suggested_filename(), "tinytree_python.py");
+    }
+
+    #[test]
+    fn compiles_jax_artifact_from_source() {
+        let artifact = compile_source(TINY_TREE, &tiny_tree_spec(), BackendTarget::Jax)
+            .expect("compilation should succeed");
+
+        assert_eq!(artifact.backend, BackendTarget::Jax);
+        assert!(artifact.source.contains("import jax.numpy as jnp"));
+        assert_eq!(artifact.suggested_filename(), "tinytree_jax.py");
+    }
+
+    fn tiny_tree_spec() -> CompileSpec {
+        CompileSpec {
+            mode: CompileMode::Train,
+            horizon_steps: 24,
+            direct_bindings: vec![
+                DirectBindingSpec {
+                    quantity: "vpd_scale".to_string(),
+                    kind: DirectBindingKind::DataSeries {
+                        steps: (0..24).collect(),
+                    },
+                },
+                DirectBindingSpec {
+                    quantity: "soil_water".to_string(),
+                    kind: DirectBindingKind::DataSeries {
+                        steps: (0..24).collect(),
+                    },
+                },
+                DirectBindingSpec {
+                    quantity: "hydraulic_cond".to_string(),
+                    kind: DirectBindingKind::Constant,
+                },
+                DirectBindingSpec {
+                    quantity: "g_max".to_string(),
+                    kind: DirectBindingKind::Constant,
+                },
+                DirectBindingSpec {
+                    quantity: "water".to_string(),
+                    kind: DirectBindingKind::InitialState {
+                        source: InitialStateSource::Constant,
+                    },
+                },
+                DirectBindingSpec {
+                    quantity: "carbon".to_string(),
+                    kind: DirectBindingKind::InitialState {
+                        source: InitialStateSource::Constant,
+                    },
+                },
+            ],
+            slot_bindings: vec![SlotBindingSpec {
+                slot: "controller".to_string(),
+                kind: SlotBindingKind::Learned,
+            }],
+            observations: vec![ObservationSpec {
+                quantity: "transpiration".to_string(),
+                loss: LossKind::Mse,
+                schedule: ObservationSchedule::DensePerStep,
+            }],
+        }
     }
 }
