@@ -12,7 +12,9 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "jax",
     "maturin>=1.8,<2",
+    "optax",
     "pytest>=8.4,<9",
 ]
 

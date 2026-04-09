@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Literal
@@ -217,6 +218,13 @@ class Artifact:
         output.write_text(self.source)
         return output
 
+    def to_module(self, module_name: str | None = None) -> types.ModuleType:
+        name = module_name or _sanitize_module_name(self.model_name)
+        module = types.ModuleType(name)
+        module.__file__ = f"<generated:{name}>"
+        exec(compile(self.source, module.__file__, "exec"), module.__dict__)
+        return module
+
 
 def data_series(quantity: str, steps: Iterable[int]) -> DirectBinding:
     return DirectBinding(quantity=quantity, kind="data_series", steps=list(steps))
@@ -256,3 +264,8 @@ def observe_sparse(
 
 def load_spec(path: str | Path) -> CompileSpec:
     return CompileSpec.read_json(path)
+
+
+def _sanitize_module_name(name: str) -> str:
+    lowered = "".join(ch.lower() if ch.isalnum() else "_" for ch in name).strip("_")
+    return lowered or "myco_artifact"
