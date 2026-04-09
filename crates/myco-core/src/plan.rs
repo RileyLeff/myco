@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     compile::{BoundModel, ResolvedSlotBinding, SlotBindingKind},
     diagnostics::Diagnostic,
-    equality::{CoreExpr, EqualityEquation, QuantityId, SpecialRef, TimeReference},
+    equality::{CoreExpr, EqualityEquation, QuantityId, QuantityRef, SpecialRef, TimeReference},
     syntax::BlockKind,
 };
 
@@ -23,6 +23,7 @@ pub struct PlannedSlot {
     pub kind: SlotBindingKind,
     pub inputs: Vec<QuantityId>,
     pub outputs: Vec<QuantityId>,
+    pub cost: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,18 +33,35 @@ pub struct PlannedEquation {
     pub output: QuantityId,
     pub dependencies: Vec<Dependency>,
     pub expression: CoreExpr,
+    pub direction: EquationDirection,
+    pub cost: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlternativePath {
     pub output: QuantityId,
     pub source: PlanSource,
+    pub direction: CandidateDirection,
+    pub cost: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanSource {
     Slot(String),
     Equation(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateDirection {
+    Forward,
+    Inverted,
+    Provider,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EquationDirection {
+    Forward,
+    Inverted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,23 +92,25 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         .map(|quantity| quantity.quantity.id)
         .collect();
 
-    let mut slot_candidates = bound
+    let mut current_candidates = bound
         .slot_bindings
         .iter()
         .cloned()
         .map(Candidate::from_slot)
         .collect::<Vec<_>>();
-
-    let mut current_equation_candidates = Vec::new();
-    let mut temporal_equation_candidates = Vec::new();
+    let mut temporal_candidates = Vec::new();
 
     for equation in &bound.equations {
-        match Candidate::from_equation(equation) {
-            Ok(candidate) if candidate.timing == CandidateTiming::Current => {
-                current_equation_candidates.push(candidate);
+        match Candidate::from_equation_directions(equation) {
+            Ok(candidates) => {
+                for candidate in candidates {
+                    match candidate.timing {
+                        CandidateTiming::Current => current_candidates.push(candidate),
+                        CandidateTiming::Next => temporal_candidates.push(candidate),
+                    }
+                }
             }
-            Ok(candidate) => temporal_equation_candidates.push(candidate),
-            Err(diag) => diagnostics.push(diag),
+            Err(mut errs) => diagnostics.append(&mut errs),
         }
     }
 
@@ -103,84 +123,96 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
     let mut alternatives = Vec::new();
 
     loop {
-        let mut progress = false;
+        let mut ready = current_candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| !candidate.scheduled && candidate.dependencies_ready(&available_current))
+            .map(|(index, candidate)| ReadyCandidate {
+                index,
+                cost: candidate.cost,
+                source_rank: candidate.source_rank(),
+                name: candidate.name.clone(),
+                output_rank: candidate.primary_output_rank(),
+            })
+            .collect::<Vec<_>>();
 
-        for candidate in &mut slot_candidates {
-            if candidate.scheduled {
-                continue;
-            }
-            if !candidate.dependencies_ready(&available_current) {
-                continue;
-            }
-
-            candidate.scheduled = true;
-            progress = true;
-
-            let already_available = candidate
-                .outputs
-                .iter()
-                .all(|output| available_current.contains(output));
-            if already_available {
-                for output in &candidate.outputs {
-                    alternatives.push(AlternativePath {
-                        output: *output,
-                        source: candidate.source.clone(),
-                    });
-                }
-                continue;
-            }
-
-            for output in &candidate.outputs {
-                available_current.insert(*output);
-            }
-            planned_slots.push(PlannedSlot {
-                slot: candidate.name.clone(),
-                kind: candidate.slot_kind.expect("slot candidates carry slot kind"),
-                inputs: candidate.current_dependencies(),
-                outputs: candidate.outputs.clone(),
-            });
-        }
-
-        for candidate in &mut current_equation_candidates {
-            if candidate.scheduled {
-                continue;
-            }
-            if !candidate.dependencies_ready(&available_current) {
-                continue;
-            }
-
-            candidate.scheduled = true;
-            progress = true;
-            let output = candidate
-                .outputs
-                .first()
-                .copied()
-                .expect("equation candidates always have one output");
-
-            if available_current.contains(&output) {
-                alternatives.push(AlternativePath {
-                    output,
-                    source: candidate.source.clone(),
-                });
-                continue;
-            }
-
-            available_current.insert(output);
-            planned_equations.push(PlannedEquation {
-                block_name: candidate.name.clone(),
-                kind: candidate.block_kind.expect("equation candidates carry block kind"),
-                output,
-                dependencies: candidate.dependencies.clone(),
-                expression: candidate.expression.clone().expect("equation candidates carry rhs"),
-            });
-        }
-
-        if !progress {
+        if ready.is_empty() {
             break;
+        }
+
+        ready.sort();
+        let entry = ready.remove(0);
+        let candidate = &mut current_candidates[entry.index];
+
+        candidate.scheduled = true;
+        let unresolved_outputs = candidate
+            .outputs
+            .iter()
+            .copied()
+            .filter(|output| !available_current.contains(output))
+            .collect::<Vec<_>>();
+
+        if unresolved_outputs.is_empty() {
+            for output in &candidate.outputs {
+                alternatives.push(AlternativePath {
+                    output: *output,
+                    source: candidate.source.clone(),
+                    direction: candidate.direction,
+                    cost: candidate.cost,
+                });
+            }
+            continue;
+        }
+
+        for output in &candidate.outputs {
+            if available_current.contains(output) {
+                alternatives.push(AlternativePath {
+                    output: *output,
+                    source: candidate.source.clone(),
+                    direction: candidate.direction,
+                    cost: candidate.cost,
+                });
+            }
+        }
+
+        for output in &unresolved_outputs {
+            available_current.insert(*output);
+        }
+
+        match &candidate.payload {
+            CandidatePayload::Slot { kind, inputs } => {
+                planned_slots.push(PlannedSlot {
+                    slot: candidate.name.clone(),
+                    kind: *kind,
+                    inputs: inputs.clone(),
+                    outputs: candidate.outputs.clone(),
+                    cost: candidate.cost,
+                });
+            }
+            CandidatePayload::Equation {
+                kind,
+                expression,
+                dependencies,
+            } => {
+                let output = unresolved_outputs[0];
+                planned_equations.push(PlannedEquation {
+                    block_name: candidate.name.clone(),
+                    kind: *kind,
+                    output,
+                    dependencies: dependencies.clone(),
+                    expression: expression.clone(),
+                    direction: match candidate.direction {
+                        CandidateDirection::Forward => EquationDirection::Forward,
+                        CandidateDirection::Inverted => EquationDirection::Inverted,
+                        CandidateDirection::Provider => unreachable!("equation candidates are not providers"),
+                    },
+                    cost: candidate.cost,
+                });
+            }
         }
     }
 
-    let unresolved_current_candidates = current_equation_candidates
+    let unresolved_current_candidates = current_candidates
         .iter()
         .filter(|candidate| !candidate.scheduled)
         .collect::<Vec<_>>();
@@ -197,7 +229,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
     }
 
     let mut temporal_steps = Vec::new();
-    for candidate in &temporal_equation_candidates {
+    for candidate in &temporal_candidates {
         if !candidate.dependencies_ready(&available_current) {
             let missing = candidate
                 .missing_current_dependencies(&available_current)
@@ -212,18 +244,29 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
             continue;
         }
 
-        let output = candidate
-            .outputs
-            .first()
-            .copied()
-            .expect("equation candidates always have one output");
-        temporal_steps.push(PlannedEquation {
-            block_name: candidate.name.clone(),
-            kind: candidate.block_kind.expect("equation candidates carry block kind"),
-            output,
-            dependencies: candidate.dependencies.clone(),
-            expression: candidate.expression.clone().expect("equation candidates carry rhs"),
-        });
+        match &candidate.payload {
+            CandidatePayload::Equation {
+                kind,
+                expression,
+                dependencies,
+            } => {
+                temporal_steps.push(PlannedEquation {
+                    block_name: candidate.name.clone(),
+                    kind: *kind,
+                    output: candidate.outputs[0],
+                    dependencies: dependencies.clone(),
+                    expression: expression.clone(),
+                    direction: EquationDirection::Forward,
+                    cost: candidate.cost,
+                });
+            }
+            CandidatePayload::Slot { .. } => {
+                diagnostics.push(Diagnostic::error(format!(
+                    "slot '{}' cannot produce next-step quantities in v1",
+                    candidate.name
+                )));
+            }
+        }
     }
 
     if !diagnostics.is_empty() {
@@ -251,17 +294,29 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
     })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Candidate {
     name: String,
     source: PlanSource,
+    direction: CandidateDirection,
     timing: CandidateTiming,
     outputs: Vec<QuantityId>,
-    dependencies: Vec<Dependency>,
-    expression: Option<CoreExpr>,
-    block_kind: Option<BlockKind>,
-    slot_kind: Option<SlotBindingKind>,
+    payload: CandidatePayload,
+    cost: u32,
     scheduled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CandidatePayload {
+    Slot {
+        kind: SlotBindingKind,
+        inputs: Vec<QuantityId>,
+    },
+    Equation {
+        kind: BlockKind,
+        expression: CoreExpr,
+        dependencies: Vec<Dependency>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,107 +325,288 @@ enum CandidateTiming {
     Next,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ReadyCandidate {
+    cost: u32,
+    source_rank: u8,
+    name: String,
+    output_rank: usize,
+    index: usize,
+}
+
 impl Candidate {
     fn from_slot(slot: ResolvedSlotBinding) -> Self {
-        let dependencies = slot
-            .inputs
-            .iter()
-            .copied()
-            .map(|quantity| Dependency {
-                quantity: Some(quantity),
-                timing: DependencyTiming::Current,
-            })
-            .collect();
         Self {
             name: slot.slot.clone(),
             source: PlanSource::Slot(slot.slot),
+            direction: CandidateDirection::Provider,
             timing: CandidateTiming::Current,
             outputs: slot.provides,
-            dependencies,
-            expression: None,
-            block_kind: None,
-            slot_kind: Some(slot.kind),
+            payload: CandidatePayload::Slot {
+                kind: slot.kind,
+                inputs: slot.inputs,
+            },
+            cost: slot_cost(slot.kind),
             scheduled: false,
         }
     }
 
-    fn from_equation(equation: &EqualityEquation) -> Result<Self, Diagnostic> {
-        let (output, timing) = equation_output(equation)?;
-        let dependencies = collect_dependencies(&equation.rhs)?;
-        Ok(Self {
+    fn from_equation_directions(equation: &EqualityEquation) -> Result<Vec<Self>, Vec<Diagnostic>> {
+        let mut diagnostics = Vec::new();
+        let mut candidates = Vec::new();
+
+        let Some(lhs_ref) = lhs_quantity_ref(equation) else {
+            return Err(vec![Diagnostic::error(format!(
+                "equation '{}' does not assign to a quantity reference on the lhs",
+                equation.block_name
+            ))]);
+        };
+
+        let forward_deps = collect_dependencies(&equation.rhs).map_err(|diag| vec![diag])?;
+        candidates.push(Self {
             name: equation.block_name.clone(),
             source: PlanSource::Equation(equation.block_name.clone()),
-            timing,
-            outputs: vec![output],
-            dependencies,
-            expression: Some(equation.rhs.clone()),
-            block_kind: Some(equation.kind),
-            slot_kind: None,
+            direction: CandidateDirection::Forward,
+            timing: timing_from_reference(&lhs_ref, equation).map_err(|diag| vec![diag])?,
+            outputs: vec![lhs_ref.quantity],
+            payload: CandidatePayload::Equation {
+                kind: equation.kind,
+                expression: equation.rhs.clone(),
+                dependencies: forward_deps,
+            },
+            cost: 10,
             scheduled: false,
-        })
+        });
+
+        if equation.kind == BlockKind::Relation {
+            match inverted_candidates(equation, lhs_ref) {
+                Ok(mut more) => candidates.append(&mut more),
+                Err(err) => diagnostics.push(err),
+            }
+        }
+
+        if diagnostics.is_empty() {
+            Ok(candidates)
+        } else {
+            Err(diagnostics)
+        }
     }
 
     fn dependencies_ready(&self, available_current: &HashSet<QuantityId>) -> bool {
-        self.dependencies.iter().all(|dependency| match dependency {
-            Dependency {
-                timing: DependencyTiming::Current,
-                quantity: Some(quantity),
-            } => available_current.contains(quantity),
-            Dependency {
-                timing: DependencyTiming::SpecialDt,
-                ..
-            } => true,
-            Dependency {
-                timing: DependencyTiming::Next,
-                ..
-            } => false,
-            Dependency { quantity: None, .. } => true,
-        })
+        match &self.payload {
+            CandidatePayload::Slot { inputs, .. } => {
+                inputs.iter().all(|quantity| available_current.contains(quantity))
+            }
+            CandidatePayload::Equation { dependencies, .. } => dependencies.iter().all(|dependency| match dependency {
+                Dependency {
+                    timing: DependencyTiming::Current,
+                    quantity: Some(quantity),
+                } => available_current.contains(quantity),
+                Dependency {
+                    timing: DependencyTiming::SpecialDt,
+                    ..
+                } => true,
+                Dependency {
+                    timing: DependencyTiming::Next,
+                    ..
+                } => false,
+                Dependency { quantity: None, .. } => true,
+            }),
+        }
     }
 
     fn current_dependencies(&self) -> Vec<QuantityId> {
-        self.dependencies
-            .iter()
-            .filter_map(|dependency| match dependency {
-                Dependency {
-                    timing: DependencyTiming::Current,
-                    quantity: Some(quantity),
-                } => Some(*quantity),
-                _ => None,
-            })
-            .collect()
+        match &self.payload {
+            CandidatePayload::Slot { inputs, .. } => inputs.clone(),
+            CandidatePayload::Equation { dependencies, .. } => dependencies
+                .iter()
+                .filter_map(|dependency| match dependency {
+                    Dependency {
+                        timing: DependencyTiming::Current,
+                        quantity: Some(quantity),
+                    } => Some(*quantity),
+                    _ => None,
+                })
+                .collect(),
+        }
     }
 
     fn missing_current_dependencies(&self, available_current: &HashSet<QuantityId>) -> Vec<QuantityId> {
-        self.dependencies
-            .iter()
-            .filter_map(|dependency| match dependency {
-                Dependency {
-                    timing: DependencyTiming::Current,
-                    quantity: Some(quantity),
-                } if !available_current.contains(quantity) => Some(*quantity),
-                _ => None,
-            })
-            .collect()
+        match &self.payload {
+            CandidatePayload::Slot { inputs, .. } => inputs
+                .iter()
+                .copied()
+                .filter(|quantity| !available_current.contains(quantity))
+                .collect(),
+            CandidatePayload::Equation { dependencies, .. } => dependencies
+                .iter()
+                .filter_map(|dependency| match dependency {
+                    Dependency {
+                        timing: DependencyTiming::Current,
+                        quantity: Some(quantity),
+                    } if !available_current.contains(quantity) => Some(*quantity),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+
+    fn source_rank(&self) -> u8 {
+        match self.source {
+            PlanSource::Slot(_) => 0,
+            PlanSource::Equation(_) => 1,
+        }
+    }
+
+    fn primary_output_rank(&self) -> usize {
+        self.outputs.first().map(|quantity| quantity.0).unwrap_or(usize::MAX)
     }
 }
 
-fn equation_output(equation: &EqualityEquation) -> Result<(QuantityId, CandidateTiming), Diagnostic> {
+fn lhs_quantity_ref(equation: &EqualityEquation) -> Option<QuantityRef> {
     match &equation.lhs {
-        CoreExpr::Quantity(reference) => match reference.time {
-            TimeReference::Implicit | TimeReference::Relative(0) => {
-                Ok((reference.quantity, CandidateTiming::Current))
-            }
-            TimeReference::Relative(1) => Ok((reference.quantity, CandidateTiming::Next)),
-            other => Err(Diagnostic::error(format!(
-                "equation '{}' uses unsupported lhs time reference {:?} in v1",
-                equation.block_name, other
-            ))),
-        },
-        _ => Err(Diagnostic::error(format!(
-            "equation '{}' does not assign to a quantity reference on the lhs",
-            equation.block_name
+        CoreExpr::Quantity(reference) => Some(reference.clone()),
+        _ => None,
+    }
+}
+
+fn timing_from_reference(
+    reference: &QuantityRef,
+    equation: &EqualityEquation,
+) -> Result<CandidateTiming, Diagnostic> {
+    match reference.time {
+        TimeReference::Implicit | TimeReference::Relative(0) => Ok(CandidateTiming::Current),
+        TimeReference::Relative(1) => Ok(CandidateTiming::Next),
+        other => Err(Diagnostic::error(format!(
+            "equation '{}' uses unsupported lhs time reference {:?} in v1",
+            equation.block_name, other
         ))),
+    }
+}
+
+fn inverted_candidates(
+    equation: &EqualityEquation,
+    lhs_ref: QuantityRef,
+) -> Result<Vec<Candidate>, Diagnostic> {
+    if !matches!(lhs_ref.time, TimeReference::Implicit | TimeReference::Relative(0)) {
+        return Ok(Vec::new());
+    }
+
+    let lhs_expr = CoreExpr::Quantity(lhs_ref);
+    let CoreExpr::Binary { op, left, right } = &equation.rhs else {
+        return Ok(Vec::new());
+    };
+
+    let mut candidates = Vec::new();
+
+    if let Some(target) = invertible_target(left) {
+        let expression = invert_for_left(*op, lhs_expr.clone(), (**right).clone());
+        let dependencies = collect_dependencies(&expression)?;
+        candidates.push(Candidate {
+            name: equation.block_name.clone(),
+            source: PlanSource::Equation(equation.block_name.clone()),
+            direction: CandidateDirection::Inverted,
+            timing: CandidateTiming::Current,
+            outputs: vec![target],
+            payload: CandidatePayload::Equation {
+                kind: equation.kind,
+                expression,
+                dependencies,
+            },
+            cost: 20,
+            scheduled: false,
+        });
+    }
+
+    if let Some(target) = invertible_target(right) {
+        let expression = invert_for_right(*op, lhs_expr, (**left).clone(), (**right).clone());
+        let dependencies = collect_dependencies(&expression)?;
+        candidates.push(Candidate {
+            name: equation.block_name.clone(),
+            source: PlanSource::Equation(equation.block_name.clone()),
+            direction: CandidateDirection::Inverted,
+            timing: CandidateTiming::Current,
+            outputs: vec![target],
+            payload: CandidatePayload::Equation {
+                kind: equation.kind,
+                expression,
+                dependencies,
+            },
+            cost: 20,
+            scheduled: false,
+        });
+    }
+
+    Ok(candidates)
+}
+
+fn invertible_target(expr: &CoreExpr) -> Option<QuantityId> {
+    match expr {
+        CoreExpr::Quantity(reference)
+            if matches!(reference.time, TimeReference::Implicit | TimeReference::Relative(0)) =>
+        {
+            Some(reference.quantity)
+        }
+        _ => None,
+    }
+}
+
+fn invert_for_left(op: crate::semantic::BinaryOp, lhs: CoreExpr, right: CoreExpr) -> CoreExpr {
+    use crate::semantic::BinaryOp;
+
+    match op {
+        BinaryOp::Add => CoreExpr::Binary {
+            op: BinaryOp::Sub,
+            left: Box::new(lhs),
+            right: Box::new(right),
+        },
+        BinaryOp::Sub => CoreExpr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(lhs),
+            right: Box::new(right),
+        },
+        BinaryOp::Mul => CoreExpr::Binary {
+            op: BinaryOp::Div,
+            left: Box::new(lhs),
+            right: Box::new(right),
+        },
+        BinaryOp::Div => CoreExpr::Binary {
+            op: BinaryOp::Mul,
+            left: Box::new(lhs),
+            right: Box::new(right),
+        },
+    }
+}
+
+fn invert_for_right(
+    op: crate::semantic::BinaryOp,
+    lhs: CoreExpr,
+    left: CoreExpr,
+    _right: CoreExpr,
+) -> CoreExpr {
+    use crate::semantic::BinaryOp;
+
+    match op {
+        BinaryOp::Add => CoreExpr::Binary {
+            op: BinaryOp::Sub,
+            left: Box::new(lhs),
+            right: Box::new(left),
+        },
+        BinaryOp::Sub => CoreExpr::Binary {
+            op: BinaryOp::Sub,
+            left: Box::new(left),
+            right: Box::new(lhs),
+        },
+        BinaryOp::Mul => CoreExpr::Binary {
+            op: BinaryOp::Div,
+            left: Box::new(lhs),
+            right: Box::new(left),
+        },
+        BinaryOp::Div => CoreExpr::Binary {
+            op: BinaryOp::Div,
+            left: Box::new(left),
+            right: Box::new(lhs),
+        },
     }
 }
 
@@ -414,10 +650,17 @@ fn collect_dependencies_into(
     Ok(())
 }
 
+fn slot_cost(kind: SlotBindingKind) -> u32 {
+    match kind {
+        SlotBindingKind::DataSeries | SlotBindingKind::Constant => 0,
+        SlotBindingKind::Learned => 5,
+    }
+}
+
 fn detect_cycle(candidates: &[&Candidate]) -> Option<Vec<QuantityId>> {
     let outputs = candidates
         .iter()
-        .filter_map(|candidate| candidate.outputs.first().copied())
+        .flat_map(|candidate| candidate.outputs.iter().copied())
         .collect::<HashSet<_>>();
     if outputs.is_empty() {
         return None;
@@ -425,21 +668,14 @@ fn detect_cycle(candidates: &[&Candidate]) -> Option<Vec<QuantityId>> {
 
     let mut adjacency = HashMap::<QuantityId, Vec<QuantityId>>::new();
     for candidate in candidates {
-        let Some(output) = candidate.outputs.first().copied() else {
-            continue;
-        };
-        let deps = candidate
-            .dependencies
-            .iter()
-            .filter_map(|dependency| match dependency {
-                Dependency {
-                    quantity: Some(quantity),
-                    timing: DependencyTiming::Current,
-                } if outputs.contains(quantity) => Some(*quantity),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        adjacency.insert(output, deps);
+        for output in &candidate.outputs {
+            let deps = candidate
+                .current_dependencies()
+                .into_iter()
+                .filter(|quantity| outputs.contains(quantity))
+                .collect::<Vec<_>>();
+            adjacency.insert(*output, deps);
+        }
     }
 
     let mut visited = HashSet::new();
@@ -498,7 +734,7 @@ mod tests {
     use crate::{
         compile::{
             bind_compile_spec, CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec,
-            InitialStateSource, ObservationSpec, ObservationSchedule, SlotBindingKind,
+            InitialStateSource, LossKind, ObservationSpec, ObservationSchedule, SlotBindingKind,
             SlotBindingSpec,
         },
         equality, semantic,
@@ -515,13 +751,85 @@ mod tests {
         assert_eq!(plan.slot_steps.len(), 1);
         assert_eq!(plan.equation_steps.len(), 1);
         assert_eq!(plan.temporal_steps.len(), 1);
-        assert_eq!(plan.alternatives.len(), 1);
+        assert!(plan.alternatives.len() >= 1);
         assert!(plan.unresolved_current.is_empty());
 
         assert_eq!(plan.slot_steps[0].slot, "controller");
         assert_eq!(plan.equation_steps[0].block_name, "demand_transpiration");
+        assert_eq!(plan.equation_steps[0].direction, EquationDirection::Forward);
         assert_eq!(plan.temporal_steps[0].block_name, "water_step");
-        assert_eq!(plan.alternatives[0].source, PlanSource::Equation("supply_transpiration".to_string()));
+        assert!(plan.alternatives.iter().any(|alternative| {
+            alternative.source == PlanSource::Equation("supply_transpiration".to_string())
+                && alternative.direction == CandidateDirection::Forward
+        }));
+    }
+
+    #[test]
+    fn uses_inverted_direction_when_output_is_data_bound() {
+        let source = r#"
+model Recover
+
+external vpd_scale : scalar
+state water : scalar
+node stomata : scalar
+node transpiration : scalar
+
+relation demand_transpiration:
+  transpiration = stomata * vpd_scale
+
+temporal water_step:
+  water[t+1] = water[t] - transpiration[t]
+"#;
+
+        let syntax = parse_and_validate(source).expect("syntax should validate");
+        let semantic = semantic::lower_model(&syntax).expect("semantic lowering should succeed");
+        let equality = equality::lower_model(&semantic).expect("equality lowering should succeed");
+        let bound = bind_compile_spec(
+            &equality,
+            &CompileSpec {
+                mode: CompileMode::Fit,
+                horizon_steps: 12,
+                direct_bindings: vec![
+                    DirectBindingSpec {
+                        quantity: "vpd_scale".to_string(),
+                        kind: DirectBindingKind::DataSeries {
+                            steps: (0..12).collect(),
+                        },
+                    },
+                    DirectBindingSpec {
+                        quantity: "transpiration".to_string(),
+                        kind: DirectBindingKind::DataSeries {
+                            steps: (0..12).collect(),
+                        },
+                    },
+                    DirectBindingSpec {
+                        quantity: "water".to_string(),
+                        kind: DirectBindingKind::InitialState {
+                            source: InitialStateSource::Constant,
+                        },
+                    },
+                ],
+                slot_bindings: vec![],
+                observations: vec![],
+            },
+        )
+        .expect("binding should succeed");
+
+        let plan = build_single_step_plan(&bound).expect("planning should succeed");
+        let stomata_id = bound
+            .quantities
+            .iter()
+            .find(|quantity| quantity.quantity.name == "stomata")
+            .map(|quantity| quantity.quantity.id)
+            .expect("stomata should exist");
+
+        let equation = plan
+            .equation_steps
+            .iter()
+            .find(|equation| equation.output == stomata_id)
+            .expect("stomata should be solved by inversion");
+        assert_eq!(equation.direction, EquationDirection::Inverted);
+        assert_eq!(equation.block_name, "demand_transpiration");
     }
 
     #[test]
@@ -620,7 +928,7 @@ temporal water_step:
                 }],
                 observations: vec![ObservationSpec {
                     quantity: "transpiration".to_string(),
-                    loss: crate::compile::LossKind::Mse,
+                    loss: LossKind::Mse,
                     schedule: ObservationSchedule::DensePerStep,
                 }],
             },
