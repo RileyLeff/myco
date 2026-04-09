@@ -12,6 +12,7 @@ extension.
 UV_PROJECT_ENVIRONMENT=venv uv sync
 UV_PROJECT_ENVIRONMENT=venv uv run pytest
 UV_PROJECT_ENVIRONMENT=venv uv run python examples/tiny_tree_demo.py
+UV_PROJECT_ENVIRONMENT=venv uv run python examples/diagnostics_demo.py
 ```
 
 After changing the Rust extension crate, rebuild the editable package with:
@@ -51,3 +52,9 @@ experiment.observe_dense("transpiration")
 artifact = experiment.compile(backend="jax")
 artifact.write()
 ```
+
+The Python package now has a conventional structure:
+
+- `myco.api`: high-level model / experiment API
+- `myco.types`: typed summaries, specs, bindings, and artifacts
+- `myco.errors`: structured diagnostics and `MycoError`

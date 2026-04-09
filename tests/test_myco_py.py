@@ -14,12 +14,11 @@ FIXTURE = (
 
 
 def test_load_model_path_returns_summary():
-    payload = myco.load_model_path(str(FIXTURE))
-    model = payload["model"]
+    model = myco.load_model_path(str(FIXTURE))
 
-    assert model["name"] == "TinyTree"
-    assert model["quantity_count"] == 8
-    assert "stomata" in model["quantity_names"]
+    assert model.name == "TinyTree"
+    assert model.quantity_count == 8
+    assert "stomata" in model.quantity_names
 
 
 def test_compile_demo_path_emits_jax_artifact():
@@ -54,8 +53,27 @@ def test_experiment_builder_compiles_real_spec():
     summary = experiment.summary()
     artifact = experiment.compile(backend="jax")
 
-    assert summary["planned_slot_steps"] == 1
-    assert summary["planned_temporal_steps"] == 1
+    assert summary.planned_slot_steps == 1
+    assert summary.planned_temporal_steps == 1
     assert artifact.backend == "jax"
     assert artifact.suggested_filename == "tinytree_jax.py"
     assert "def total_loss(" in artifact.source
+
+
+def test_structured_myco_error_exposes_diagnostics():
+    model = myco.load(FIXTURE)
+    experiment = model.experiment(mode="train", horizon_steps=24)
+    experiment.bind_data_series("vpd_scale", range(24))
+    experiment.bind_data_series("soil_water", range(24))
+    experiment.bind_constant("hydraulic_cond")
+    experiment.bind_constant("g_max")
+    experiment.bind_slot("controller", kind="learned")
+    experiment.observe_dense("transpiration")
+
+    try:
+        experiment.compile(backend="jax")
+    except myco.MycoError as err:
+        assert len(err.diagnostics) >= 1
+        assert "requires an explicit initial-state binding" in err.diagnostics[0].message
+    else:
+        raise AssertionError("expected compile to fail with structured diagnostics")

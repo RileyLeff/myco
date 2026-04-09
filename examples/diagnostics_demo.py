@@ -14,21 +14,15 @@ def main() -> None:
     experiment.bind_data_series("soil_water", range(24))
     experiment.bind_constant("hydraulic_cond")
     experiment.bind_constant("g_max")
-    experiment.bind_initial_state("water")
-    experiment.bind_initial_state("carbon")
-    experiment.bind_slot("controller", kind="learned")
+    experiment.bind_slot("controller")
     experiment.observe_dense("transpiration")
 
-    summary = experiment.summary()
-    artifact = experiment.compile(backend="jax")
-
-    print(f"model: {model.summary.name}")
-    print(f"quantities: {model.summary.quantity_count}")
-    print(f"planned slots: {summary.planned_slot_steps}")
-    print(f"suggested filename: {artifact.suggested_filename}")
-    print("artifact preview:")
-    for line in artifact.source.splitlines()[:8]:
-        print(f"  {line}")
+    try:
+        experiment.compile()
+    except myco.MycoError as err:
+        print("compile failed with structured diagnostics:")
+        for diagnostic in err.diagnostics:
+            print(f"  {diagnostic.severity}: {diagnostic.message}")
 
 
 if __name__ == "__main__":
