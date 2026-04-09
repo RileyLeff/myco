@@ -530,7 +530,8 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     for alternative in &plan.alternatives {
         if let AlternativePayload::Equation { expression } = &alternative.payload {
             let output_name = quantity_name(experiment, alternative.output);
-            let alt_expr = render_history_expr(experiment, expression);
+            let alt_expr =
+                render_history_expr_for_output_unit(experiment, alternative.output, expression);
             lines.push(format!(
                 "    _residual = history[{output}] - ({alt_expr})",
                 output = py_string(&output_name)
@@ -617,7 +618,7 @@ fn emit_equation_step(
     target_map: &str,
 ) {
     let target = quantity_name(experiment, equation.output);
-    let expr = render_expr(experiment, &equation.expression);
+    let expr = render_expr_for_output_unit(experiment, equation.output, &equation.expression);
     lines.push(format!(
         "    {target_map}[{target}] = {expr}",
         target = py_string(&target)
@@ -631,7 +632,9 @@ fn emit_alternative_step(
 ) {
     let output_name = quantity_name(experiment, alternative.output);
     let value_expr = match &alternative.payload {
-        AlternativePayload::Equation { expression } => render_expr(experiment, expression),
+        AlternativePayload::Equation { expression } => {
+            render_expr_for_output_unit(experiment, alternative.output, expression)
+        }
         AlternativePayload::Slot { inputs } => {
             let slot_name = match &alternative.source {
                 crate::plan::PlanSource::Slot(slot) => slot,
@@ -667,16 +670,30 @@ fn emit_alternative_step(
     ));
 }
 
-fn render_expr(experiment: &PreparedExperiment, expr: &CoreExpr) -> String {
+fn render_expr_base(experiment: &PreparedExperiment, expr: &CoreExpr) -> String {
     match expr {
         CoreExpr::Quantity(reference) => match reference.time {
             TimeReference::Implicit | TimeReference::Relative(0) => format!(
-                "current[{name}]",
-                name = py_string(&quantity_name(experiment, reference.quantity))
+                "{}",
+                render_quantity_read(
+                    experiment,
+                    reference.quantity,
+                    &format!(
+                        "current[{name}]",
+                        name = py_string(&quantity_name(experiment, reference.quantity))
+                    )
+                )
             ),
             TimeReference::Relative(1) => format!(
-                "next_state[{name}]",
-                name = py_string(&quantity_name(experiment, reference.quantity))
+                "{}",
+                render_quantity_read(
+                    experiment,
+                    reference.quantity,
+                    &format!(
+                        "next_state[{name}]",
+                        name = py_string(&quantity_name(experiment, reference.quantity))
+                    )
+                )
             ),
             other => panic!("unsupported time reference in emitter: {other:?}"),
         },
@@ -691,19 +708,35 @@ fn render_expr(experiment: &PreparedExperiment, expr: &CoreExpr) -> String {
             };
             format!(
                 "({left} {op_str} {right})",
-                left = render_expr(experiment, left),
-                right = render_expr(experiment, right)
+                left = render_expr_base(experiment, left),
+                right = render_expr_base(experiment, right)
             )
         }
     }
 }
 
-fn render_history_expr(experiment: &PreparedExperiment, expr: &CoreExpr) -> String {
+fn render_expr_for_output_unit(
+    experiment: &PreparedExperiment,
+    output: QuantityId,
+    expr: &CoreExpr,
+) -> String {
+    let expr_base = render_expr_base(experiment, expr);
+    scale_from_base(experiment, output, expr_base)
+}
+
+fn render_history_expr_base(experiment: &PreparedExperiment, expr: &CoreExpr) -> String {
     match expr {
         CoreExpr::Quantity(reference) => match reference.time {
             TimeReference::Implicit | TimeReference::Relative(0) => format!(
-                "history[{name}]",
-                name = py_string(&quantity_name(experiment, reference.quantity))
+                "{}",
+                render_quantity_read(
+                    experiment,
+                    reference.quantity,
+                    &format!(
+                        "history[{name}]",
+                        name = py_string(&quantity_name(experiment, reference.quantity))
+                    )
+                )
             ),
             TimeReference::Relative(1) => {
                 panic!("next-step references are not supported in JAX history expressions")
@@ -721,17 +754,62 @@ fn render_history_expr(experiment: &PreparedExperiment, expr: &CoreExpr) -> Stri
             };
             format!(
                 "({left} {op_str} {right})",
-                left = render_history_expr(experiment, left),
-                right = render_history_expr(experiment, right)
+                left = render_history_expr_base(experiment, left),
+                right = render_history_expr_base(experiment, right)
             )
         }
     }
+}
+
+fn render_history_expr_for_output_unit(
+    experiment: &PreparedExperiment,
+    output: QuantityId,
+    expr: &CoreExpr,
+) -> String {
+    let expr_base = render_history_expr_base(experiment, expr);
+    scale_from_base(experiment, output, expr_base)
 }
 
 fn quantity_name(experiment: &PreparedExperiment, quantity: QuantityId) -> String {
     experiment.model.equality.quantities[quantity.0]
         .name
         .clone()
+}
+
+fn scale_to_base(experiment: &PreparedExperiment, quantity: QuantityId) -> i64 {
+    experiment.model.equality.quantities[quantity.0]
+        .type_info
+        .scale_to_base
+}
+
+fn render_quantity_read(
+    experiment: &PreparedExperiment,
+    quantity: QuantityId,
+    expression: &str,
+) -> String {
+    let scale = scale_to_base(experiment, quantity);
+    if scale == 1 {
+        expression.to_string()
+    } else {
+        format!("({expression} * {})", render_scale(scale))
+    }
+}
+
+fn scale_from_base(
+    experiment: &PreparedExperiment,
+    quantity: QuantityId,
+    expression: String,
+) -> String {
+    let scale = scale_to_base(experiment, quantity);
+    if scale == 1 {
+        expression
+    } else {
+        format!("(({expression}) / {})", render_scale(scale))
+    }
+}
+
+fn render_scale(scale: i64) -> String {
+    format!("{scale:?}")
 }
 
 fn render_py_string_list(values: &[impl AsRef<str>]) -> String {
@@ -1009,6 +1087,45 @@ temporal water_step:
         assert!(module.contains(
             "current[\"stomata\"] = (current[\"transpiration\"] / current[\"vpd_scale\"])"
         ));
+    }
+
+    #[test]
+    fn emits_unit_conversion_for_equation_outputs() {
+        let source = r#"
+model UnitConvert
+
+node x : potential@MPa
+node y : potential@kPa
+
+relation assign:
+  x = y
+"#;
+
+        let model = load_model(source).expect("model should load");
+        let experiment = prepare_experiment(
+            &model,
+            &CompileSpec {
+                mode: CompileMode::Simulate,
+                horizon_steps: 1,
+                direct_bindings: vec![DirectBindingSpec {
+                    quantity: "y".to_string(),
+                    kind: DirectBindingKind::Constant,
+                }],
+                slot_bindings: vec![],
+                observations: vec![],
+            },
+        )
+        .expect("experiment should prepare");
+
+        let python_module = emit_python_module(&experiment);
+        assert!(python_module.contains("current[\"x\"] = "));
+        assert!(python_module.contains("current[\"y\"] * 1000"));
+        assert!(python_module.contains("/ 1000000"));
+
+        let jax_module = emit_jax_module(&experiment);
+        assert!(jax_module.contains("current[\"x\"] = "));
+        assert!(jax_module.contains("current[\"y\"] * 1000"));
+        assert!(jax_module.contains("/ 1000000"));
     }
 
     #[test]

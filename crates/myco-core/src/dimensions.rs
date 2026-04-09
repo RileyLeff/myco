@@ -11,6 +11,8 @@ pub struct QuantityTypeInfo {
     pub base_type: String,
     pub unit: Option<String>,
     pub dimension: Dimension,
+    pub scale_to_base: i64,
+    pub unit_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -89,15 +91,32 @@ pub fn parse_quantity_type(raw: &str) -> QuantityTypeInfo {
         None => (raw.trim(), None),
     };
 
+    let scale_to_base = unit_scale_for(base_type, unit.as_deref()).unwrap_or(1);
+    let unit_error = unit_scale_for(base_type, unit.as_deref()).err();
+
     QuantityTypeInfo {
         base_type: base_type.to_string(),
-        unit,
+        unit: unit.clone(),
         dimension: known_dimension(base_type),
+        scale_to_base,
+        unit_error,
     }
 }
 
 pub fn validate_model_dimensions(model: &EqualityModel) -> Result<(), Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
+
+    for quantity in &model.quantities {
+        if let Some(message) = &quantity.type_info.unit_error {
+            diagnostics.push(
+                Diagnostic::error(format!(
+                    "quantity '{}' has invalid unit annotation: {}",
+                    quantity.name, message
+                ))
+                .with_span(quantity.provenance.span),
+            );
+        }
+    }
 
     for equation in &model.equations {
         let lhs = infer_expr_dimension(
@@ -260,6 +279,16 @@ fn validate_bound(
                     ))
                     .with_span(span),
                 );
+            } else if other.type_info.unit != model.quantities[quantity_id.0].type_info.unit {
+                diagnostics.push(
+                    Diagnostic::error(format!(
+                        "{} bound on '{}' uses '{}' with different units; quantity-bound unit conversion is not supported in v1",
+                        label,
+                        model.quantities[quantity_id.0].name,
+                        other.name
+                    ))
+                    .with_span(span),
+                );
             }
         }
     }
@@ -281,6 +310,28 @@ fn known_dimension(base_type: &str) -> Dimension {
     }
 }
 
+fn unit_scale_for(base_type: &str, unit: Option<&str>) -> Result<i64, String> {
+    let Some(unit) = unit else {
+        return Ok(1);
+    };
+
+    match base_type {
+        "potential" => match unit {
+            "Pa" => Ok(1),
+            "kPa" => Ok(1_000),
+            "MPa" => Ok(1_000_000),
+            other => Err(format!(
+                "unsupported unit '{}' for type 'potential' (expected Pa, kPa, or MPa)",
+                other
+            )),
+        },
+        other => Err(format!(
+            "explicit units are not supported for type '{}'",
+            other
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,9 +342,16 @@ mod tests {
         let info = parse_quantity_type("water_flux");
         assert_eq!(info.base_type, "water_flux");
         assert_eq!(info.dimension.to_string(), "potential * time^-1");
+        assert_eq!(info.scale_to_base, 1);
+        assert!(info.unit_error.is_none());
 
         let opaque = parse_quantity_type("custom_type");
         assert_eq!(opaque.dimension.to_string(), "opaque:custom_type");
+
+        let unit = parse_quantity_type("potential@kPa");
+        assert_eq!(unit.unit.as_deref(), Some("kPa"));
+        assert_eq!(unit.scale_to_base, 1_000);
+        assert!(unit.unit_error.is_none());
     }
 
     #[test]
@@ -359,6 +417,25 @@ node limit : conductance
             diagnostics[0]
                 .message
                 .contains("dimensionally inconsistent")
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_unit_annotations() {
+        let source = r#"
+model UnitBad
+
+node psi : potential@bar
+"#;
+
+        let syntax = parse_and_validate(source).expect("syntax");
+        let semantic = semantic::lower_model(&syntax).expect("semantic");
+        let equality = equality::lower_model(&semantic).expect("equality");
+        let diagnostics = validate_model_dimensions(&equality).expect_err("should fail");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("unsupported unit 'bar' for type 'potential'")
         );
     }
 }
