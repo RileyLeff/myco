@@ -77,6 +77,8 @@ def test_experiment_explain_plan_returns_typed_paths():
 
     assert "transpiration" in explanation.available_current
     assert any(path.source == "controller" for path in explanation.chosen_current)
+    assert any(path.expression is not None for path in explanation.chosen_current)
+    assert any(path.provenance_label is not None for path in explanation.chosen_current)
     assert any(
         alternative.source == "supply_transpiration"
         for alternative in explanation.alternatives
@@ -103,6 +105,8 @@ def test_experiment_explain_quantity_surfaces_alternatives_and_unresolved():
     assert transpiration.unresolved is False
     assert transpiration.chosen_current is not None
     assert transpiration.chosen_current.source == "demand_transpiration"
+    assert transpiration.chosen_current.expression == "(stomata * vpd_scale)"
+    assert transpiration.chosen_current.source_span is not None
     assert any(
         alternative.source == "supply_transpiration"
         for alternative in transpiration.alternatives

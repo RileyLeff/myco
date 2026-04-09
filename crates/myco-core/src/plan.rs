@@ -204,7 +204,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                     output: *output,
                     source: candidate.source.clone(),
                     direction: candidate.direction,
-                    cost: candidate.cost,
+                    cost: entry.cost,
                     payload: candidate.alternative_payload_for(*output),
                 });
             }
@@ -217,7 +217,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                     output: *output,
                     source: candidate.source.clone(),
                     direction: candidate.direction,
-                    cost: candidate.cost,
+                    cost: entry.cost,
                     payload: candidate.alternative_payload_for(*output),
                 });
             }
@@ -234,7 +234,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                     kind: *kind,
                     inputs: inputs.clone(),
                     outputs: candidate.outputs.clone(),
-                    cost: candidate.cost,
+                    cost: entry.cost,
                 });
             }
             CandidatePayload::Equation { registration } => {
@@ -255,7 +255,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                             unreachable!("equation candidates are not providers")
                         }
                     },
-                    cost: candidate.cost,
+                    cost: entry.cost,
                 });
             }
         }

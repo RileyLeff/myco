@@ -46,8 +46,7 @@ Three of the original `v1.2` issues are now closed:
 
 The main remaining issues are now:
 
-- introspection still explains chosen paths only shallowly and does not surface extracted expressions or stable provenance links deeply enough
-- planner cost reporting and explanation fidelity still need cleanup after the `egg` extraction rewrite
+- planner cost reporting and explanation fidelity still need final cleanup after the `egg` extraction rewrite
 - slot interface metadata is better, but still not yet as rich as the spec intends
 
 So the project is now best described as:
@@ -62,9 +61,9 @@ At this point, I do **not** recommend broadening the frontend language, changing
 
 The next order should be:
 
-1. Deepen provenance/introspection just enough that the first real model remains debuggable without compiler archaeology.
-2. Tighten planner cost reporting and explanation fidelity after the `egg` extraction rewrite.
-3. Decide how much richer slot/interface metadata really needs to be for honest `v1`.
+1. Tighten planner cost reporting and explanation fidelity after the `egg` extraction rewrite.
+2. Decide how much richer slot/interface metadata really needs to be for honest `v1`.
+3. Re-run external review once those remaining semantics are narrow and explicit.
 
 This order matters because the remaining gaps are mostly semantic mismatches between what the API promises and what emitted code actually does.
 
@@ -218,6 +217,32 @@ That is useful, but it is weaker than the intended contract.
 ### What `v1` Needs
 
 Keep the distinction small but visible:
+
+## 5. Provenance And Introspection Need To Explain Real Extracted Paths (Mostly Closed)
+
+### Current State
+
+The explanation surface now includes:
+
+- rendered chosen expressions
+- rendered alternative expressions
+- provenance labels
+- source spans carried into Python and CLI explanations
+
+That is enough to explain the TinyTree recovery path and point back to the originating declarations.
+
+### What Still Needs Cleanup
+
+Two smaller gaps remain:
+
+- some reported costs still reflect candidate defaults rather than final extracted costs in blocked-path reporting
+- provenance lookup is still block-level in places where a finer-grained equation identity would be cleaner
+
+### Acceptance Criteria
+
+- chosen and alternative paths show rendered expressions and stable source locations
+- reported costs match extracted path costs consistently across the explanation surface
+- provenance resolution is stable enough that a user can reliably map explanations back to source
 
 - `simulate`: no observation payload required, loss helpers optional
 - `fit`: loss helpers emitted, learned-slot interfaces optional

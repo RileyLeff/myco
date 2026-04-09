@@ -75,21 +75,49 @@ class ExperimentSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanSourceSpan:
+    start_line: int
+    start_column: int
+    end_line: int
+    end_column: int
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "PlanSourceSpan":
+        return cls(
+            start_line=int(payload["start_line"]),
+            start_column=int(payload["start_column"]),
+            end_line=int(payload["end_line"]),
+            end_column=int(payload["end_column"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PathExplanation:
     output: str
     source: str
     direction: str
     cost: int
     dependencies: tuple[str, ...]
+    expression: str | None
+    provenance_label: str | None
+    source_span: PlanSourceSpan | None
 
     @classmethod
     def from_payload(cls, payload: dict[str, object]) -> "PathExplanation":
+        source_span = payload.get("source_span")
         return cls(
             output=str(payload["output"]),
             source=str(payload["source"]),
             direction=str(payload["direction"]),
             cost=int(payload["cost"]),
             dependencies=tuple(payload["dependencies"]),
+            expression=payload.get("expression"),
+            provenance_label=payload.get("provenance_label"),
+            source_span=(
+                PlanSourceSpan.from_payload(source_span)
+                if isinstance(source_span, dict)
+                else None
+            ),
         )
 
 
@@ -99,14 +127,25 @@ class AlternativeExplanation:
     source: str
     direction: str
     cost: int
+    expression: str | None
+    provenance_label: str | None
+    source_span: PlanSourceSpan | None
 
     @classmethod
     def from_payload(cls, payload: dict[str, object]) -> "AlternativeExplanation":
+        source_span = payload.get("source_span")
         return cls(
             output=str(payload["output"]),
             source=str(payload["source"]),
             direction=str(payload["direction"]),
             cost=int(payload["cost"]),
+            expression=payload.get("expression"),
+            provenance_label=payload.get("provenance_label"),
+            source_span=(
+                PlanSourceSpan.from_payload(source_span)
+                if isinstance(source_span, dict)
+                else None
+            ),
         )
 
 
@@ -117,15 +156,26 @@ class BlockedCandidateExplanation:
     direction: str
     cost: int
     missing_dependencies: tuple[str, ...]
+    expression: str | None
+    provenance_label: str | None
+    source_span: PlanSourceSpan | None
 
     @classmethod
     def from_payload(cls, payload: dict[str, object]) -> "BlockedCandidateExplanation":
+        source_span = payload.get("source_span")
         return cls(
             output=str(payload["output"]),
             source=str(payload["source"]),
             direction=str(payload["direction"]),
             cost=int(payload["cost"]),
             missing_dependencies=tuple(payload["missing_dependencies"]),
+            expression=payload.get("expression"),
+            provenance_label=payload.get("provenance_label"),
+            source_span=(
+                PlanSourceSpan.from_payload(source_span)
+                if isinstance(source_span, dict)
+                else None
+            ),
         )
 
 

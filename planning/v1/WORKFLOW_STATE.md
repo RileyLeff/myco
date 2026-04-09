@@ -19,20 +19,21 @@ Current phase: `v1.2` parity cleanup after the `egg` rollout, with compile-surfa
 - learned initial state is now implemented in emitted artifacts
 - consistency policy is now explicit in the compile spec and respected by both backends
 - compile modes now affect emitted artifact shape in a visible way
+- explanation output now carries rendered expressions, provenance labels, and source spans
 
 ## In Progress
 
 - remaining `v1.2` parity work after the compile/emitter honesty pass
-- deeper provenance/introspection and explanation fidelity after the compile/emitter parity slices
+- final planner cost/provenance cleanup after the richer explanation slice
 
 ## Open Risks
 
-- provenance and diagnostics still need another pass to fully explain chosen extracted paths
-- planner cost reporting in explanations still needs cleanup so reported costs match extracted costs
+- planner cost reporting in explanations still needs cleanup so reported costs match extracted costs consistently
+- slot interface metadata is still thinner than the long-term spec intends
 
 ## Next Action
 
 1. land the next `v1.2` slice:
-   deeper provenance/introspection and explanation fidelity
+   final cost/provenance cleanup and slot metadata decisions
 2. rerun external review once the remaining `v1.2` gaps are narrower
 3. keep avoiding frontend-language expansion until the parity cleanup is done
