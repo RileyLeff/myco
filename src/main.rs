@@ -28,10 +28,24 @@ fn run() -> Result<(), String> {
 
             match myco::syntax::parse_and_validate(&source) {
                 Ok(model) => match myco::semantic::lower_model(&model) {
-                    Ok(_) => {
-                        println!("ok: model '{}' parsed, validated, and lowered", model.name);
-                        Ok(())
-                    }
+                    Ok(semantic) => match myco::equality::lower_model(&semantic) {
+                        Ok(equality) => {
+                            println!(
+                                "ok: model '{}' parsed, validated, and lowered ({} quantities, {} equations, {} slots)",
+                                model.name,
+                                equality.quantities.len(),
+                                equality.equations.len(),
+                                equality.slots.len()
+                            );
+                            Ok(())
+                        }
+                        Err(diagnostics) => {
+                            for diagnostic in diagnostics {
+                                eprintln!("{diagnostic}");
+                            }
+                            Err(format!("check failed for {path}"))
+                        }
+                    },
                     Err(diagnostics) => {
                         for diagnostic in diagnostics {
                             eprintln!("{diagnostic}");
