@@ -463,6 +463,7 @@ fn artifact_dict(py: Python<'_>, artifact: &CompiledArtifact) -> PyResult<Py<PyD
     dict.set_item("model_name", &artifact.model_name)?;
     dict.set_item("backend", backend_name(artifact.backend))?;
     dict.set_item("suggested_filename", artifact.suggested_filename())?;
+    dict.set_item("metadata", serialize_to_py(py, &artifact.metadata)?)?;
     dict.set_item("source", &artifact.source)?;
     Ok(dict.unbind())
 }

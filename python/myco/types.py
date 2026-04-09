@@ -395,10 +395,55 @@ class CompileSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class SlotInterface:
+    slot: str
+    kind: SlotBindingKind
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    input_arity: int
+    output_arity: int
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "SlotInterface":
+        return cls(
+            slot=str(payload["slot"]),
+            kind=payload["kind"],  # type: ignore[arg-type]
+            inputs=tuple(payload["inputs"]),
+            outputs=tuple(payload["outputs"]),
+            input_arity=int(payload["input_arity"]),
+            output_arity=int(payload["output_arity"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactMetadata:
+    compile_mode: Mode
+    consistency_policy: ConsistencyPolicy
+    loss_helpers_enabled: bool
+    learned_initial_state: tuple[str, ...]
+    learned_slots: tuple[str, ...]
+    slot_interfaces: tuple[SlotInterface, ...]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "ArtifactMetadata":
+        return cls(
+            compile_mode=payload["compile_mode"],  # type: ignore[arg-type]
+            consistency_policy=payload["consistency_policy"],  # type: ignore[arg-type]
+            loss_helpers_enabled=bool(payload["loss_helpers_enabled"]),
+            learned_initial_state=tuple(payload["learned_initial_state"]),
+            learned_slots=tuple(payload["learned_slots"]),
+            slot_interfaces=tuple(
+                SlotInterface.from_payload(item) for item in payload["slot_interfaces"]
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class Artifact:
     model_name: str
     backend: Backend
     suggested_filename: str
+    metadata: ArtifactMetadata
     source: str
 
     @classmethod
@@ -407,6 +452,7 @@ class Artifact:
             model_name=str(payload["model_name"]),
             backend=str(payload["backend"]),
             suggested_filename=str(payload["suggested_filename"]),
+            metadata=ArtifactMetadata.from_payload(payload["metadata"]),
             source=str(payload["source"]),
         )
 
@@ -421,6 +467,12 @@ class Artifact:
         module.__file__ = f"<generated:{name}>"
         exec(compile(self.source, module.__file__, "exec"), module.__dict__)
         return module
+
+    def slot_interface(self, slot_name: str) -> SlotInterface | None:
+        for slot in self.metadata.slot_interfaces:
+            if slot.slot == slot_name:
+                return slot
+        return None
 
 
 def data_series(quantity: str, steps: Iterable[int]) -> DirectBinding:

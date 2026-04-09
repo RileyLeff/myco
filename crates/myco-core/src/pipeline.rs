@@ -1,5 +1,7 @@
 use std::{fs, io, path::Path};
 
+use serde::Serialize;
+
 use crate::{
     compile::{BoundModel, CompileSpec, bind_compile_spec},
     diagnostics::Diagnostic,
@@ -35,7 +37,28 @@ pub enum BackendTarget {
 pub struct CompiledArtifact {
     pub model_name: String,
     pub backend: BackendTarget,
+    pub metadata: ArtifactMetadata,
     pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArtifactMetadata {
+    pub compile_mode: String,
+    pub consistency_policy: String,
+    pub loss_helpers_enabled: bool,
+    pub learned_initial_state: Vec<String>,
+    pub learned_slots: Vec<String>,
+    pub slot_interfaces: Vec<SlotInterfaceMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SlotInterfaceMetadata {
+    pub slot: String,
+    pub kind: String,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub input_arity: usize,
+    pub output_arity: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +120,7 @@ pub fn compile_experiment(
     experiment: &PreparedExperiment,
     backend: BackendTarget,
 ) -> CompiledArtifact {
+    let metadata = artifact_metadata(experiment);
     let source = match backend {
         BackendTarget::Python => emit::emit_python_module(experiment),
         BackendTarget::Jax => emit::emit_jax_module(experiment),
@@ -105,6 +129,7 @@ pub fn compile_experiment(
     CompiledArtifact {
         model_name: experiment.model.syntax.name.clone(),
         backend,
+        metadata,
         source,
     }
 }
@@ -260,6 +285,82 @@ fn sanitize_module_name(input: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
+fn artifact_metadata(experiment: &PreparedExperiment) -> ArtifactMetadata {
+    let slot_interfaces = experiment
+        .bound
+        .slot_bindings
+        .iter()
+        .map(|slot| SlotInterfaceMetadata {
+            slot: slot.slot.clone(),
+            kind: match slot.kind {
+                crate::compile::SlotBindingKind::DataSeries => "data_series".to_string(),
+                crate::compile::SlotBindingKind::Constant => "constant".to_string(),
+                crate::compile::SlotBindingKind::Learned => "learned".to_string(),
+            },
+            inputs: slot
+                .inputs
+                .iter()
+                .map(|quantity| {
+                    experiment.model.equality.quantities[quantity.0]
+                        .name
+                        .clone()
+                })
+                .collect(),
+            outputs: slot
+                .provides
+                .iter()
+                .map(|quantity| {
+                    experiment.model.equality.quantities[quantity.0]
+                        .name
+                        .clone()
+                })
+                .collect(),
+            input_arity: slot.input_arity,
+            output_arity: slot.output_arity,
+        })
+        .collect();
+
+    ArtifactMetadata {
+        compile_mode: match experiment.bound.mode {
+            crate::compile::CompileMode::Simulate => "simulate".to_string(),
+            crate::compile::CompileMode::Fit => "fit".to_string(),
+            crate::compile::CompileMode::Train => "train".to_string(),
+        },
+        consistency_policy: match experiment.bound.consistency_policy {
+            crate::compile::ConsistencyPolicy::Off => "off".to_string(),
+            crate::compile::ConsistencyPolicy::EquationOnly => "equation_only".to_string(),
+            crate::compile::ConsistencyPolicy::All => "all".to_string(),
+        },
+        loss_helpers_enabled: !matches!(
+            experiment.bound.mode,
+            crate::compile::CompileMode::Simulate
+        ),
+        learned_initial_state: experiment
+            .bound
+            .direct_bindings
+            .iter()
+            .filter_map(|binding| match binding.kind {
+                crate::compile::DirectBindingKind::InitialState {
+                    source: crate::compile::InitialStateSource::Learned,
+                } => Some(
+                    experiment.model.equality.quantities[binding.quantity.0]
+                        .name
+                        .clone(),
+                ),
+                _ => None,
+            })
+            .collect(),
+        learned_slots: experiment
+            .bound
+            .slot_bindings
+            .iter()
+            .filter(|slot| matches!(slot.kind, crate::compile::SlotBindingKind::Learned))
+            .map(|slot| slot.slot.clone())
+            .collect(),
+        slot_interfaces,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +470,17 @@ mod tests {
                 .source
                 .contains("def step(state, forcing, constants, slot_providers, dt):")
         );
+        assert_eq!(artifact.metadata.compile_mode, "train");
+        assert_eq!(artifact.metadata.consistency_policy, "equation_only");
+        assert!(artifact.metadata.loss_helpers_enabled);
+        assert_eq!(
+            artifact.metadata.learned_slots,
+            vec!["controller".to_string()]
+        );
+        assert_eq!(artifact.metadata.slot_interfaces.len(), 1);
+        assert_eq!(artifact.metadata.slot_interfaces[0].slot, "controller");
+        assert_eq!(artifact.metadata.slot_interfaces[0].input_arity, 6);
+        assert_eq!(artifact.metadata.slot_interfaces[0].output_arity, 1);
         assert_eq!(artifact.suggested_filename(), "tinytree_python.py");
     }
 
@@ -379,6 +491,11 @@ mod tests {
 
         assert_eq!(artifact.backend, BackendTarget::Jax);
         assert!(artifact.source.contains("import jax.numpy as jnp"));
+        assert_eq!(artifact.metadata.compile_mode, "train");
+        assert_eq!(
+            artifact.metadata.slot_interfaces[0].outputs,
+            vec!["stomata".to_string()]
+        );
         assert_eq!(artifact.suggested_filename(), "tinytree_jax.py");
     }
 

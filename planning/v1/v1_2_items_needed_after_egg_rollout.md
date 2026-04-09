@@ -47,7 +47,7 @@ Three of the original `v1.2` issues are now closed:
 The main remaining issues are now:
 
 - planner cost reporting and explanation fidelity still need final cleanup after the `egg` extraction rewrite
-- slot interface metadata is better, but still not yet as rich as the spec intends
+- richer slot metadata is now available on compiled artifacts, but the remaining question is whether any further interface-shape detail is actually required for honest `v1`
 
 So the project is now best described as:
 
@@ -62,7 +62,7 @@ At this point, I do **not** recommend broadening the frontend language, changing
 The next order should be:
 
 1. Tighten planner cost reporting and explanation fidelity after the `egg` extraction rewrite.
-2. Decide how much richer slot/interface metadata really needs to be for honest `v1`.
+2. Decide whether the current artifact-level slot metadata is already sufficient for honest `v1`, or whether further interface detail is still needed.
 3. Re-run external review once those remaining semantics are narrow and explicit.
 
 This order matters because the remaining gaps are mostly semantic mismatches between what the API promises and what emitted code actually does.
@@ -243,6 +243,32 @@ Two smaller gaps remain:
 - chosen and alternative paths show rendered expressions and stable source locations
 - reported costs match extracted path costs consistently across the explanation surface
 - provenance resolution is stable enough that a user can reliably map explanations back to source
+
+## 6. Slot Metadata On Compiled Artifacts (Closed Enough For Current `v1`)
+
+### Current State
+
+Compiled artifacts now expose typed metadata directly through the Python package, including:
+
+- compile mode
+- consistency policy
+- whether loss helpers are emitted
+- learned initial-state quantities
+- learned slots
+- slot interfaces with input/output names and arities
+
+This closes the earlier gap where slot metadata only existed as generated-module globals and was not surfaced cleanly through the package boundary.
+
+### Remaining Question
+
+The remaining issue is no longer whether the information exists.
+It is whether further interface detail beyond names, kinds, and arities is actually required for honest `v1`.
+
+### Acceptance Criteria
+
+- callers can inspect slot interfaces without executing generated module source
+- artifact metadata is consistent between Rust core and Python package surfaces
+- the current metadata surface is either accepted as sufficient for `v1`, or explicitly narrowed in the spec
 
 - `simulate`: no observation payload required, loss helpers optional
 - `fit`: loss helpers emitted, learned-slot interfaces optional

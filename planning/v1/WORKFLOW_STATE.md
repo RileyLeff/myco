@@ -20,20 +20,22 @@ Current phase: `v1.2` parity cleanup after the `egg` rollout, with compile-surfa
 - consistency policy is now explicit in the compile spec and respected by both backends
 - compile modes now affect emitted artifact shape in a visible way
 - explanation output now carries rendered expressions, provenance labels, and source spans
+- compiled artifacts now expose typed slot-interface and trainable metadata through the Python package
 
 ## In Progress
 
 - remaining `v1.2` parity work after the compile/emitter honesty pass
 - final planner cost/provenance cleanup after the richer explanation slice
+- decide whether current artifact metadata is already sufficient for honest `v1`
 
 ## Open Risks
 
 - planner cost reporting in explanations still needs cleanup so reported costs match extracted costs consistently
-- slot interface metadata is still thinner than the long-term spec intends
+- the remaining slot-metadata question is now sufficiency, not availability
 
 ## Next Action
 
 1. land the next `v1.2` slice:
-   final cost/provenance cleanup and slot metadata decisions
+   final cost/provenance cleanup and a concrete sufficiency decision on artifact metadata
 2. rerun external review once the remaining `v1.2` gaps are narrower
 3. keep avoiding frontend-language expansion until the parity cleanup is done

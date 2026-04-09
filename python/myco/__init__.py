@@ -22,6 +22,7 @@ from .errors import Diagnostic, MycoError, SourcePosition, SourceSpan
 from .types import (
     AlternativeExplanation,
     Artifact,
+    ArtifactMetadata,
     BlockedCandidateExplanation,
     CompileSpec,
     ConsistencyPolicy,
@@ -34,6 +35,7 @@ from .types import (
     PlanSourceSpan,
     QuantityExplanation,
     SlotBinding,
+    SlotInterface,
     UnresolvedQuantityExplanation,
     constant,
     data_series,
@@ -47,6 +49,7 @@ from .types import (
 __all__ = [
     "AlternativeExplanation",
     "Artifact",
+    "ArtifactMetadata",
     "BlockedCandidateExplanation",
     "CompileSpec",
     "ConsistencyPolicy",
@@ -63,6 +66,7 @@ __all__ = [
     "PlanSourceSpan",
     "QuantityExplanation",
     "SlotBinding",
+    "SlotInterface",
     "SourcePosition",
     "SourceSpan",
     "TrainingResult",

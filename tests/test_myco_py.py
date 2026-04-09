@@ -58,6 +58,24 @@ def test_experiment_builder_compiles_real_spec():
     assert summary.planned_temporal_steps == 1
     assert artifact.backend == "jax"
     assert artifact.suggested_filename == "tinytree_jax.py"
+    assert artifact.metadata.compile_mode == "train"
+    assert artifact.metadata.consistency_policy == "equation_only"
+    assert artifact.metadata.loss_helpers_enabled is True
+    assert artifact.metadata.learned_slots == ("controller",)
+    controller = artifact.slot_interface("controller")
+    assert controller is not None
+    assert controller.kind == "learned"
+    assert controller.inputs == (
+        "water",
+        "carbon",
+        "vpd_scale",
+        "soil_water",
+        "hydraulic_cond",
+        "g_max",
+    )
+    assert controller.outputs == ("stomata",)
+    assert controller.input_arity == 6
+    assert controller.output_arity == 1
     assert "def total_loss(" in artifact.source
 
 
@@ -188,6 +206,8 @@ def test_simulate_mode_omits_loss_helpers():
 
     artifact = experiment.compile(backend="jax")
 
+    assert artifact.metadata.compile_mode == "simulate"
+    assert artifact.metadata.loss_helpers_enabled is False
     assert "LOSS_HELPERS_ENABLED = False" in artifact.source
     assert "def obs_loss(" not in artifact.source
     assert "def total_loss(" not in artifact.source
