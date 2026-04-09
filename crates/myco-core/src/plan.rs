@@ -843,7 +843,7 @@ temporal water_step:
         let bound = bind_compile_spec(
             &equality,
             &CompileSpec {
-                mode: CompileMode::Fit,
+                mode: CompileMode::Simulate,
                 horizon_steps: 12,
                 direct_bindings: vec![
                     DirectBindingSpec {

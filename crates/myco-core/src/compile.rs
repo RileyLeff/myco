@@ -128,6 +128,8 @@ pub fn bind_compile_spec(
         ));
     }
 
+    validate_mode_requirements(spec, &mut diagnostics);
+
     let quantity_index: HashMap<&str, &Quantity> = model
         .quantities
         .iter()
@@ -291,6 +293,45 @@ pub fn bind_compile_spec(
         slot_bindings,
         observations,
     })
+}
+
+fn validate_mode_requirements(spec: &CompileSpec, diagnostics: &mut Vec<Diagnostic>) {
+    match spec.mode {
+        CompileMode::Simulate => {}
+        CompileMode::Fit => {
+            if spec.observations.is_empty() {
+                diagnostics.push(Diagnostic::error(
+                    "fit mode requires at least one observation binding",
+                ));
+            }
+        }
+        CompileMode::Train => {
+            if spec.observations.is_empty() {
+                diagnostics.push(Diagnostic::error(
+                    "train mode requires at least one observation binding",
+                ));
+            }
+
+            let has_learned_slot = spec
+                .slot_bindings
+                .iter()
+                .any(|binding| binding.kind == SlotBindingKind::Learned);
+            let has_learned_initial_state = spec.direct_bindings.iter().any(|binding| {
+                matches!(
+                    binding.kind,
+                    DirectBindingKind::InitialState {
+                        source: InitialStateSource::Learned
+                    }
+                )
+            });
+
+            if !has_learned_slot && !has_learned_initial_state {
+                diagnostics.push(Diagnostic::error(
+                    "train mode requires at least one learned slot or learned initial state",
+                ));
+            }
+        }
+    }
 }
 
 fn validate_direct_binding(
@@ -546,6 +587,81 @@ mod tests {
             diagnostic.message.contains(
                 "quantity 'stomata' has both a direct binding and slot provider 'controller'",
             )
+        }));
+    }
+
+    #[test]
+    fn fit_mode_requires_observation() {
+        let model = tiny_tree_equality_model();
+        let spec = CompileSpec {
+            mode: CompileMode::Fit,
+            horizon_steps: 6,
+            direct_bindings: vec![initial_state("water"), initial_state("carbon")],
+            slot_bindings: vec![],
+            observations: vec![],
+        };
+
+        let diagnostics = bind_compile_spec(&model, &spec).expect_err("binding should fail");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("fit mode requires at least one observation binding")
+        }));
+    }
+
+    #[test]
+    fn train_mode_requires_observation_and_learned_component() {
+        let model = tiny_tree_equality_model();
+        let no_observation = CompileSpec {
+            mode: CompileMode::Train,
+            horizon_steps: 6,
+            direct_bindings: vec![
+                DirectBindingSpec {
+                    quantity: "g_max".to_string(),
+                    kind: DirectBindingKind::Constant,
+                },
+                initial_state("water"),
+                initial_state("carbon"),
+            ],
+            slot_bindings: vec![SlotBindingSpec {
+                slot: "controller".to_string(),
+                kind: SlotBindingKind::Learned,
+            }],
+            observations: vec![],
+        };
+
+        let diagnostics =
+            bind_compile_spec(&model, &no_observation).expect_err("binding should fail");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("train mode requires at least one observation binding")
+        }));
+
+        let no_learned = CompileSpec {
+            mode: CompileMode::Train,
+            horizon_steps: 6,
+            direct_bindings: vec![
+                DirectBindingSpec {
+                    quantity: "g_max".to_string(),
+                    kind: DirectBindingKind::Constant,
+                },
+                initial_state("water"),
+                initial_state("carbon"),
+            ],
+            slot_bindings: vec![],
+            observations: vec![ObservationSpec {
+                quantity: "transpiration".to_string(),
+                loss: LossKind::Mse,
+                schedule: ObservationSchedule::DensePerStep,
+            }],
+        };
+
+        let diagnostics = bind_compile_spec(&model, &no_learned).expect_err("binding should fail");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("train mode requires at least one learned slot or learned initial state")
         }));
     }
 
