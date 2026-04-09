@@ -38,14 +38,18 @@ This `v1.2` note captures the remaining gaps after those slices landed.
 
 The biggest remaining gaps are no longer in the symbolic core. They are in semantic parity between the compile spec, the emitted runtime behavior, and the explanation surface.
 
-The main remaining issues are:
+Three of the original `v1.2` issues are now closed:
 
-- slot binding kinds exist in the API but do not yet produce distinct emitted runtime behavior
-- learned initial state is accepted by the compile surface but not actually implemented in emitted artifacts
-- consistency handling is still too implicit and backend-specific
-- compile modes are mostly validation-only rather than meaningfully mode-aware in emitted artifacts
+- slot binding kinds now produce distinct emitted runtime behavior
+- learned initial state is now implemented in emitted artifacts
+- consistency handling is now an explicit compile-time policy shared by both backends
+
+The main remaining issues are now:
+
+- compile modes are still mostly validation-only rather than meaningfully mode-aware in emitted artifacts
 - introspection still explains chosen paths only shallowly and does not surface extracted expressions or stable provenance links deeply enough
-- slot interface metadata is still thinner than the spec intends
+- planner cost reporting and explanation fidelity still need cleanup after the `egg` extraction rewrite
+- slot interface metadata is better, but still not yet as rich as the spec intends
 
 So the project is now best described as:
 
@@ -59,17 +63,16 @@ At this point, I do **not** recommend broadening the frontend language, changing
 
 The next order should be:
 
-1. Make provider semantics honest in emitted artifacts.
-2. Make learned initial-state handling real or explicitly remove it from `v1`.
-3. Make consistency handling a compile-time policy rather than an always-on emitter behavior.
-4. Make compile modes affect emitted artifact shape clearly enough to match the spec.
-5. Deepen provenance/introspection just enough that the first real model remains debuggable without compiler archaeology.
+1. Make compile modes affect emitted artifact shape clearly enough to match the spec.
+2. Deepen provenance/introspection just enough that the first real model remains debuggable without compiler archaeology.
+3. Tighten planner cost reporting and explanation fidelity after the `egg` extraction rewrite.
+4. Decide how much richer slot/interface metadata really needs to be for honest `v1`.
 
 This order matters because the remaining gaps are mostly semantic mismatches between what the API promises and what emitted code actually does.
 
 ## Work Remaining
 
-## 1. Real Provider Semantics For Slots
+## 1. Real Provider Semantics For Slots (Closed)
 
 ### Current State
 
@@ -118,7 +121,7 @@ This does **not** require a new frontend language feature. It is a binding/emiss
 - a data-series slot can be used without supplying a callable
 - a learned slot still uses the current callable interface
 
-## 2. Learned Initial State Must Be Real Or Removed
+## 2. Learned Initial State Must Be Real Or Removed (Closed)
 
 ### Current State
 
@@ -159,7 +162,7 @@ For `v1`, I would implement the narrowest real version:
 - `InitialStateSource::Learned` is either fully supported in the emitter or fully removed from `v1`
 - there is no longer any accepted-but-nonfunctional compile path
 
-## 3. Consistency Must Become An Explicit Compile-Time Policy
+## 3. Consistency Must Become An Explicit Compile-Time Policy (Closed)
 
 ### Current State
 

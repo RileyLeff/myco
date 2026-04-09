@@ -2,8 +2,9 @@ use std::{fs, path::PathBuf};
 
 use myco_core::{
     compile::{
-        CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec, InitialStateSource,
-        LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind, SlotBindingSpec,
+        CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
+        InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
+        SlotBindingSpec,
     },
     demo,
     diagnostics::Diagnostic,
@@ -262,6 +263,9 @@ fn parse_compile_spec(spec: &Bound<'_, PyAny>) -> PyResult<CompileSpec> {
     Ok(CompileSpec {
         mode: parse_mode(&required_str_item(dict, "mode")?)?,
         horizon_steps: required_extract_item(dict, "horizon_steps")?,
+        consistency_policy: parse_consistency_policy(
+            optional_str_item(dict, "consistency_policy")?.as_deref(),
+        )?,
         direct_bindings: optional_list_items(dict, "direct_bindings")?
             .into_iter()
             .map(parse_direct_binding)
@@ -298,6 +302,17 @@ fn parse_direct_binding(item: Bound<'_, PyAny>) -> PyResult<DirectBindingSpec> {
         quantity: required_str_item(dict, "quantity")?,
         kind,
     })
+}
+
+fn parse_consistency_policy(value: Option<&str>) -> PyResult<ConsistencyPolicy> {
+    match value.unwrap_or("equation_only") {
+        "off" => Ok(ConsistencyPolicy::Off),
+        "equation_only" => Ok(ConsistencyPolicy::EquationOnly),
+        "all" => Ok(ConsistencyPolicy::All),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported consistency policy '{other}'"
+        ))),
+    }
 }
 
 fn parse_slot_binding(item: Bound<'_, PyAny>) -> PyResult<SlotBindingSpec> {

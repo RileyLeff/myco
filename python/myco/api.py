@@ -88,6 +88,10 @@ class Experiment:
         self.spec.slot_bindings.append(SlotBinding(slot=slot, kind=kind))
         return self
 
+    def set_consistency_policy(self, policy: str) -> "Experiment":
+        self.spec.consistency_policy = policy
+        return self
+
     def observe_dense(self, quantity: str, loss: str = "mse") -> "Experiment":
         self.spec.observations.append(
             Observation(quantity=quantity, loss=loss, schedule="dense_per_step")

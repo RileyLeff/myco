@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable, Literal
 
 Mode = Literal["simulate", "fit", "train"]
+ConsistencyPolicy = Literal["off", "equation_only", "all"]
 DirectBindingKind = Literal["data_series", "constant", "initial_state"]
 InitialStateSource = Literal["constant", "data", "learned"]
 SlotBindingKind = Literal["data_series", "constant", "learned"]
@@ -288,6 +289,7 @@ class Observation:
 class CompileSpec:
     mode: Mode
     horizon_steps: int
+    consistency_policy: ConsistencyPolicy = "equation_only"
     direct_bindings: list[DirectBinding] = field(default_factory=list)
     slot_bindings: list[SlotBinding] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
@@ -296,6 +298,7 @@ class CompileSpec:
         return {
             "mode": self.mode,
             "horizon_steps": self.horizon_steps,
+            "consistency_policy": self.consistency_policy,
             "direct_bindings": [binding.to_dict() for binding in self.direct_bindings],
             "slot_bindings": [binding.to_dict() for binding in self.slot_bindings],
             "observations": [observation.to_dict() for observation in self.observations],
@@ -306,6 +309,7 @@ class CompileSpec:
         return cls(
             mode=payload["mode"],  # type: ignore[arg-type]
             horizon_steps=int(payload["horizon_steps"]),
+            consistency_policy=payload.get("consistency_policy", "equation_only"),  # type: ignore[arg-type]
             direct_bindings=[
                 DirectBinding.from_dict(item)
                 for item in payload.get("direct_bindings", [])

@@ -17,9 +17,17 @@ pub enum CompileMode {
 pub struct CompileSpec {
     pub mode: CompileMode,
     pub horizon_steps: usize,
+    pub consistency_policy: ConsistencyPolicy,
     pub direct_bindings: Vec<DirectBindingSpec>,
     pub slot_bindings: Vec<SlotBindingSpec>,
     pub observations: Vec<ObservationSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsistencyPolicy {
+    Off,
+    EquationOnly,
+    All,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +86,7 @@ pub enum ObservationSchedule {
 pub struct BoundModel {
     pub mode: CompileMode,
     pub horizon_steps: usize,
+    pub consistency_policy: ConsistencyPolicy,
     pub quantities: Vec<BoundQuantity>,
     pub core: std::sync::Arc<crate::egraph::EqualityCore>,
     pub direct_bindings: Vec<ResolvedDirectBinding>,
@@ -287,6 +296,7 @@ pub fn bind_compile_spec(
     Ok(BoundModel {
         mode: spec.mode,
         horizon_steps: spec.horizon_steps,
+        consistency_policy: spec.consistency_policy,
         quantities,
         core: std::sync::Arc::clone(&model.core),
         direct_bindings,
@@ -419,6 +429,7 @@ mod tests {
         let spec = CompileSpec {
             mode: CompileMode::Train,
             horizon_steps: 24,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![
                 DirectBindingSpec {
                     quantity: "vpd_scale".to_string(),
@@ -495,6 +506,7 @@ mod tests {
         let spec = CompileSpec {
             mode: CompileMode::Simulate,
             horizon_steps: 4,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![
                 DirectBindingSpec {
                     quantity: "hydraulic_cond".to_string(),
@@ -525,6 +537,7 @@ mod tests {
         let spec = CompileSpec {
             mode: CompileMode::Simulate,
             horizon_steps: 4,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![initial_state("water")],
             slot_bindings: vec![],
             observations: vec![],
@@ -544,6 +557,7 @@ mod tests {
         let spec = CompileSpec {
             mode: CompileMode::Fit,
             horizon_steps: 3,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![initial_state("water"), initial_state("carbon")],
             slot_bindings: vec![],
             observations: vec![ObservationSpec {
@@ -567,6 +581,7 @@ mod tests {
         let spec = CompileSpec {
             mode: CompileMode::Train,
             horizon_steps: 6,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![
                 DirectBindingSpec {
                     quantity: "stomata".to_string(),
@@ -596,6 +611,7 @@ mod tests {
         let spec = CompileSpec {
             mode: CompileMode::Fit,
             horizon_steps: 6,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![initial_state("water"), initial_state("carbon")],
             slot_bindings: vec![],
             observations: vec![],
@@ -615,6 +631,7 @@ mod tests {
         let no_observation = CompileSpec {
             mode: CompileMode::Train,
             horizon_steps: 6,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![
                 DirectBindingSpec {
                     quantity: "g_max".to_string(),
@@ -641,6 +658,7 @@ mod tests {
         let no_learned = CompileSpec {
             mode: CompileMode::Train,
             horizon_steps: 6,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![
                 DirectBindingSpec {
                     quantity: "g_max".to_string(),

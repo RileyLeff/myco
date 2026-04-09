@@ -148,5 +148,24 @@ def test_load_spec_and_compile_from_file():
 
     assert spec.mode == "train"
     assert spec.horizon_steps == 24
+    assert spec.consistency_policy == "equation_only"
     assert artifact.backend == "jax"
     assert "import jax.numpy as jnp" in artifact.source
+
+
+def test_experiment_can_set_consistency_policy():
+    model = myco.load(FIXTURE)
+    experiment = model.experiment(mode="train", horizon_steps=24)
+    experiment.set_consistency_policy("off")
+    experiment.bind_data_series("vpd_scale", range(24))
+    experiment.bind_data_series("soil_water", range(24))
+    experiment.bind_constant("hydraulic_cond")
+    experiment.bind_constant("g_max")
+    experiment.bind_initial_state("water")
+    experiment.bind_initial_state("carbon")
+    experiment.bind_slot("controller", kind="learned")
+    experiment.observe_dense("transpiration")
+
+    artifact = experiment.compile(backend="jax")
+
+    assert "CONSISTENCY_POLICY = \"off\"" in artifact.source

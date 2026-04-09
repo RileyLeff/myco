@@ -333,8 +333,9 @@ mod tests {
     use super::*;
     use crate::{
         compile::{
-            CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec, InitialStateSource,
-            LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind, SlotBindingSpec,
+            CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
+            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
+            SlotBindingSpec,
         },
         pipeline::{load_model, prepare_experiment},
     };
@@ -387,6 +388,7 @@ mod tests {
         CompileSpec {
             mode: CompileMode::Train,
             horizon_steps: 24,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![
                 DirectBindingSpec {
                     quantity: "vpd_scale".to_string(),

@@ -1,12 +1,14 @@
 use crate::compile::{
-    CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec, InitialStateSource, LossKind,
-    ObservationSchedule, ObservationSpec, SlotBindingKind, SlotBindingSpec,
+    CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
+    InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
+    SlotBindingSpec,
 };
 
 pub fn tiny_tree_training_spec() -> CompileSpec {
     CompileSpec {
         mode: CompileMode::Train,
         horizon_steps: 24,
+        consistency_policy: ConsistencyPolicy::EquationOnly,
         direct_bindings: vec![
             DirectBindingSpec {
                 quantity: "vpd_scale".to_string(),

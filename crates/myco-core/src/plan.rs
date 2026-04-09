@@ -66,8 +66,14 @@ pub enum PlanSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AlternativePayload {
-    Slot { inputs: Vec<QuantityId> },
-    Equation { expression: CoreExpr },
+    Slot {
+        kind: SlotBindingKind,
+        inputs: Vec<QuantityId>,
+        output_index: usize,
+    },
+    Equation {
+        expression: CoreExpr,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,15 +172,20 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         }
 
         ready.sort_by(|left, right| {
-            (left.cost, left.source_rank, left.name.as_str(), left.output_rank, left.index).cmp(
-                &(
+            (
+                left.cost,
+                left.source_rank,
+                left.name.as_str(),
+                left.output_rank,
+                left.index,
+            )
+                .cmp(&(
                     right.cost,
                     right.source_rank,
                     right.name.as_str(),
                     right.output_rank,
                     right.index,
-                ),
-            )
+                ))
         });
         let entry = ready.remove(0);
         let candidate = &mut current_candidates[entry.index];
@@ -194,7 +205,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                     source: candidate.source.clone(),
                     direction: candidate.direction,
                     cost: candidate.cost,
-                    payload: candidate.alternative_payload(),
+                    payload: candidate.alternative_payload_for(*output),
                 });
             }
             continue;
@@ -207,7 +218,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                     source: candidate.source.clone(),
                     direction: candidate.direction,
                     cost: candidate.cost,
-                    payload: candidate.alternative_payload(),
+                    payload: candidate.alternative_payload_for(*output),
                 });
             }
         }
@@ -226,9 +237,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
                     cost: candidate.cost,
                 });
             }
-            CandidatePayload::Equation {
-                registration,
-            } => {
+            CandidatePayload::Equation { registration } => {
                 let output = unresolved_outputs[0];
                 planned_equations.push(PlannedEquation {
                     block_name: candidate.name.clone(),
@@ -441,21 +450,30 @@ impl Candidate {
         available_current: &HashSet<QuantityId>,
     ) -> Result<Option<ResolvedCandidate>, Diagnostic> {
         match &self.payload {
-            CandidatePayload::Slot { inputs, .. } => {
-                if inputs
-                    .iter()
-                    .all(|quantity| available_current.contains(quantity))
-                {
+            CandidatePayload::Slot { kind, inputs } => {
+                let dependencies = match kind {
+                    SlotBindingKind::DataSeries | SlotBindingKind::Constant => Vec::new(),
+                    SlotBindingKind::Learned => inputs
+                        .iter()
+                        .copied()
+                        .map(|quantity| Dependency {
+                            quantity: Some(quantity),
+                            timing: DependencyTiming::Current,
+                        })
+                        .collect(),
+                };
+
+                let ready = match kind {
+                    SlotBindingKind::DataSeries | SlotBindingKind::Constant => true,
+                    SlotBindingKind::Learned => inputs
+                        .iter()
+                        .all(|quantity| available_current.contains(quantity)),
+                };
+
+                if ready {
                     Ok(Some(ResolvedCandidate {
                         expression: None,
-                        dependencies: inputs
-                            .iter()
-                            .copied()
-                            .map(|quantity| Dependency {
-                                quantity: Some(quantity),
-                                timing: DependencyTiming::Current,
-                            })
-                            .collect(),
+                        dependencies,
                         cost: self.cost,
                     }))
                 } else {
@@ -502,7 +520,10 @@ impl Candidate {
 
     fn current_dependencies(&self) -> Vec<QuantityId> {
         match &self.payload {
-            CandidatePayload::Slot { inputs, .. } => inputs.clone(),
+            CandidatePayload::Slot { kind, inputs } => match kind {
+                SlotBindingKind::DataSeries | SlotBindingKind::Constant => Vec::new(),
+                SlotBindingKind::Learned => inputs.clone(),
+            },
             CandidatePayload::Equation { registration } => {
                 collect_dependencies(&registration.seed_expression)
                     .ok()
@@ -528,28 +549,31 @@ impl Candidate {
         available_current: &HashSet<QuantityId>,
     ) -> Vec<QuantityId> {
         match &self.payload {
-            CandidatePayload::Slot { inputs, .. } => inputs
-                .iter()
-                .copied()
-                .filter(|quantity| !available_current.contains(quantity))
-                .collect(),
-            CandidatePayload::Equation { registration } => collect_dependencies(
-                &registration.seed_expression,
-            )
-            .ok()
-            .map(|dependencies| {
-                dependencies
+            CandidatePayload::Slot { kind, inputs } => match kind {
+                SlotBindingKind::DataSeries | SlotBindingKind::Constant => Vec::new(),
+                SlotBindingKind::Learned => inputs
                     .iter()
-                    .filter_map(|dependency| match dependency {
-                        Dependency {
-                            timing: DependencyTiming::Current,
-                            quantity: Some(quantity),
-                        } if !available_current.contains(quantity) => Some(*quantity),
-                        _ => None,
+                    .copied()
+                    .filter(|quantity| !available_current.contains(quantity))
+                    .collect(),
+            },
+            CandidatePayload::Equation { registration } => {
+                collect_dependencies(&registration.seed_expression)
+                    .ok()
+                    .map(|dependencies| {
+                        dependencies
+                            .iter()
+                            .filter_map(|dependency| match dependency {
+                                Dependency {
+                                    timing: DependencyTiming::Current,
+                                    quantity: Some(quantity),
+                                } if !available_current.contains(quantity) => Some(*quantity),
+                                _ => None,
+                            })
+                            .collect()
                     })
-                    .collect()
-            })
-            .unwrap_or_default(),
+                    .unwrap_or_default()
+            }
         }
     }
 
@@ -567,10 +591,16 @@ impl Candidate {
             .unwrap_or(usize::MAX)
     }
 
-    fn alternative_payload(&self) -> AlternativePayload {
+    fn alternative_payload_for(&self, output: QuantityId) -> AlternativePayload {
         match &self.payload {
-            CandidatePayload::Slot { inputs, .. } => AlternativePayload::Slot {
+            CandidatePayload::Slot { kind, inputs } => AlternativePayload::Slot {
+                kind: *kind,
                 inputs: inputs.clone(),
+                output_index: self
+                    .outputs
+                    .iter()
+                    .position(|candidate_output| *candidate_output == output)
+                    .expect("slot alternative output must exist"),
             },
             CandidatePayload::Equation { registration } => AlternativePayload::Equation {
                 expression: registration.seed_expression.clone(),
@@ -710,9 +740,9 @@ mod tests {
     use super::*;
     use crate::{
         compile::{
-            CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec, InitialStateSource,
-            LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind, SlotBindingSpec,
-            bind_compile_spec,
+            CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
+            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
+            SlotBindingSpec, bind_compile_spec,
         },
         equality, semantic,
         syntax::parse_and_validate,
@@ -766,6 +796,7 @@ temporal water_step:
             &CompileSpec {
                 mode: CompileMode::Simulate,
                 horizon_steps: 12,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
                 direct_bindings: vec![
                     DirectBindingSpec {
                         quantity: "vpd_scale".to_string(),
@@ -836,6 +867,7 @@ temporal water_step:
             &CompileSpec {
                 mode: CompileMode::Simulate,
                 horizon_steps: 4,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
                 direct_bindings: vec![DirectBindingSpec {
                     quantity: "water".to_string(),
                     kind: DirectBindingKind::InitialState {
@@ -865,6 +897,7 @@ temporal water_step:
             &CompileSpec {
                 mode: CompileMode::Train,
                 horizon_steps: 24,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
                 direct_bindings: vec![
                     DirectBindingSpec {
                         quantity: "vpd_scale".to_string(),

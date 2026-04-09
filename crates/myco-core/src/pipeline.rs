@@ -264,8 +264,9 @@ fn sanitize_module_name(input: &str) -> String {
 mod tests {
     use super::*;
     use crate::compile::{
-        CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec, InitialStateSource,
-        LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind, SlotBindingSpec,
+        CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
+        InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
+        SlotBindingSpec,
     };
 
     const TINY_TREE: &str = include_str!("../tests/fixtures/tiny_tree.myco");
@@ -294,6 +295,7 @@ mod tests {
             &CompileSpec {
                 mode: CompileMode::Train,
                 horizon_steps: 24,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
                 direct_bindings: vec![
                     DirectBindingSpec {
                         quantity: "vpd_scale".to_string(),
@@ -384,6 +386,7 @@ mod tests {
         CompileSpec {
             mode: CompileMode::Train,
             horizon_steps: 24,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![
                 DirectBindingSpec {
                     quantity: "vpd_scale".to_string(),

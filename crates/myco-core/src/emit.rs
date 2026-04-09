@@ -1,5 +1,5 @@
 use crate::{
-    compile::DirectBindingKind,
+    compile::{ConsistencyPolicy, DirectBindingKind, InitialStateSource, SlotBindingKind},
     constraints::{ConstraintBound, PenaltySpec},
     equality::{CoreExpr, QuantityId, SpecialRef, TimeReference},
     pipeline::PreparedExperiment,
@@ -42,45 +42,35 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         render_py_string_list(&state_names)
     ));
 
-    let forcing_names = bound
-        .quantities
-        .iter()
-        .filter_map(|quantity| match &quantity.direct_binding {
-            Some(DirectBindingKind::DataSeries { .. }) => Some(quantity.quantity.name.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let forcing_names = forcing_quantity_names(experiment);
     lines.push(format!(
         "FORCING_NAMES = {}",
         render_py_string_list(&forcing_names)
     ));
 
-    let constant_names = bound
-        .quantities
-        .iter()
-        .filter_map(|quantity| match &quantity.direct_binding {
-            Some(DirectBindingKind::Constant) => Some(quantity.quantity.name.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let constant_names = constant_quantity_names(experiment);
     lines.push(format!(
         "CONSTANT_NAMES = {}",
         render_py_string_list(&constant_names)
     ));
+    let learned_initial_state_names = learned_initial_state_names(bound, experiment);
+    lines.push(format!(
+        "LEARNED_INITIAL_STATE_NAMES = {}",
+        render_py_string_list(&learned_initial_state_names)
+    ));
+    lines.push(format!(
+        "CONSISTENCY_POLICY = {:?}",
+        consistency_policy_name(bound.consistency_policy)
+    ));
     lines.push(String::new());
 
     lines.push("PROJECTION_METADATA = {".to_string());
-    for slot in &bound.slot_bindings {
-        if !matches!(slot.kind, crate::compile::SlotBindingKind::Learned) {
-            continue;
-        }
-        for provided in &slot.provides {
-            if let Some(projection) = projection_metadata(experiment, *provided) {
-                lines.push(format!(
-                    "    {name}: {projection},",
-                    name = py_string(&quantity_name(experiment, *provided))
-                ));
-            }
+    for quantity in &model.equality.quantities {
+        if let Some(projection) = projection_metadata(experiment, quantity.id) {
+            lines.push(format!(
+                "    {name}: {projection},",
+                name = py_string(&quantity.name)
+            ));
         }
     }
     lines.push("}".to_string());
@@ -133,11 +123,13 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
             .map(|quantity| quantity_name(experiment, *quantity))
             .collect::<Vec<_>>();
         lines.push(format!(
-            "    {:?}: {{\"kind\": {:?}, \"inputs\": {}, \"outputs\": {}}},",
+            "    {:?}: {{\"kind\": {:?}, \"inputs\": {}, \"outputs\": {}, \"input_arity\": {}, \"output_arity\": {}}},",
             slot.slot,
             slot.kind_name(),
             render_py_string_list(&input_names),
-            render_py_string_list(&output_names)
+            render_py_string_list(&output_names),
+            slot.input_arity,
+            slot.output_arity
         ));
     }
     lines.push("}".to_string());
@@ -164,7 +156,17 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push(String::new());
 
     lines.push("def init_params():".to_string());
-    lines.push("    return {}".to_string());
+    if learned_initial_state_names.is_empty() {
+        lines.push("    return {}".to_string());
+    } else {
+        lines.push("    return {".to_string());
+        lines.push("        \"initial_state\": {".to_string());
+        for name in &learned_initial_state_names {
+            lines.push(format!("            {name}: 0.0,", name = py_string(name)));
+        }
+        lines.push("        },".to_string());
+        lines.push("    }".to_string());
+    }
     lines.push(String::new());
 
     lines.push("def _huber_loss(residual, delta=1.0):".to_string());
@@ -193,6 +195,27 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return value".to_string());
     lines.push(String::new());
 
+    lines.push(
+        "def resolve_initial_state(initial_state=None, constants=None, params=None):".to_string(),
+    );
+    lines.push("    state = {} if initial_state is None else dict(initial_state)".to_string());
+    lines.push("    constants = {} if constants is None else constants".to_string());
+    lines.push(
+        "    learned = {} if params is None else params.get(\"initial_state\", {})".to_string(),
+    );
+    lines.push("    current = {**constants, **state}".to_string());
+    lines.push("    for name in LEARNED_INITIAL_STATE_NAMES:".to_string());
+    lines.push("        if name not in learned:".to_string());
+    lines.push(
+        "            raise KeyError(f\"missing learned initial state parameter for {name!r}\")"
+            .to_string(),
+    );
+    lines.push("        current[name] = learned[name]".to_string());
+    lines.push("        state[name] = _project_output(name, current[name], current)".to_string());
+    lines.push("        current[name] = state[name]".to_string());
+    lines.push("    return state".to_string());
+    lines.push(String::new());
+
     lines.push("def step(state, forcing, constants, slot_providers, dt):".to_string());
     lines.push("    current = {}".to_string());
     lines.push("    current[\"_alternatives\"] = {}".to_string());
@@ -207,7 +230,7 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     for equation in &plan.equation_steps {
         emit_equation_step(experiment, equation, &mut lines, "current");
     }
-    for alternative in &plan.alternatives {
+    for alternative in consistency_alternatives(experiment) {
         emit_alternative_step(experiment, alternative, &mut lines);
     }
 
@@ -219,9 +242,12 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push(String::new());
 
     lines.push(
-        "def rollout(initial_state, forcing_steps, constants, slot_providers, dt):".to_string(),
+        "def rollout(initial_state, forcing_steps, constants, slot_providers, dt, params=None):"
+            .to_string(),
     );
-    lines.push("    state = dict(initial_state)".to_string());
+    lines.push(
+        "    state = resolve_initial_state(initial_state, constants, params=params)".to_string(),
+    );
     lines.push("    trajectory = []".to_string());
     lines.push("    for forcing in forcing_steps:".to_string());
     lines.push(
@@ -262,17 +288,28 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return total".to_string());
     lines.push(String::new());
 
-    lines.push("def consistency_loss(trajectory):".to_string());
-    lines.push("    total = 0.0".to_string());
-    lines.push("    for frame in trajectory:".to_string());
-    lines.push("        alternatives = frame[\"current\"].get(\"_alternatives\", {})".to_string());
-    lines.push("        for output_name, entries in alternatives.items():".to_string());
-    lines.push("            canonical = frame[\"current\"][output_name]".to_string());
-    lines.push("            for entry in entries:".to_string());
-    lines.push("                residual = canonical - entry[\"value\"]".to_string());
-    lines.push("                total += residual * residual".to_string());
-    lines.push("    return total".to_string());
-    lines.push(String::new());
+    let python_consistency_alternatives = consistency_alternatives(experiment);
+    lines.push(
+        "def consistency_loss(trajectory, forcing_steps=None, constants=None, slot_providers=None):"
+            .to_string(),
+    );
+    if python_consistency_alternatives.is_empty() {
+        lines.push("    return 0.0".to_string());
+        lines.push(String::new());
+    } else {
+        lines.push("    total = 0.0".to_string());
+        lines.push("    for frame in trajectory:".to_string());
+        lines.push(
+            "        alternatives = frame[\"current\"].get(\"_alternatives\", {})".to_string(),
+        );
+        lines.push("        for output_name, entries in alternatives.items():".to_string());
+        lines.push("            canonical = frame[\"current\"][output_name]".to_string());
+        lines.push("            for entry in entries:".to_string());
+        lines.push("                residual = canonical - entry[\"value\"]".to_string());
+        lines.push("                total += residual * residual".to_string());
+        lines.push("    return total".to_string());
+        lines.push(String::new());
+    }
 
     lines.push("def soft_penalty_loss(trajectory):".to_string());
     lines.push("    total = 0.0".to_string());
@@ -347,32 +384,34 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         render_py_string_list(&state_names)
     ));
 
-    let forcing_names = bound
-        .quantities
-        .iter()
-        .filter_map(|quantity| match &quantity.direct_binding {
-            Some(DirectBindingKind::DataSeries { .. }) => Some(quantity.quantity.name.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let forcing_names = forcing_quantity_names(experiment);
     lines.push(format!(
         "FORCING_NAMES = {}",
         render_py_string_list(&forcing_names)
     ));
+    let constant_names = constant_quantity_names(experiment);
+    lines.push(format!(
+        "CONSTANT_NAMES = {}",
+        render_py_string_list(&constant_names)
+    ));
+    let learned_initial_state_names = learned_initial_state_names(bound, experiment);
+    lines.push(format!(
+        "LEARNED_INITIAL_STATE_NAMES = {}",
+        render_py_string_list(&learned_initial_state_names)
+    ));
+    lines.push(format!(
+        "CONSISTENCY_POLICY = {:?}",
+        consistency_policy_name(bound.consistency_policy)
+    ));
     lines.push(String::new());
 
     lines.push("PROJECTION_METADATA = {".to_string());
-    for slot in &bound.slot_bindings {
-        if !matches!(slot.kind, crate::compile::SlotBindingKind::Learned) {
-            continue;
-        }
-        for provided in &slot.provides {
-            if let Some(projection) = projection_metadata(experiment, *provided) {
-                lines.push(format!(
-                    "    {name}: {projection},",
-                    name = py_string(&quantity_name(experiment, *provided))
-                ));
-            }
+    for quantity in &model.equality.quantities {
+        if let Some(projection) = projection_metadata(experiment, quantity.id) {
+            lines.push(format!(
+                "    {name}: {projection},",
+                name = py_string(&quantity.name)
+            ));
         }
     }
     lines.push("}".to_string());
@@ -412,6 +451,31 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("}".to_string());
     lines.push(String::new());
 
+    lines.push("SLOT_INTERFACES = {".to_string());
+    for slot in &bound.slot_bindings {
+        let input_names = slot
+            .inputs
+            .iter()
+            .map(|quantity| quantity_name(experiment, *quantity))
+            .collect::<Vec<_>>();
+        let output_names = slot
+            .provides
+            .iter()
+            .map(|quantity| quantity_name(experiment, *quantity))
+            .collect::<Vec<_>>();
+        lines.push(format!(
+            "    {:?}: {{\"kind\": {:?}, \"inputs\": {}, \"outputs\": {}, \"input_arity\": {}, \"output_arity\": {}}},",
+            slot.slot,
+            slot.kind_name(),
+            render_py_string_list(&input_names),
+            render_py_string_list(&output_names),
+            slot.input_arity,
+            slot.output_arity
+        ));
+    }
+    lines.push("}".to_string());
+    lines.push(String::new());
+
     lines.push("PLAN_METADATA = {".to_string());
     lines.push(format!(
         "    \"planned_slot_steps\": {},",
@@ -433,7 +497,20 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push(String::new());
 
     lines.push("def init_params():".to_string());
-    lines.push("    return {}".to_string());
+    if learned_initial_state_names.is_empty() {
+        lines.push("    return {}".to_string());
+    } else {
+        lines.push("    return {".to_string());
+        lines.push("        \"initial_state\": {".to_string());
+        for name in &learned_initial_state_names {
+            lines.push(format!(
+                "            {name}: jnp.asarray(0.0),",
+                name = py_string(name)
+            ));
+        }
+        lines.push("        },".to_string());
+        lines.push("    }".to_string());
+    }
     lines.push(String::new());
 
     lines.push("def _resolve_bound(bound, current):".to_string());
@@ -462,6 +539,27 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return value".to_string());
     lines.push(String::new());
 
+    lines.push(
+        "def resolve_initial_state(initial_state=None, constants=None, params=None):".to_string(),
+    );
+    lines.push("    state = {} if initial_state is None else dict(initial_state)".to_string());
+    lines.push("    constants = {} if constants is None else constants".to_string());
+    lines.push(
+        "    learned = {} if params is None else params.get(\"initial_state\", {})".to_string(),
+    );
+    lines.push("    current = {**constants, **state}".to_string());
+    lines.push("    for name in LEARNED_INITIAL_STATE_NAMES:".to_string());
+    lines.push("        if name not in learned:".to_string());
+    lines.push(
+        "            raise KeyError(f\"missing learned initial state parameter for {name!r}\")"
+            .to_string(),
+    );
+    lines.push("        current[name] = jnp.asarray(learned[name])".to_string());
+    lines.push("        state[name] = _project_output(name, current[name], current)".to_string());
+    lines.push("        current[name] = state[name]".to_string());
+    lines.push("    return state".to_string());
+    lines.push(String::new());
+
     lines.push("def _huber_loss(residual, delta=1.0):".to_string());
     lines.push("    abs_residual = jnp.abs(residual)".to_string());
     lines.push("    return jnp.where(abs_residual <= delta, 0.5 * residual * residual, delta * (abs_residual - 0.5 * delta))".to_string());
@@ -483,7 +581,8 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push(String::new());
 
     lines.push(
-        "def rollout(initial_state, forcing_series, constants, slot_providers, dt):".to_string(),
+        "def rollout(initial_state, forcing_series, constants, slot_providers, dt, params=None):"
+            .to_string(),
     );
     lines.push("    def _scan_step(state, forcing_t):".to_string());
     lines.push(
@@ -491,6 +590,10 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
             .to_string(),
     );
     lines.push("        return next_state, current".to_string());
+    lines.push(
+        "    initial_state = resolve_initial_state(initial_state, constants, params=params)"
+            .to_string(),
+    );
     lines.push("    return lax.scan(_scan_step, initial_state, forcing_series)".to_string());
     lines.push(String::new());
 
@@ -525,22 +628,58 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return total".to_string());
     lines.push(String::new());
 
-    lines.push("def consistency_loss(history, constants, slot_providers):".to_string());
-    lines.push("    total = 0.0".to_string());
-    for alternative in &plan.alternatives {
-        if let AlternativePayload::Equation { expression } = &alternative.payload {
-            let output_name = quantity_name(experiment, alternative.output);
-            let alt_expr =
-                render_history_expr_for_output_unit(experiment, alternative.output, expression);
-            lines.push(format!(
-                "    _residual = history[{output}] - ({alt_expr})",
-                output = py_string(&output_name)
-            ));
-            lines.push("    total += jnp.sum(_residual * _residual)".to_string());
+    let jax_consistency_alternatives = consistency_alternatives(experiment);
+    lines.push(
+        "def consistency_loss(history, forcing_series=None, constants=None, slot_providers=None):"
+            .to_string(),
+    );
+    if jax_consistency_alternatives.is_empty() {
+        lines.push("    return jnp.asarray(0.0)".to_string());
+        lines.push(String::new());
+    } else {
+        lines.push(
+            "    forcing_series = {} if forcing_series is None else forcing_series".to_string(),
+        );
+        lines.push("    constants = {} if constants is None else constants".to_string());
+        lines.push(
+            "    slot_providers = {} if slot_providers is None else slot_providers".to_string(),
+        );
+        lines.push("    total = jnp.asarray(0.0)".to_string());
+        for alternative in &jax_consistency_alternatives {
+            if let AlternativePayload::Equation { expression } = &alternative.payload {
+                let output_name = quantity_name(experiment, alternative.output);
+                let alt_expr =
+                    render_history_expr_for_output_unit(experiment, alternative.output, expression);
+                lines.push(format!(
+                    "    _residual = history[{output}] - ({alt_expr})",
+                    output = py_string(&output_name)
+                ));
+                lines.push("    total += jnp.sum(_residual * _residual)".to_string());
+            } else if let AlternativePayload::Slot {
+                kind,
+                inputs,
+                output_index,
+            } = &alternative.payload
+            {
+                let output_name = quantity_name(experiment, alternative.output);
+                let alt_expr = render_slot_output_expr_for_history(
+                    experiment,
+                    &alternative.source,
+                    *kind,
+                    inputs,
+                    alternative.output,
+                    *output_index,
+                );
+                lines.push(format!(
+                    "    _residual = history[{output}] - ({alt_expr})",
+                    output = py_string(&output_name)
+                ));
+                lines.push("    total += jnp.sum(_residual * _residual)".to_string());
+            }
         }
+        lines.push("    return total".to_string());
+        lines.push(String::new());
     }
-    lines.push("    return total".to_string());
-    lines.push(String::new());
 
     lines.push("def soft_penalty_loss(history):".to_string());
     lines.push("    total = 0.0".to_string());
@@ -554,14 +693,16 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push(String::new());
 
     lines.push(
-        "def loss_components(history, observations, constants=None, slot_providers=None):"
+        "def loss_components(history, observations, forcing_series=None, constants=None, slot_providers=None):"
             .to_string(),
     );
     lines.push("    constants = {} if constants is None else constants".to_string());
     lines.push("    slot_providers = {} if slot_providers is None else slot_providers".to_string());
     lines.push("    obs = obs_loss(history, observations)".to_string());
-    lines
-        .push("    consistency = consistency_loss(history, constants, slot_providers)".to_string());
+    lines.push(
+        "    consistency = consistency_loss(history, forcing_series=forcing_series, constants=constants, slot_providers=slot_providers)"
+            .to_string(),
+    );
     lines.push("    soft_penalty = soft_penalty_loss(history)".to_string());
     lines.push("    return {".to_string());
     lines.push("        \"obs_loss\": obs,".to_string());
@@ -572,35 +713,17 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push(String::new());
 
     lines.push(
-        "def total_loss(history, observations, constants=None, slot_providers=None):".to_string(),
+        "def total_loss(history, observations, forcing_series=None, constants=None, slot_providers=None):".to_string(),
     );
-    lines.push("    return loss_components(history, observations, constants=constants, slot_providers=slot_providers)[\"total_loss\"]".to_string());
+    lines.push("    return loss_components(history, observations, forcing_series=forcing_series, constants=constants, slot_providers=slot_providers)[\"total_loss\"]".to_string());
     lines.push(String::new());
 
     lines.join("\n")
 }
 
 fn emit_slot_step(experiment: &PreparedExperiment, slot: &PlannedSlot, lines: &mut Vec<String>) {
-    let call = format!(
-        "slot_providers[{name}]({args})",
-        name = py_string(&slot.slot),
-        args = slot
-            .inputs
-            .iter()
-            .map(|quantity| format!(
-                "current[{name}]",
-                name = py_string(&quantity_name(experiment, *quantity))
-            ))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
-    if slot.outputs.len() == 1 {
-        lines.push(format!(
-            "    current[{output}] = _project_output({output}, {call}, current)",
-            output = py_string(&quantity_name(experiment, slot.outputs[0]))
-        ));
-    } else {
+    if slot.kind == SlotBindingKind::Learned && slot.outputs.len() > 1 {
+        let call = render_learned_slot_call(experiment, &slot.slot, &slot.inputs, "current");
         lines.push(format!("    _slot_out = {call}"));
         for (index, output) in slot.outputs.iter().enumerate() {
             lines.push(format!(
@@ -608,6 +731,23 @@ fn emit_slot_step(experiment: &PreparedExperiment, slot: &PlannedSlot, lines: &m
                 output = py_string(&quantity_name(experiment, *output))
             ));
         }
+        return;
+    }
+
+    for (index, output) in slot.outputs.iter().enumerate() {
+        let raw_value = render_slot_output_expr_for_step(
+            experiment,
+            &slot.slot,
+            slot.kind,
+            &slot.inputs,
+            *output,
+            index,
+        );
+        let output_name = quantity_name(experiment, *output);
+        lines.push(format!(
+            "    current[{output}] = _project_output({output}, {raw_value}, current)",
+            output = py_string(&output_name)
+        ));
     }
 }
 
@@ -635,26 +775,18 @@ fn emit_alternative_step(
         AlternativePayload::Equation { expression } => {
             render_expr_for_output_unit(experiment, alternative.output, expression)
         }
-        AlternativePayload::Slot { inputs } => {
-            let slot_name = match &alternative.source {
-                crate::plan::PlanSource::Slot(slot) => slot,
-                crate::plan::PlanSource::Equation(_) => {
-                    unreachable!("slot payload requires slot source")
-                }
-            };
-            format!(
-                "slot_providers[{name}]({args})",
-                name = py_string(slot_name),
-                args = inputs
-                    .iter()
-                    .map(|quantity| format!(
-                        "current[{name}]",
-                        name = py_string(&quantity_name(experiment, *quantity))
-                    ))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
+        AlternativePayload::Slot {
+            kind,
+            inputs,
+            output_index,
+        } => render_slot_output_expr_for_current(
+            experiment,
+            &alternative.source,
+            *kind,
+            inputs,
+            alternative.output,
+            *output_index,
+        ),
     };
 
     lines.push(format!(
@@ -833,6 +965,217 @@ fn alternative_source_label(source: &crate::plan::PlanSource) -> String {
     }
 }
 
+fn forcing_quantity_names(experiment: &PreparedExperiment) -> Vec<String> {
+    let mut names = experiment
+        .bound
+        .quantities
+        .iter()
+        .filter_map(|quantity| match &quantity.direct_binding {
+            Some(DirectBindingKind::DataSeries { .. }) => Some(quantity.quantity.name.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for slot in &experiment.bound.slot_bindings {
+        if slot.kind == SlotBindingKind::DataSeries {
+            names.extend(
+                slot.provides
+                    .iter()
+                    .map(|quantity| quantity_name(experiment, *quantity)),
+            );
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn constant_quantity_names(experiment: &PreparedExperiment) -> Vec<String> {
+    let mut names = experiment
+        .bound
+        .quantities
+        .iter()
+        .filter_map(|quantity| match &quantity.direct_binding {
+            Some(DirectBindingKind::Constant) => Some(quantity.quantity.name.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for slot in &experiment.bound.slot_bindings {
+        if slot.kind == SlotBindingKind::Constant {
+            names.extend(
+                slot.provides
+                    .iter()
+                    .map(|quantity| quantity_name(experiment, *quantity)),
+            );
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn learned_initial_state_names(
+    bound: &crate::compile::BoundModel,
+    experiment: &PreparedExperiment,
+) -> Vec<String> {
+    let mut names = bound
+        .direct_bindings
+        .iter()
+        .filter_map(|binding| match binding.kind {
+            DirectBindingKind::InitialState {
+                source: InitialStateSource::Learned,
+            } => Some(quantity_name(experiment, binding.quantity)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn consistency_policy_name(policy: ConsistencyPolicy) -> &'static str {
+    match policy {
+        ConsistencyPolicy::Off => "off",
+        ConsistencyPolicy::EquationOnly => "equation_only",
+        ConsistencyPolicy::All => "all",
+    }
+}
+
+fn consistency_alternatives<'a>(
+    experiment: &'a PreparedExperiment,
+) -> Vec<&'a crate::plan::AlternativePath> {
+    experiment
+        .plan
+        .alternatives
+        .iter()
+        .filter(|alternative| match experiment.bound.consistency_policy {
+            ConsistencyPolicy::Off => false,
+            ConsistencyPolicy::EquationOnly => {
+                matches!(alternative.payload, AlternativePayload::Equation { .. })
+            }
+            ConsistencyPolicy::All => true,
+        })
+        .collect()
+}
+
+fn slot_name_from_source(source: &crate::plan::PlanSource) -> &str {
+    match source {
+        crate::plan::PlanSource::Slot(slot) => slot,
+        crate::plan::PlanSource::Equation(_) => {
+            unreachable!("slot payload requires slot source")
+        }
+    }
+}
+
+fn render_learned_slot_call(
+    experiment: &PreparedExperiment,
+    slot_name: &str,
+    inputs: &[QuantityId],
+    quantity_map: &str,
+) -> String {
+    format!(
+        "slot_providers[{name}]({args})",
+        name = py_string(slot_name),
+        args = inputs
+            .iter()
+            .map(|quantity| format!(
+                "{quantity_map}[{name}]",
+                name = py_string(&quantity_name(experiment, *quantity))
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn render_slot_output_expr_for_step(
+    experiment: &PreparedExperiment,
+    slot_name: &str,
+    kind: SlotBindingKind,
+    inputs: &[QuantityId],
+    output: QuantityId,
+    output_index: usize,
+) -> String {
+    let output_name = py_string(&quantity_name(experiment, output));
+    match kind {
+        SlotBindingKind::DataSeries => format!("forcing[{output_name}]"),
+        SlotBindingKind::Constant => format!("constants[{output_name}]"),
+        SlotBindingKind::Learned => {
+            let call = render_learned_slot_call(experiment, slot_name, inputs, "current");
+            if output_index == 0 {
+                call
+            } else {
+                format!("({call})[{output_index}]")
+            }
+        }
+    }
+}
+
+fn render_slot_output_expr_for_current(
+    experiment: &PreparedExperiment,
+    source: &crate::plan::PlanSource,
+    kind: SlotBindingKind,
+    inputs: &[QuantityId],
+    output: QuantityId,
+    output_index: usize,
+) -> String {
+    let raw = match kind {
+        SlotBindingKind::DataSeries => {
+            format!("forcing[{}]", py_string(&quantity_name(experiment, output)))
+        }
+        SlotBindingKind::Constant => {
+            format!(
+                "constants[{}]",
+                py_string(&quantity_name(experiment, output))
+            )
+        }
+        SlotBindingKind::Learned => {
+            let call = render_learned_slot_call(
+                experiment,
+                slot_name_from_source(source),
+                inputs,
+                "current",
+            );
+            if output_index == 0 {
+                call
+            } else {
+                format!("({call})[{output_index}]")
+            }
+        }
+    };
+    format!(
+        "_project_output({output}, {raw}, current)",
+        output = py_string(&quantity_name(experiment, output))
+    )
+}
+
+fn render_slot_output_expr_for_history(
+    experiment: &PreparedExperiment,
+    source: &crate::plan::PlanSource,
+    kind: SlotBindingKind,
+    inputs: &[QuantityId],
+    output: QuantityId,
+    output_index: usize,
+) -> String {
+    let output_name = py_string(&quantity_name(experiment, output));
+    let raw = match kind {
+        SlotBindingKind::DataSeries => format!("forcing_series[{output_name}]"),
+        SlotBindingKind::Constant => format!("constants[{output_name}]"),
+        SlotBindingKind::Learned => {
+            let call = render_learned_slot_call(
+                experiment,
+                slot_name_from_source(source),
+                inputs,
+                "history",
+            );
+            if output_index == 0 {
+                call
+            } else {
+                format!("({call})[{output_index}]")
+            }
+        }
+    };
+    format!("_project_output({output_name}, {raw}, history)")
+}
+
 fn compile_mode_name(mode: crate::compile::CompileMode) -> &'static str {
     match mode {
         crate::compile::CompileMode::Simulate => "simulate",
@@ -900,8 +1243,9 @@ mod tests {
     use super::*;
     use crate::{
         compile::{
-            CompileMode, CompileSpec, DirectBindingKind, DirectBindingSpec, InitialStateSource,
-            LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind, SlotBindingSpec,
+            CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
+            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
+            SlotBindingSpec,
         },
         pipeline::{load_model, prepare_experiment},
     };
@@ -921,13 +1265,13 @@ mod tests {
         assert!(module.contains("\"stomata\": {\"lower\": 0, \"upper\": \"g_max\"},"));
         assert!(module.contains("OBSERVATION_SPECS = {"));
         assert!(module.contains("def step(state, forcing, constants, slot_providers, dt):"));
-        assert!(
-            module.contains(
-                "def rollout(initial_state, forcing_steps, constants, slot_providers, dt):"
-            )
-        );
+        assert!(module.contains(
+            "def rollout(initial_state, forcing_steps, constants, slot_providers, dt, params=None):"
+        ));
         assert!(module.contains("def obs_loss(trajectory, observations):"));
-        assert!(module.contains("def consistency_loss(trajectory):"));
+        assert!(module.contains(
+            "def consistency_loss(trajectory, forcing_steps=None, constants=None, slot_providers=None):"
+        ));
         assert!(module.contains("def total_loss(trajectory, observations):"));
         assert!(module.contains(
             "current[\"stomata\"] = _project_output(\"stomata\", slot_providers[\"controller\"]("
@@ -958,7 +1302,9 @@ mod tests {
         assert!(module.contains("jnp.where"));
         assert!(module.contains("jnn.sigmoid"));
         assert!(module.contains("jnn.softplus"));
-        assert!(module.contains("def consistency_loss(history, constants, slot_providers):"));
+        assert!(module.contains(
+            "def consistency_loss(history, forcing_series=None, constants=None, slot_providers=None):"
+        ));
         assert!(module.contains("history[\"transpiration\"] - ((history[\"hydraulic_cond\"] * (history[\"soil_water\"] - history[\"water\"])))"));
     }
 
@@ -989,6 +1335,7 @@ temporal water_step:
             &CompileSpec {
                 mode: CompileMode::Train,
                 horizon_steps: 8,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
                 direct_bindings: vec![
                     DirectBindingSpec {
                         quantity: "forcing".to_string(),
@@ -1057,6 +1404,7 @@ temporal water_step:
             &CompileSpec {
                 mode: CompileMode::Simulate,
                 horizon_steps: 12,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
                 direct_bindings: vec![
                     DirectBindingSpec {
                         quantity: "vpd_scale".to_string(),
@@ -1107,6 +1455,7 @@ relation assign:
             &CompileSpec {
                 mode: CompileMode::Simulate,
                 horizon_steps: 1,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
                 direct_bindings: vec![DirectBindingSpec {
                     quantity: "y".to_string(),
                     kind: DirectBindingKind::Constant,
@@ -1126,6 +1475,204 @@ relation assign:
         assert!(jax_module.contains("current[\"x\"] = "));
         assert!(jax_module.contains("current[\"y\"] * 1000"));
         assert!(jax_module.contains("/ 1000000"));
+    }
+
+    #[test]
+    fn emits_learned_initial_state_parameters() {
+        let source = r#"
+model LearnedInit
+
+state water : scalar {
+  self >= 0
+}
+
+temporal water_step:
+  water[t+1] = water[t]
+"#;
+
+        let model = load_model(source).expect("model should load");
+        let experiment = prepare_experiment(
+            &model,
+            &CompileSpec {
+                mode: CompileMode::Simulate,
+                horizon_steps: 4,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
+                direct_bindings: vec![DirectBindingSpec {
+                    quantity: "water".to_string(),
+                    kind: DirectBindingKind::InitialState {
+                        source: InitialStateSource::Learned,
+                    },
+                }],
+                slot_bindings: vec![],
+                observations: vec![],
+            },
+        )
+        .expect("experiment should prepare");
+
+        let python_module = emit_python_module(&experiment);
+        assert!(python_module.contains("LEARNED_INITIAL_STATE_NAMES = [\"water\"]"));
+        assert!(python_module.contains("\"initial_state\": {"));
+        assert!(python_module.contains("\"water\": 0.0"));
+        assert!(python_module.contains(
+            "def resolve_initial_state(initial_state=None, constants=None, params=None):"
+        ));
+
+        let jax_module = emit_jax_module(&experiment);
+        assert!(jax_module.contains("LEARNED_INITIAL_STATE_NAMES = [\"water\"]"));
+        assert!(jax_module.contains("\"water\": jnp.asarray(0.0)"));
+        assert!(jax_module.contains(
+            "initial_state = resolve_initial_state(initial_state, constants, params=params)"
+        ));
+    }
+
+    #[test]
+    fn emits_data_and_constant_slot_runtime_semantics() {
+        let source = r#"
+model SlotKinds
+
+external forcing : scalar
+state water : scalar
+node data_out : scalar
+node const_out : scalar
+
+slot data_slot provides [data_out]:
+  inputs = [forcing]
+
+slot const_slot provides [const_out]:
+  inputs = [forcing]
+
+temporal water_step:
+  water[t+1] = water[t]
+"#;
+
+        let model = load_model(source).expect("model should load");
+        let experiment = prepare_experiment(
+            &model,
+            &CompileSpec {
+                mode: CompileMode::Simulate,
+                horizon_steps: 4,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
+                direct_bindings: vec![DirectBindingSpec {
+                    quantity: "water".to_string(),
+                    kind: DirectBindingKind::InitialState {
+                        source: InitialStateSource::Constant,
+                    },
+                }],
+                slot_bindings: vec![
+                    SlotBindingSpec {
+                        slot: "data_slot".to_string(),
+                        kind: SlotBindingKind::DataSeries,
+                    },
+                    SlotBindingSpec {
+                        slot: "const_slot".to_string(),
+                        kind: SlotBindingKind::Constant,
+                    },
+                ],
+                observations: vec![],
+            },
+        )
+        .expect("experiment should prepare");
+
+        let python_module = emit_python_module(&experiment);
+        assert!(python_module.contains("FORCING_NAMES = [\"data_out\"]"));
+        assert!(python_module.contains("CONSTANT_NAMES = [\"const_out\"]"));
+        assert!(python_module.contains(
+            "current[\"data_out\"] = _project_output(\"data_out\", forcing[\"data_out\"], current)"
+        ));
+        assert!(python_module.contains(
+            "current[\"const_out\"] = _project_output(\"const_out\", constants[\"const_out\"], current)"
+        ));
+
+        let jax_module = emit_jax_module(&experiment);
+        assert!(jax_module.contains("FORCING_NAMES = [\"data_out\"]"));
+        assert!(jax_module.contains("CONSTANT_NAMES = [\"const_out\"]"));
+        assert!(jax_module.contains(
+            "current[\"data_out\"] = _project_output(\"data_out\", forcing[\"data_out\"], current)"
+        ));
+        assert!(jax_module.contains(
+            "current[\"const_out\"] = _project_output(\"const_out\", constants[\"const_out\"], current)"
+        ));
+    }
+
+    #[test]
+    fn consistency_policy_off_disables_emission() {
+        let model = load_model(TINY_TREE).expect("model should load");
+        let mut spec = tiny_tree_spec();
+        spec.consistency_policy = ConsistencyPolicy::Off;
+        let experiment = prepare_experiment(&model, &spec).expect("experiment should prepare");
+
+        let python_module = emit_python_module(&experiment);
+        assert!(python_module.contains("CONSISTENCY_POLICY = \"off\""));
+        assert!(python_module.contains("def consistency_loss(trajectory, forcing_steps=None, constants=None, slot_providers=None):"));
+        assert!(python_module.contains("    return 0.0"));
+
+        let jax_module = emit_jax_module(&experiment);
+        assert!(jax_module.contains("CONSISTENCY_POLICY = \"off\""));
+        assert!(jax_module.contains("def consistency_loss(history, forcing_series=None, constants=None, slot_providers=None):"));
+        assert!(jax_module.contains("    return jnp.asarray(0.0)"));
+    }
+
+    #[test]
+    fn consistency_policy_all_emits_slot_alternatives_in_jax() {
+        let source = r#"
+model SlotAlternative
+
+external forcing : scalar
+state water : scalar
+node x : scalar
+node y : scalar
+
+slot provider provides [x]:
+  inputs = [forcing]
+
+relation y_rule:
+  y = forcing
+
+relation x_rule:
+  x = y + forcing
+
+temporal water_step:
+  water[t+1] = water[t] + x[t]
+"#;
+
+        let model = load_model(source).expect("model should load");
+        let experiment = prepare_experiment(
+            &model,
+            &CompileSpec {
+                mode: CompileMode::Train,
+                horizon_steps: 4,
+                consistency_policy: ConsistencyPolicy::All,
+                direct_bindings: vec![
+                    DirectBindingSpec {
+                        quantity: "forcing".to_string(),
+                        kind: DirectBindingKind::DataSeries {
+                            steps: (0..4).collect(),
+                        },
+                    },
+                    DirectBindingSpec {
+                        quantity: "water".to_string(),
+                        kind: DirectBindingKind::InitialState {
+                            source: InitialStateSource::Constant,
+                        },
+                    },
+                ],
+                slot_bindings: vec![SlotBindingSpec {
+                    slot: "provider".to_string(),
+                    kind: SlotBindingKind::Learned,
+                }],
+                observations: vec![ObservationSpec {
+                    quantity: "x".to_string(),
+                    loss: LossKind::Mse,
+                    schedule: ObservationSchedule::DensePerStep,
+                }],
+            },
+        )
+        .expect("experiment should prepare");
+
+        let jax_module = emit_jax_module(&experiment);
+        assert!(jax_module.contains("CONSISTENCY_POLICY = \"all\""));
+        assert!(jax_module.contains("slot_providers[\"provider\"]("));
+        assert!(jax_module.contains("history[\"forcing\"]"));
     }
 
     #[test]
@@ -1151,6 +1698,7 @@ temporal water_step:
             &CompileSpec {
                 mode: CompileMode::Simulate,
                 horizon_steps: 12,
+                consistency_policy: ConsistencyPolicy::EquationOnly,
                 direct_bindings: vec![
                     DirectBindingSpec {
                         quantity: "vpd_scale".to_string(),
@@ -1187,6 +1735,7 @@ temporal water_step:
         CompileSpec {
             mode: CompileMode::Train,
             horizon_steps: 24,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
             direct_bindings: vec![
                 DirectBindingSpec {
                     quantity: "vpd_scale".to_string(),

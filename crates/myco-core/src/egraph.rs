@@ -309,7 +309,9 @@ fn to_recexpr(expr: &CoreExpr) -> RecExpr<ArithmeticLang> {
 fn build_recexpr(expr: &CoreExpr, nodes: &mut Vec<ArithmeticLang>) -> Id {
     match expr {
         CoreExpr::Quantity(QuantityRef { quantity, time }) => {
-            nodes.push(ArithmeticLang::Symbol(quantity_symbol(*quantity, *time).into()));
+            nodes.push(ArithmeticLang::Symbol(
+                quantity_symbol(*quantity, *time).into(),
+            ));
         }
         CoreExpr::Special(SpecialRef::Dt) => {
             nodes.push(ArithmeticLang::Symbol("dt".into()));
@@ -393,7 +395,10 @@ fn parse_symbol(symbol: &Symbol) -> Result<CoreExpr, Diagnostic> {
                 Diagnostic::error(format!("failed to parse extracted quantity '{}'", raw))
             })?;
             let offset = offset.parse::<i32>().map_err(|_| {
-                Diagnostic::error(format!("failed to parse extracted time reference '{}'", raw))
+                Diagnostic::error(format!(
+                    "failed to parse extracted time reference '{}'",
+                    raw
+                ))
             })?;
             (quantity, TimeReference::Relative(offset))
         }
@@ -601,9 +606,10 @@ relation pair:
             .expect("registration");
 
         let available = HashSet::from([QuantityId(0), QuantityId(6)]);
-        let extracted = extract_available_expression(&equality.core, registration, &available, true)
-            .expect("extraction should succeed")
-            .expect("expression should be available");
+        let extracted =
+            extract_available_expression(&equality.core, registration, &available, true)
+                .expect("extraction should succeed")
+                .expect("expression should be available");
 
         assert_eq!(extracted.expression.to_string(), "(q6 / q0)");
     }
