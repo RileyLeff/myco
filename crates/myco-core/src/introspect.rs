@@ -1,7 +1,7 @@
 use crate::{
     compile::DirectBindingKind,
     diagnostics::Diagnostic,
-    equality::{CoreExpr, Provenance, QuantityId, TimeReference},
+    equality::{CoreExpr, EquationId, Provenance, QuantityId, TimeReference},
     pipeline::PreparedExperiment,
     plan::{
         AlternativePath, BlockedCandidate, CandidateDirection, Dependency, DependencyTiming,
@@ -264,7 +264,7 @@ fn explain_equation(
     experiment: &PreparedExperiment,
     equation: &PlannedEquation,
 ) -> PathExplanation {
-    let provenance = equation_provenance(experiment, &equation.block_name);
+    let provenance = equation_provenance(experiment, equation.equation_id);
     PathExplanation {
         output: quantity_name(experiment, equation.output),
         source: equation.block_name.clone(),
@@ -442,14 +442,17 @@ fn blocked_candidate_expression(
                         )
                     })
             }),
-        PlanSource::Equation(block_name) => experiment
+        PlanSource::Equation {
+            equation_id,
+            block_name: _,
+        } => experiment
             .model
             .equality
             .core
             .directional
             .iter()
             .find(|registration| {
-                registration.block_name == *block_name
+                registration.equation_id == *equation_id
                     && registration.output.quantity == quantity
                     && candidate_direction_matches(candidate.direction, registration.direction)
             })
@@ -460,7 +463,7 @@ fn blocked_candidate_expression(
 fn source_provenance(experiment: &PreparedExperiment, source: &PlanSource) -> Option<Provenance> {
     match source {
         PlanSource::Slot(slot_name) => slot_provenance(experiment, slot_name),
-        PlanSource::Equation(block_name) => equation_provenance(experiment, block_name),
+        PlanSource::Equation { equation_id, .. } => equation_provenance(experiment, *equation_id),
     }
 }
 
@@ -474,14 +477,17 @@ fn slot_provenance(experiment: &PreparedExperiment, slot_name: &str) -> Option<P
         .map(|slot| slot.provenance.clone())
 }
 
-fn equation_provenance(experiment: &PreparedExperiment, block_name: &str) -> Option<Provenance> {
+fn equation_provenance(
+    experiment: &PreparedExperiment,
+    equation_id: EquationId,
+) -> Option<Provenance> {
     experiment
         .model
         .equality
         .core
         .equations
         .iter()
-        .find(|registration| registration.equation.block_name == block_name)
+        .find(|registration| registration.equation.id == equation_id)
         .map(|registration| registration.equation.provenance.clone())
 }
 
@@ -565,7 +571,8 @@ fn direct_binding_name(binding: &DirectBindingKind) -> String {
 
 fn plan_source_name(source: &PlanSource) -> String {
     match source {
-        PlanSource::Slot(name) | PlanSource::Equation(name) => name.clone(),
+        PlanSource::Slot(name) => name.clone(),
+        PlanSource::Equation { block_name, .. } => block_name.clone(),
     }
 }
 

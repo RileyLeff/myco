@@ -46,7 +46,6 @@ Three of the original `v1.2` issues are now closed:
 
 The main remaining issues are now:
 
-- provenance resolution is still mostly block-level in some places, even though expression text and source spans are now surfaced
 - richer slot metadata is now available on compiled artifacts, but the remaining question is whether any further interface-shape detail is actually required for honest `v1`
 
 So the project is now best described as:
@@ -62,8 +61,7 @@ At this point, I do **not** recommend broadening the frontend language, changing
 The next order should be:
 
 1. Decide whether the current artifact-level slot metadata is already sufficient for honest `v1`, or whether further interface detail is still needed.
-2. Decide whether block-level provenance is already sufficient for honest `v1`, or whether finer-grained equation identity still needs to be introduced.
-3. Re-run external review once those remaining semantics are narrow and explicit.
+2. Re-run external review now that the remaining semantics are narrow and explicit.
 
 This order matters because the remaining gaps are mostly semantic mismatches between what the API promises and what emitted code actually does.
 
@@ -218,7 +216,7 @@ That is useful, but it is weaker than the intended contract.
 
 Keep the distinction small but visible:
 
-## 5. Provenance And Introspection Need To Explain Real Extracted Paths (Mostly Closed)
+## 5. Provenance And Introspection Need To Explain Real Extracted Paths (Closed Enough For `v1`)
 
 ### Current State
 
@@ -233,9 +231,7 @@ That is enough to explain the TinyTree recovery path and point back to the origi
 
 ### What Still Needs Cleanup
 
-One smaller gap remains:
-
-- provenance lookup is still block-level in places where a finer-grained equation identity would be cleaner
+Per-equation identity now survives through lowering, `egg` registrations, planning, and explanation lookup, so provenance is no longer dependent on block-name matching alone.
 
 ### Acceptance Criteria
 

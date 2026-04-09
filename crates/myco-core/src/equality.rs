@@ -20,6 +20,9 @@ pub struct EqualityModel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct QuantityId(pub usize);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EquationId(pub usize);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provenance {
     pub span: SourceSpan,
@@ -41,6 +44,7 @@ pub struct Quantity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EqualityEquation {
+    pub id: EquationId,
     pub kind: BlockKind,
     pub block_name: String,
     pub lhs: CoreExpr,
@@ -141,12 +145,21 @@ pub fn lower_model(model: &SemanticModel) -> Result<EqualityModel, Vec<Diagnosti
     }
 
     let mut equations = Vec::new();
+    let mut equation_index = 0usize;
     for block in &model.relations {
         for equation in &block.equations {
-            match lower_equation(equation, block.kind, &block.name, &quantity_ids, block.span) {
+            match lower_equation(
+                equation,
+                EquationId(equation_index),
+                block.kind,
+                &block.name,
+                &quantity_ids,
+                block.span,
+            ) {
                 Ok(lowered) => equations.push(lowered),
                 Err(mut errs) => diagnostics.append(&mut errs),
             }
+            equation_index += 1;
         }
     }
 
@@ -206,6 +219,7 @@ pub fn lower_model(model: &SemanticModel) -> Result<EqualityModel, Vec<Diagnosti
 
 fn lower_equation(
     equation: &Equation,
+    id: EquationId,
     kind: BlockKind,
     block_name: &str,
     quantity_ids: &HashMap<String, QuantityId>,
@@ -215,6 +229,7 @@ fn lower_equation(
     let rhs = lower_expr(&equation.rhs, quantity_ids, equation.span)?;
 
     Ok(EqualityEquation {
+        id,
         kind,
         block_name: block_name.to_string(),
         lhs,

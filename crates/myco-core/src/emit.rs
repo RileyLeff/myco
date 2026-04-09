@@ -1006,9 +1006,8 @@ fn py_string(value: &str) -> String {
 
 fn alternative_source_label(source: &crate::plan::PlanSource) -> String {
     match source {
-        crate::plan::PlanSource::Slot(name) | crate::plan::PlanSource::Equation(name) => {
-            name.clone()
-        }
+        crate::plan::PlanSource::Slot(name) => name.clone(),
+        crate::plan::PlanSource::Equation { block_name, .. } => block_name.clone(),
     }
 }
 
@@ -1123,7 +1122,7 @@ fn consistency_alternatives<'a>(
 fn slot_name_from_source(source: &crate::plan::PlanSource) -> &str {
     match source {
         crate::plan::PlanSource::Slot(slot) => slot,
-        crate::plan::PlanSource::Equation(_) => {
+        crate::plan::PlanSource::Equation { .. } => {
             unreachable!("slot payload requires slot source")
         }
     }

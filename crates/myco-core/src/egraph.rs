@@ -7,7 +7,9 @@ use egg::{
 
 use crate::{
     diagnostics::Diagnostic,
-    equality::{CoreExpr, EqualityEquation, QuantityId, QuantityRef, SpecialRef, TimeReference},
+    equality::{
+        CoreExpr, EqualityEquation, EquationId, QuantityId, QuantityRef, SpecialRef, TimeReference,
+    },
     semantic::BinaryOp,
     syntax::BlockKind,
 };
@@ -32,6 +34,7 @@ pub struct EquationRegistration {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectionalRegistration {
+    pub equation_id: EquationId,
     pub block_name: String,
     pub kind: BlockKind,
     pub output: QuantityRef,
@@ -88,6 +91,7 @@ pub fn build_core(equations: &[EqualityEquation]) -> EqualityCore {
             let expression_id = add_expr(&mut egraph, &registration.seed_expression);
             egraph.union(output_id, expression_id);
             directional.push(DirectionalRegistration {
+                equation_id: registration.equation_id,
                 block_name: registration.block_name,
                 kind: registration.kind,
                 output: registration.output,
@@ -178,6 +182,7 @@ fn directional_registrations(equation: &EqualityEquation) -> Vec<DirectionalSeed
     };
 
     let mut seeds = vec![DirectionalSeed {
+        equation_id: equation.id,
         block_name: equation.block_name.clone(),
         kind: equation.kind,
         output: lhs_ref.clone(),
@@ -199,6 +204,7 @@ fn directional_registrations(equation: &EqualityEquation) -> Vec<DirectionalSeed
 
         if let Some(target) = invertible_target(left) {
             seeds.push(DirectionalSeed {
+                equation_id: equation.id,
                 block_name: equation.block_name.clone(),
                 kind: equation.kind,
                 output: QuantityRef {
@@ -213,6 +219,7 @@ fn directional_registrations(equation: &EqualityEquation) -> Vec<DirectionalSeed
 
         if let Some(target) = invertible_target(right) {
             seeds.push(DirectionalSeed {
+                equation_id: equation.id,
                 block_name: equation.block_name.clone(),
                 kind: equation.kind,
                 output: QuantityRef {
@@ -425,6 +432,7 @@ fn quantity_symbol(quantity: QuantityId, time: TimeReference) -> String {
 
 #[derive(Debug, Clone)]
 struct DirectionalSeed {
+    equation_id: EquationId,
     block_name: String,
     kind: BlockKind,
     output: QuantityRef,

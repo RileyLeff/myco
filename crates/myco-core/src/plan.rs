@@ -4,7 +4,7 @@ use crate::{
     compile::{BoundModel, ResolvedSlotBinding, SlotBindingKind},
     diagnostics::Diagnostic,
     egraph::{DirectionalRegistration, ExpressionDirection, extract_available_expression},
-    equality::{CoreExpr, QuantityId, QuantityRef, SpecialRef, TimeReference},
+    equality::{CoreExpr, EquationId, QuantityId, QuantityRef, SpecialRef, TimeReference},
     syntax::BlockKind,
 };
 
@@ -30,6 +30,7 @@ pub struct PlannedSlot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedEquation {
+    pub equation_id: EquationId,
     pub block_name: String,
     pub kind: BlockKind,
     pub output: QuantityId,
@@ -61,7 +62,10 @@ pub struct BlockedCandidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanSource {
     Slot(String),
-    Equation(String),
+    Equation {
+        equation_id: EquationId,
+        block_name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,6 +244,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
             CandidatePayload::Equation { registration } => {
                 let output = unresolved_outputs[0];
                 planned_equations.push(PlannedEquation {
+                    equation_id: registration.equation_id,
                     block_name: candidate.name.clone(),
                     kind: registration.kind,
                     output,
@@ -299,6 +304,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         match &candidate.payload {
             CandidatePayload::Equation { registration } => {
                 temporal_steps.push(PlannedEquation {
+                    equation_id: registration.equation_id,
                     block_name: candidate.name.clone(),
                     kind: registration.kind,
                     output: candidate.outputs[0],
@@ -457,7 +463,10 @@ impl Candidate {
 
         Ok(Self {
             name: registration.block_name.clone(),
-            source: PlanSource::Equation(registration.block_name.clone()),
+            source: PlanSource::Equation {
+                equation_id: registration.equation_id,
+                block_name: registration.block_name.clone(),
+            },
             direction,
             timing,
             outputs: vec![output],
@@ -650,7 +659,7 @@ impl Candidate {
     fn source_rank(&self) -> u8 {
         match self.source {
             PlanSource::Slot(_) => 0,
-            PlanSource::Equation(_) => 1,
+            PlanSource::Equation { .. } => 1,
         }
     }
 
@@ -836,8 +845,10 @@ mod tests {
         assert_eq!(plan.equation_steps[0].direction, EquationDirection::Forward);
         assert_eq!(plan.temporal_steps[0].block_name, "water_step");
         assert!(plan.alternatives.iter().any(|alternative| {
-            alternative.source == PlanSource::Equation("supply_transpiration".to_string())
-                && alternative.direction == CandidateDirection::Forward
+            matches!(
+                &alternative.source,
+                PlanSource::Equation { block_name, .. } if block_name == "supply_transpiration"
+            ) && alternative.direction == CandidateDirection::Forward
         }));
     }
 
