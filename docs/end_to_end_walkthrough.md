@@ -10,9 +10,9 @@ It does three things:
 
 The walkthrough uses the current TinyTree demo as the concrete example:
 
-- model file: [tiny_tree.myco](/Users/rileyleff/Documents/dev/myco/crates/myco-core/tests/fixtures/tiny_tree.myco)
-- demo entrypoint: [train_tiny_tree_controller.py](/Users/rileyleff/Documents/dev/myco/examples/train_tiny_tree_controller.py)
-- demo implementation: [demos.py](/Users/rileyleff/Documents/dev/myco/python/myco/demos.py)
+- model file: [tiny_tree.myco](../crates/myco-core/tests/fixtures/tiny_tree.myco)
+- demo entrypoint: [train_tiny_tree_controller.py](../examples/train_tiny_tree_controller.py)
+- demo implementation: [demos.py](../python/myco/demos.py)
 
 ## What Myco Feels Like As A User
 
@@ -182,7 +182,7 @@ Here is the current internal pipeline.
 
 File:
 
-- [syntax.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/syntax.rs)
+- [syntax.rs](../crates/myco-core/src/syntax.rs)
 
 The parser reads the `.myco` source into a structured syntax model:
 
@@ -198,7 +198,7 @@ At this stage Myco is still close to the text format. It knows names, declaratio
 
 File:
 
-- [semantic.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/semantic.rs)
+- [semantic.rs](../crates/myco-core/src/semantic.rs)
 
 The semantic layer parses equation strings into expression trees:
 
@@ -224,7 +224,7 @@ At this stage:
 
 File:
 
-- [equality.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/equality.rs)
+- [equality.rs](../crates/myco-core/src/equality.rs)
 
 The equality layer assigns stable internal identities:
 
@@ -243,7 +243,7 @@ This is where the symbolic model becomes a graph of named quantities and equatio
 
 File:
 
-- [egraph.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/egraph.rs)
+- [egraph.rs](../crates/myco-core/src/egraph.rs)
 
 Myco then builds an `egg`-backed equality core.
 
@@ -272,7 +272,7 @@ That preserves provenance and prevents one relation from silently “stealing”
 
 File:
 
-- [compile.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/compile.rs)
+- [compile.rs](../crates/myco-core/src/compile.rs)
 
 This is where Myco answers:
 
@@ -301,7 +301,7 @@ This step also performs structural validation such as:
 
 File:
 
-- [plan.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/plan.rs)
+- [plan.rs](../crates/myco-core/src/plan.rs)
 
 Planning happens on a single step, not on an unrolled full horizon.
 
@@ -334,7 +334,7 @@ That is the acausal-to-causal part of the system.
 
 File:
 
-- [emit.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/emit.rs)
+- [emit.rs](../crates/myco-core/src/emit.rs)
 
 Once a plan exists, Myco emits backend code.
 
@@ -362,9 +362,9 @@ For example:
 
 Files:
 
-- [crates/myco-py/src/lib.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-py/src/lib.rs)
-- [python/myco/api.py](/Users/rileyleff/Documents/dev/myco/python/myco/api.py)
-- [python/myco/types.py](/Users/rileyleff/Documents/dev/myco/python/myco/types.py)
+- [crates/myco-py/src/lib.rs](../crates/myco-py/src/lib.rs)
+- [python/myco/api.py](../python/myco/api.py)
+- [python/myco/types.py](../python/myco/types.py)
 
 The Python package is intentionally thin.
 
@@ -466,12 +466,12 @@ In other words:
 
 If you want to trace the current implementation in code, this is the best order:
 
-1. [tiny_tree.myco](/Users/rileyleff/Documents/dev/myco/crates/myco-core/tests/fixtures/tiny_tree.myco)
-2. [demos.py](/Users/rileyleff/Documents/dev/myco/python/myco/demos.py)
-3. [api.py](/Users/rileyleff/Documents/dev/myco/python/myco/api.py)
-4. [pipeline.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/pipeline.rs)
-5. [compile.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/compile.rs)
-6. [plan.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/plan.rs)
-7. [emit.rs](/Users/rileyleff/Documents/dev/myco/crates/myco-core/src/emit.rs)
+1. [tiny_tree.myco](../crates/myco-core/tests/fixtures/tiny_tree.myco)
+2. [demos.py](../python/myco/demos.py)
+3. [api.py](../python/myco/api.py)
+4. [pipeline.rs](../crates/myco-core/src/pipeline.rs)
+5. [compile.rs](../crates/myco-core/src/compile.rs)
+6. [plan.rs](../crates/myco-core/src/plan.rs)
+7. [emit.rs](../crates/myco-core/src/emit.rs)
 
 That path follows almost exactly the same journey the model takes through the system.
