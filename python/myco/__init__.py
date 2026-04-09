@@ -13,6 +13,7 @@ from .api import (
     prepare_experiment_source,
     write_demo_path,
 )
+from .demos import TrainingResult, run_tiny_tree_training_demo
 from .errors import Diagnostic, MycoError, SourcePosition, SourceSpan
 from .types import (
     Artifact,
@@ -45,6 +46,7 @@ __all__ = [
     "SlotBinding",
     "SourcePosition",
     "SourceSpan",
+    "TrainingResult",
     "compile_demo_path",
     "compile_demo_source",
     "compile_path",
@@ -61,6 +63,7 @@ __all__ = [
     "observe_sparse",
     "prepare_experiment_path",
     "prepare_experiment_source",
+    "run_tiny_tree_training_demo",
     "slot",
     "write_demo_path",
 ]
