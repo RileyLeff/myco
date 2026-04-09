@@ -5,6 +5,7 @@ use crate::{
     diagnostics::Diagnostic,
     emit,
     equality::{self, EqualityModel},
+    introspect,
     plan::{SingleStepPlan, build_single_step_plan},
     semantic::{self, SemanticModel},
     syntax::{self, ModelFile},
@@ -210,6 +211,17 @@ impl PreparedExperiment {
 
     pub fn compile(&self, backend: BackendTarget) -> CompiledArtifact {
         compile_experiment(self, backend)
+    }
+
+    pub fn explain_plan(&self) -> introspect::PlanExplanation {
+        introspect::explain_plan(self)
+    }
+
+    pub fn explain_quantity(
+        &self,
+        quantity_name: &str,
+    ) -> Result<introspect::QuantityExplanation, Vec<Diagnostic>> {
+        introspect::explain_quantity(self, quantity_name)
     }
 }
 

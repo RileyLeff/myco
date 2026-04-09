@@ -106,6 +106,34 @@ fn run() -> Result<(), String> {
             );
             Ok(())
         }
+        "explain-demo" => {
+            let path = args.next().ok_or_else(usage)?;
+            let quantity = args.next();
+            if args.next().is_some() {
+                return Err(usage());
+            }
+
+            let source =
+                fs::read_to_string(&path).map_err(|err| format!("failed to read {path}: {err}"))?;
+            let model = myco_core::pipeline::load_model(&source)
+                .map_err(|diagnostics| render_diagnostics(&path, diagnostics))?;
+            let experiment = myco_core::pipeline::prepare_experiment(
+                &model,
+                &myco_core::demo::tiny_tree_training_spec(),
+            )
+            .map_err(|diagnostics| render_diagnostics(&path, diagnostics))?;
+
+            if let Some(quantity) = quantity {
+                let explanation = experiment
+                    .explain_quantity(&quantity)
+                    .map_err(|diagnostics| render_diagnostics(&path, diagnostics))?;
+                print_quantity_explanation(&explanation);
+            } else {
+                let explanation = experiment.explain_plan();
+                print_plan_explanation(&explanation);
+            }
+            Ok(())
+        }
         _ => Err(usage()),
     }
 }
@@ -140,6 +168,120 @@ fn backend_name(value: myco_core::pipeline::BackendTarget) -> &'static str {
 }
 
 fn usage() -> String {
-    "usage: myco <check|inspect> <path>\n       myco emit-demo <python|jax> <path> [output]"
+    "usage: myco <check|inspect> <path>\n       myco emit-demo <python|jax> <path> [output]\n       myco explain-demo <path> [quantity]"
         .to_string()
+}
+
+fn print_plan_explanation(explanation: &myco_core::introspect::PlanExplanation) {
+    println!(
+        "available current: {}",
+        explanation.available_current.join(", ")
+    );
+    println!("chosen current paths:");
+    for path in &explanation.chosen_current {
+        println!(
+            "  - {} <= {} ({}, cost={}, deps=[{}])",
+            path.output,
+            path.source,
+            path.direction,
+            path.cost,
+            path.dependencies.join(", ")
+        );
+    }
+    println!("chosen temporal paths:");
+    for path in &explanation.chosen_temporal {
+        println!(
+            "  - {} <= {} ({}, cost={}, deps=[{}])",
+            path.output,
+            path.source,
+            path.direction,
+            path.cost,
+            path.dependencies.join(", ")
+        );
+    }
+    println!("alternatives:");
+    for alternative in &explanation.alternatives {
+        println!(
+            "  - {} <= {} ({}, cost={})",
+            alternative.output, alternative.source, alternative.direction, alternative.cost
+        );
+    }
+    if explanation.unresolved.is_empty() {
+        println!("unresolved: none");
+    } else {
+        println!("unresolved:");
+        for unresolved in &explanation.unresolved {
+            println!("  - {}", unresolved.quantity);
+            for blocked in &unresolved.blocked_candidates {
+                println!(
+                    "    blocked by {} ({}, cost={}, missing=[{}])",
+                    blocked.source,
+                    blocked.direction,
+                    blocked.cost,
+                    blocked.missing_dependencies.join(", ")
+                );
+            }
+        }
+    }
+}
+
+fn print_quantity_explanation(explanation: &myco_core::introspect::QuantityExplanation) {
+    println!("quantity: {}", explanation.quantity);
+    println!(
+        "direct binding: {}",
+        explanation.direct_binding.as_deref().unwrap_or("<none>")
+    );
+    println!(
+        "slot provider: {}",
+        explanation.slot_provider.as_deref().unwrap_or("<none>")
+    );
+    println!("observed: {}", explanation.observed);
+    if let Some(path) = &explanation.chosen_current {
+        println!(
+            "chosen current: {} ({}, cost={}, deps=[{}])",
+            path.source,
+            path.direction,
+            path.cost,
+            path.dependencies.join(", ")
+        );
+    } else {
+        println!("chosen current: <none>");
+    }
+    if let Some(path) = &explanation.chosen_temporal {
+        println!(
+            "chosen temporal: {} ({}, cost={}, deps=[{}])",
+            path.source,
+            path.direction,
+            path.cost,
+            path.dependencies.join(", ")
+        );
+    } else {
+        println!("chosen temporal: <none>");
+    }
+    if explanation.alternatives.is_empty() {
+        println!("alternatives: none");
+    } else {
+        println!("alternatives:");
+        for alternative in &explanation.alternatives {
+            println!(
+                "  - {} ({}, cost={})",
+                alternative.source, alternative.direction, alternative.cost
+            );
+        }
+    }
+    if explanation.blocked_candidates.is_empty() {
+        println!("blocked candidates: none");
+    } else {
+        println!("blocked candidates:");
+        for blocked in &explanation.blocked_candidates {
+            println!(
+                "  - {} ({}, cost={}, missing=[{}])",
+                blocked.source,
+                blocked.direction,
+                blocked.cost,
+                blocked.missing_dependencies.join(", ")
+            );
+        }
+    }
+    println!("unresolved: {}", explanation.unresolved);
 }

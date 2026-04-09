@@ -14,6 +14,7 @@ pub struct SingleStepPlan {
     pub equation_steps: Vec<PlannedEquation>,
     pub temporal_steps: Vec<PlannedEquation>,
     pub alternatives: Vec<AlternativePath>,
+    pub blocked_current: Vec<BlockedCandidate>,
     pub unresolved_current: Vec<QuantityId>,
 }
 
@@ -44,6 +45,16 @@ pub struct AlternativePath {
     pub direction: CandidateDirection,
     pub cost: u32,
     pub payload: AlternativePayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockedCandidate {
+    pub name: String,
+    pub source: PlanSource,
+    pub direction: CandidateDirection,
+    pub outputs: Vec<QuantityId>,
+    pub missing_current: Vec<QuantityId>,
+    pub cost: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,6 +297,18 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         return Err(diagnostics);
     }
 
+    let blocked_current = unresolved_current_candidates
+        .iter()
+        .map(|candidate| BlockedCandidate {
+            name: candidate.name.clone(),
+            source: candidate.source.clone(),
+            direction: candidate.direction,
+            outputs: candidate.outputs.clone(),
+            missing_current: candidate.missing_current_dependencies(&available_current),
+            cost: candidate.cost,
+        })
+        .collect::<Vec<_>>();
+
     let unresolved_current = unresolved_current_candidates
         .into_iter()
         .flat_map(|candidate| candidate.outputs.iter().copied())
@@ -303,6 +326,7 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         equation_steps: planned_equations,
         temporal_steps,
         alternatives,
+        blocked_current,
         unresolved_current,
     })
 }

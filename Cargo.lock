@@ -66,6 +66,9 @@ dependencies = [
 [[package]]
 name = "myco-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "myco-py"

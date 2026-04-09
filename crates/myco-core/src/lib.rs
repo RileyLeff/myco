@@ -3,6 +3,7 @@ pub mod demo;
 pub mod diagnostics;
 pub mod emit;
 pub mod equality;
+pub mod introspect;
 pub mod pipeline;
 pub mod plan;
 pub mod semantic;
