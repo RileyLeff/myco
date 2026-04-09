@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import myco
+import pytest
 
 
 FIXTURE = (
@@ -60,6 +61,7 @@ def test_experiment_builder_compiles_real_spec():
     assert artifact.suggested_filename == "tinytree_jax.py"
     assert artifact.metadata.compile_mode == "train"
     assert artifact.metadata.consistency_policy == "equation_only"
+    assert artifact.metadata.constraint_runtime_policy == "project_learned_penalize_derived"
     assert artifact.metadata.loss_helpers_enabled is True
     assert artifact.metadata.learned_slots == ("controller",)
     controller = artifact.slot_interface("controller")
@@ -211,3 +213,27 @@ def test_simulate_mode_omits_loss_helpers():
     assert "LOSS_HELPERS_ENABLED = False" in artifact.source
     assert "def obs_loss(" not in artifact.source
     assert "def total_loss(" not in artifact.source
+
+
+def test_generated_artifact_validates_runtime_inputs():
+    model = myco.load(FIXTURE)
+    experiment = model.experiment(mode="train", horizon_steps=24)
+    experiment.bind_data_series("vpd_scale", range(24))
+    experiment.bind_data_series("soil_water", range(24))
+    experiment.bind_constant("hydraulic_cond")
+    experiment.bind_constant("g_max")
+    experiment.bind_initial_state("water")
+    experiment.bind_initial_state("carbon")
+    experiment.bind_slot("controller", kind="learned")
+    experiment.observe_dense("transpiration")
+
+    artifact = experiment.compile(backend="python")
+    module = artifact.to_module("tiny_tree_validation_test")
+
+    with pytest.raises(KeyError, match="missing forcing step 0 value for 'soil_water'"):
+        module.validate_rollout_inputs(
+            {"water": -0.3, "carbon": 0.2},
+            [{"vpd_scale": 0.5} for _ in range(24)],
+            {"hydraulic_cond": 0.75, "g_max": 1.1},
+            {"controller": lambda *args: 0.0},
+        )

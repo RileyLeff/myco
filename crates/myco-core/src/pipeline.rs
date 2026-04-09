@@ -45,6 +45,7 @@ pub struct CompiledArtifact {
 pub struct ArtifactMetadata {
     pub compile_mode: String,
     pub consistency_policy: String,
+    pub constraint_runtime_policy: String,
     pub loss_helpers_enabled: bool,
     pub learned_initial_state: Vec<String>,
     pub learned_slots: Vec<String>,
@@ -120,7 +121,7 @@ pub fn compile_experiment(
     experiment: &PreparedExperiment,
     backend: BackendTarget,
 ) -> CompiledArtifact {
-    let metadata = artifact_metadata(experiment);
+    let metadata = artifact_metadata(experiment, backend);
     let source = match backend {
         BackendTarget::Python => emit::emit_python_module(experiment),
         BackendTarget::Jax => emit::emit_jax_module(experiment),
@@ -285,7 +286,7 @@ fn sanitize_module_name(input: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
-fn artifact_metadata(experiment: &PreparedExperiment) -> ArtifactMetadata {
+fn artifact_metadata(experiment: &PreparedExperiment, backend: BackendTarget) -> ArtifactMetadata {
     let slot_interfaces = experiment
         .bound
         .slot_bindings
@@ -330,6 +331,10 @@ fn artifact_metadata(experiment: &PreparedExperiment) -> ArtifactMetadata {
             crate::compile::ConsistencyPolicy::Off => "off".to_string(),
             crate::compile::ConsistencyPolicy::EquationOnly => "equation_only".to_string(),
             crate::compile::ConsistencyPolicy::All => "all".to_string(),
+        },
+        constraint_runtime_policy: match backend {
+            BackendTarget::Python => "project_learned_raise_derived".to_string(),
+            BackendTarget::Jax => "project_learned_penalize_derived".to_string(),
         },
         loss_helpers_enabled: !matches!(
             experiment.bound.mode,
@@ -472,6 +477,10 @@ mod tests {
         );
         assert_eq!(artifact.metadata.compile_mode, "train");
         assert_eq!(artifact.metadata.consistency_policy, "equation_only");
+        assert_eq!(
+            artifact.metadata.constraint_runtime_policy,
+            "project_learned_raise_derived"
+        );
         assert!(artifact.metadata.loss_helpers_enabled);
         assert_eq!(
             artifact.metadata.learned_slots,
@@ -492,6 +501,10 @@ mod tests {
         assert_eq!(artifact.backend, BackendTarget::Jax);
         assert!(artifact.source.contains("import jax.numpy as jnp"));
         assert_eq!(artifact.metadata.compile_mode, "train");
+        assert_eq!(
+            artifact.metadata.constraint_runtime_policy,
+            "project_learned_penalize_derived"
+        );
         assert_eq!(
             artifact.metadata.slot_interfaces[0].outputs,
             vec!["stomata".to_string()]

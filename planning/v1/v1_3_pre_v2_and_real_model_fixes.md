@@ -36,14 +36,14 @@ The highest-value items are:
 4. stronger constraint/runtime policy for mechanistic/state outputs
 5. small parser/runtime cleanup items that will matter immediately on larger models
 
-The first three of these have now landed in the implementation.
+The first four of these have now landed in the implementation.
 
 ## Recommended Sequence
 
 1. Fix candidate-local extraction/provenance leakage. (Done)
 2. Tighten `DataSeries` semantics so `v1` means dense per-step forcing over the horizon. (Done)
 3. Add runtime validation on emitted artifacts or the Python wrapper for keys, shapes, masks, and horizon agreement. (Done)
-4. Decide and implement a narrow runtime policy for mechanistic/state-output constraint handling.
+4. Decide and implement a narrow runtime policy for mechanistic/state-output constraint handling. (Done)
 5. Land small parser/runtime quality fixes that unblock the first real model family.
 
 This order matters because the first three items are about correctness and trust. They should land before any `v2` language or model-scope work.
@@ -154,7 +154,7 @@ on both Python and JAX artifacts, and rollout/loss paths call them before execut
 - rollout inputs and compile horizon must agree
 - missing learned slot providers are reported cleanly
 
-## 4. Constraint Runtime Policy For Mechanistic And State Outputs
+## 4. Constraint Runtime Policy For Mechanistic And State Outputs (Done)
 
 ### Current Problem
 
@@ -169,7 +169,7 @@ But they are not yet handled explicitly for:
 - temporal state updates
 - direct runtime inputs
 
-### What `v1.3` Needs
+### What Landed
 
 Do not add a full inequality solver. Just make the runtime policy explicit and narrow.
 
@@ -179,14 +179,15 @@ Reasonable `v1.3` options include:
 - project selected classes of outputs
 - assert on violation
 
-### Recommendation
+### What Landed
 
-Start with:
+The implementation now makes the policy explicit and backend-visible:
 
-- validate direct runtime inputs against simple bounds
-- add optional post-step validation for constrained states and mechanistic outputs
-
-Projection can remain limited to learned surfaces for now.
+- learned slot outputs and learned initial states are projected
+- direct runtime inputs are validated against simple bounds
+- Python artifacts raise on constrained mechanistic/current or temporal/state-output violations
+- JAX artifacts accumulate explicit `constraint_violation_loss`
+- compiled artifact metadata now exposes the backend-specific runtime policy
 
 ### Acceptance Criteria
 

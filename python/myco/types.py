@@ -419,6 +419,7 @@ class SlotInterface:
 class ArtifactMetadata:
     compile_mode: Mode
     consistency_policy: ConsistencyPolicy
+    constraint_runtime_policy: str
     loss_helpers_enabled: bool
     learned_initial_state: tuple[str, ...]
     learned_slots: tuple[str, ...]
@@ -429,6 +430,7 @@ class ArtifactMetadata:
         return cls(
             compile_mode=payload["compile_mode"],  # type: ignore[arg-type]
             consistency_policy=payload["consistency_policy"],  # type: ignore[arg-type]
+            constraint_runtime_policy=str(payload["constraint_runtime_policy"]),
             loss_helpers_enabled=bool(payload["loss_helpers_enabled"]),
             learned_initial_state=tuple(payload["learned_initial_state"]),
             learned_slots=tuple(payload["learned_slots"]),

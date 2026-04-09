@@ -74,6 +74,10 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         consistency_policy_name(bound.consistency_policy)
     ));
     lines.push(format!(
+        "CONSTRAINT_RUNTIME_POLICY = {:?}",
+        python_constraint_runtime_policy_name()
+    ));
+    lines.push(format!(
         "LOSS_HELPERS_ENABLED = {}",
         if mode_emits_loss_helpers(bound.mode) {
             "True"
@@ -208,12 +212,37 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return bound".to_string());
     lines.push(String::new());
 
+    lines.push("def _bound_violation(name, value, current):".to_string());
+    lines.push("    spec = PROJECTION_METADATA.get(name)".to_string());
+    lines.push("    if spec is None:".to_string());
+    lines.push("        return 0.0".to_string());
+    lines.push("    total = 0.0".to_string());
+    lines.push("    lower = spec.get(\"lower\")".to_string());
+    lines.push("    if lower is not None:".to_string());
+    lines.push("        lower_v = _resolve_bound(lower, current)".to_string());
+    lines.push("        total += max(lower_v - value, 0.0)".to_string());
+    lines.push("    upper = spec.get(\"upper\")".to_string());
+    lines.push("    if upper is not None:".to_string());
+    lines.push("        upper_v = _resolve_bound(upper, current)".to_string());
+    lines.push("        total += max(value - upper_v, 0.0)".to_string());
+    lines.push("    return total".to_string());
+    lines.push(String::new());
+
     lines.push("def _require_keys(mapping, required, label):".to_string());
     lines.push("    mapping = {} if mapping is None else mapping".to_string());
     lines.push("    for name in required:".to_string());
     lines.push("        if name not in mapping:".to_string());
     lines.push("            raise KeyError(f\"missing {label} value for {name!r}\")".to_string());
     lines.push("    return mapping".to_string());
+    lines.push(String::new());
+
+    lines.push("def _assert_valid(name, value, current, label):".to_string());
+    lines.push("    violation = _bound_violation(name, value, current)".to_string());
+    lines.push("    if violation > 0.0:".to_string());
+    lines.push(
+        "        raise ValueError(f\"{label} for {name!r} violates declared bounds\")"
+            .to_string(),
+    );
     lines.push(String::new());
 
     lines.push("def _project_output(name, value, current):".to_string());
@@ -255,6 +284,8 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
             .to_string(),
     );
     lines.push("    constants = _require_keys(constants, CONSTANT_NAMES, \"constant\")".to_string());
+    lines.push("    for name in CONSTANT_NAMES:".to_string());
+    lines.push("        _assert_valid(name, constants[name], constants, \"constant\")".to_string());
     lines.push("    slot_providers = {} if slot_providers is None else slot_providers".to_string());
     lines.push("    for slot_name in LEARNED_SLOT_NAMES:".to_string());
     lines.push("        if slot_name not in slot_providers:".to_string());
@@ -273,9 +304,21 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push(
         "        _require_keys(forcing, FORCING_NAMES, f\"forcing step {step_index}\")".to_string(),
     );
+    lines.push("        forcing_current = {**constants, **forcing}".to_string());
+    lines.push("        for name in FORCING_NAMES:".to_string());
+    lines.push(
+        "            _assert_valid(name, forcing[name], forcing_current, f\"forcing step {step_index}\")"
+            .to_string(),
+    );
     lines.push("    initial_state = {} if initial_state is None else initial_state".to_string());
     lines.push(
         "    _require_keys(initial_state, REQUIRED_INITIAL_STATE_NAMES, \"initial state\")"
+            .to_string(),
+    );
+    lines.push("    initial_current = {**constants, **initial_state}".to_string());
+    lines.push("    for name in REQUIRED_INITIAL_STATE_NAMES:".to_string());
+    lines.push(
+        "        _assert_valid(name, initial_state[name], initial_current, \"initial state\")"
             .to_string(),
     );
     lines.push("    resolve_initial_state(initial_state, constants, params=params)".to_string());
@@ -310,6 +353,7 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("def step(state, forcing, constants, slot_providers, dt):".to_string());
     lines.push("    current = {}".to_string());
     lines.push("    current[\"_alternatives\"] = {}".to_string());
+    lines.push("    current[\"_constraint_violation\"] = 0.0".to_string());
     lines.push("    current.update(constants)".to_string());
     lines.push("    current.update(forcing)".to_string());
     lines.push("    current.update(state)".to_string());
@@ -319,7 +363,15 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         emit_slot_step(experiment, slot, &mut lines);
     }
     for equation in &plan.equation_steps {
-        emit_equation_step(experiment, equation, &mut lines, "current");
+        emit_equation_step(
+            experiment,
+            equation,
+            &mut lines,
+            "current",
+            Some("current"),
+            Some("current[\"_constraint_violation\"]"),
+            Some("mechanistic current output"),
+        );
     }
     for alternative in consistency_alternatives(experiment) {
         emit_alternative_step(experiment, alternative, &mut lines);
@@ -327,7 +379,15 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
 
     lines.push("    next_state = dict(state)".to_string());
     for equation in &plan.temporal_steps {
-        emit_equation_step(experiment, equation, &mut lines, "next_state");
+        emit_equation_step(
+            experiment,
+            equation,
+            &mut lines,
+            "next_state",
+            Some("{**current, **next_state}"),
+            Some("current[\"_constraint_violation\"]"),
+            Some("temporal state output"),
+        );
     }
     lines.push("    return next_state, current".to_string());
     lines.push(String::new());
@@ -412,6 +472,13 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
             lines.push(String::new());
         }
 
+        lines.push("def constraint_violation_loss(trajectory):".to_string());
+        lines.push(
+            "    return sum(frame[\"current\"].get(\"_constraint_violation\", 0.0) for frame in trajectory)"
+                .to_string(),
+        );
+        lines.push(String::new());
+
         lines.push("def soft_penalty_loss(trajectory):".to_string());
         lines.push("    total = 0.0".to_string());
         lines.push("    for name, penalties in PENALTY_METADATA.items():".to_string());
@@ -430,12 +497,17 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         lines.push("def loss_components(trajectory, observations):".to_string());
         lines.push("    obs = obs_loss(trajectory, observations)".to_string());
         lines.push("    consistency = consistency_loss(trajectory)".to_string());
+        lines.push("    constraint_violation = constraint_violation_loss(trajectory)".to_string());
         lines.push("    soft_penalty = soft_penalty_loss(trajectory)".to_string());
         lines.push("    return {".to_string());
         lines.push("        \"obs_loss\": obs,".to_string());
         lines.push("        \"consistency_loss\": consistency,".to_string());
+        lines.push("        \"constraint_violation_loss\": constraint_violation,".to_string());
         lines.push("        \"soft_penalty_loss\": soft_penalty,".to_string());
-        lines.push("        \"total_loss\": obs + consistency + soft_penalty,".to_string());
+        lines.push(
+            "        \"total_loss\": obs + consistency + constraint_violation + soft_penalty,"
+                .to_string(),
+        );
         lines.push("    }".to_string());
         lines.push(String::new());
 
@@ -518,6 +590,10 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push(format!(
         "CONSISTENCY_POLICY = {:?}",
         consistency_policy_name(bound.consistency_policy)
+    ));
+    lines.push(format!(
+        "CONSTRAINT_RUNTIME_POLICY = {:?}",
+        jax_constraint_runtime_policy_name()
     ));
     lines.push(format!(
         "LOSS_HELPERS_ENABLED = {}",
@@ -650,12 +726,38 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    return jnp.asarray(bound)".to_string());
     lines.push(String::new());
 
+    lines.push("def _bound_violation(name, value, current):".to_string());
+    lines.push("    spec = PROJECTION_METADATA.get(name)".to_string());
+    lines.push("    if spec is None:".to_string());
+    lines.push("        return jnp.asarray(0.0)".to_string());
+    lines.push("    value = jnp.asarray(value)".to_string());
+    lines.push("    total = jnp.asarray(0.0)".to_string());
+    lines.push("    lower = spec.get(\"lower\")".to_string());
+    lines.push("    if lower is not None:".to_string());
+    lines.push("        lower_v = _resolve_bound(lower, current)".to_string());
+    lines.push("        total = total + jnp.sum(jnp.maximum(lower_v - value, 0.0))".to_string());
+    lines.push("    upper = spec.get(\"upper\")".to_string());
+    lines.push("    if upper is not None:".to_string());
+    lines.push("        upper_v = _resolve_bound(upper, current)".to_string());
+    lines.push("        total = total + jnp.sum(jnp.maximum(value - upper_v, 0.0))".to_string());
+    lines.push("    return total".to_string());
+    lines.push(String::new());
+
     lines.push("def _require_keys(mapping, required, label):".to_string());
     lines.push("    mapping = {} if mapping is None else mapping".to_string());
     lines.push("    for name in required:".to_string());
     lines.push("        if name not in mapping:".to_string());
     lines.push("            raise KeyError(f\"missing {label} value for {name!r}\")".to_string());
     lines.push("    return mapping".to_string());
+    lines.push(String::new());
+
+    lines.push("def _assert_valid(name, value, current, label):".to_string());
+    lines.push("    violation = _bound_violation(name, value, current)".to_string());
+    lines.push("    if bool(violation > 0):".to_string());
+    lines.push(
+        "        raise ValueError(f\"{label} for {name!r} violates declared bounds\")"
+            .to_string(),
+    );
     lines.push(String::new());
 
     lines.push("def _project_output(name, value, current):".to_string());
@@ -704,6 +806,8 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
             .to_string(),
     );
     lines.push("    constants = _require_keys(constants, CONSTANT_NAMES, \"constant\")".to_string());
+    lines.push("    for name in CONSTANT_NAMES:".to_string());
+    lines.push("        _assert_valid(name, constants[name], constants, \"constant\")".to_string());
     lines.push("    forcing_series = _require_keys(forcing_series, FORCING_NAMES, \"forcing\")".to_string());
     lines.push("    slot_providers = {} if slot_providers is None else slot_providers".to_string());
     lines.push("    for slot_name in LEARNED_SLOT_NAMES:".to_string());
@@ -718,9 +822,16 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         "            raise ValueError(f\"forcing series for {name!r} does not match compile horizon {HORIZON_STEPS}\")"
             .to_string(),
     );
+    lines.push("        _assert_valid(name, forcing_series[name], {**constants, **forcing_series}, \"forcing series\")".to_string());
     lines.push("    initial_state = {} if initial_state is None else initial_state".to_string());
     lines.push(
         "    _require_keys(initial_state, REQUIRED_INITIAL_STATE_NAMES, \"initial state\")"
+            .to_string(),
+    );
+    lines.push("    initial_current = {**constants, **initial_state}".to_string());
+    lines.push("    for name in REQUIRED_INITIAL_STATE_NAMES:".to_string());
+    lines.push(
+        "        _assert_valid(name, initial_state[name], initial_current, \"initial state\")"
             .to_string(),
     );
     lines.push("    resolve_initial_state(initial_state, constants, params=params)".to_string());
@@ -759,16 +870,34 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
 
     lines.push("def step(state, forcing, constants, slot_providers, dt):".to_string());
     lines.push("    current = {**constants, **forcing, **state}".to_string());
+    lines.push("    constraint_violation = jnp.asarray(0.0)".to_string());
     for slot in &plan.slot_steps {
         emit_slot_step(experiment, slot, &mut lines);
     }
     for equation in &plan.equation_steps {
-        emit_equation_step(experiment, equation, &mut lines, "current");
+        emit_equation_step(
+            experiment,
+            equation,
+            &mut lines,
+            "current",
+            Some("current"),
+            Some("constraint_violation"),
+            None,
+        );
     }
     lines.push("    next_state = dict(state)".to_string());
     for equation in &plan.temporal_steps {
-        emit_equation_step(experiment, equation, &mut lines, "next_state");
+        emit_equation_step(
+            experiment,
+            equation,
+            &mut lines,
+            "next_state",
+            Some("{**current, **next_state}"),
+            Some("constraint_violation"),
+            None,
+        );
     }
+    lines.push("    current[\"_constraint_violation\"] = constraint_violation".to_string());
     lines.push("    return next_state, current".to_string());
     lines.push(String::new());
 
@@ -883,6 +1012,10 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
             lines.push(String::new());
         }
 
+        lines.push("def constraint_violation_loss(history):".to_string());
+        lines.push("    return jnp.sum(history[\"_constraint_violation\"])".to_string());
+        lines.push(String::new());
+
         lines.push("def soft_penalty_loss(history):".to_string());
         lines.push("    total = 0.0".to_string());
         lines.push("    for name, penalties in PENALTY_METADATA.items():".to_string());
@@ -909,12 +1042,17 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
             "    consistency = consistency_loss(history, forcing_series=forcing_series, constants=constants, slot_providers=slot_providers)"
                 .to_string(),
         );
+        lines.push("    constraint_violation = constraint_violation_loss(history)".to_string());
         lines.push("    soft_penalty = soft_penalty_loss(history)".to_string());
         lines.push("    return {".to_string());
         lines.push("        \"obs_loss\": obs,".to_string());
         lines.push("        \"consistency_loss\": consistency,".to_string());
+        lines.push("        \"constraint_violation_loss\": constraint_violation,".to_string());
         lines.push("        \"soft_penalty_loss\": soft_penalty,".to_string());
-        lines.push("        \"total_loss\": obs + consistency + soft_penalty,".to_string());
+        lines.push(
+            "        \"total_loss\": obs + consistency + constraint_violation + soft_penalty,"
+                .to_string(),
+        );
         lines.push("    }".to_string());
         lines.push(String::new());
 
@@ -964,6 +1102,9 @@ fn emit_equation_step(
     equation: &PlannedEquation,
     lines: &mut Vec<String>,
     target_map: &str,
+    validation_context: Option<&str>,
+    violation_sink: Option<&str>,
+    raise_label: Option<&str>,
 ) {
     let target = quantity_name(experiment, equation.output);
     let expr = render_expr_for_output_unit(experiment, equation.output, &equation.expression);
@@ -971,6 +1112,20 @@ fn emit_equation_step(
         "    {target_map}[{target}] = {expr}",
         target = py_string(&target)
     ));
+    if let Some(context) = validation_context {
+        lines.push(format!(
+            "    {sink} += _bound_violation({target}, {target_map}[{target}], {context})",
+            sink = violation_sink.expect("validation requires a violation sink"),
+            target = py_string(&target)
+        ));
+        if let Some(label) = raise_label {
+            lines.push(format!(
+                "    _assert_valid({target}, {target_map}[{target}], {context}, {label})",
+                target = py_string(&target),
+                label = py_string(label)
+            ));
+        }
+    }
 }
 
 fn emit_alternative_step(
@@ -1279,6 +1434,14 @@ fn consistency_policy_name(policy: ConsistencyPolicy) -> &'static str {
     }
 }
 
+fn python_constraint_runtime_policy_name() -> &'static str {
+    "project_learned_raise_derived"
+}
+
+fn jax_constraint_runtime_policy_name() -> &'static str {
+    "project_learned_penalize_derived"
+}
+
 fn mode_emits_loss_helpers(mode: crate::compile::CompileMode) -> bool {
     !matches!(mode, crate::compile::CompileMode::Simulate)
 }
@@ -1505,6 +1668,7 @@ mod tests {
         assert!(module.contains("MODEL_NAME = \"TinyTree\""));
         assert!(module.contains("COMPILE_MODE = \"train\""));
         assert!(module.contains("LOSS_HELPERS_ENABLED = True"));
+        assert!(module.contains("CONSTRAINT_RUNTIME_POLICY = \"project_learned_raise_derived\""));
         assert!(module.contains("HORIZON_STEPS = 24"));
         assert!(module.contains("REQUIRED_INITIAL_STATE_NAMES = [\"carbon\", \"water\"]"));
         assert!(module.contains("LEARNED_SLOT_NAMES = [\"controller\"]"));
@@ -1516,6 +1680,8 @@ mod tests {
             "def validate_rollout_inputs(initial_state, forcing_steps, constants, slot_providers, params=None):"
         ));
         assert!(module.contains("def validate_observations(observations):"));
+        assert!(module.contains("def _assert_valid(name, value, current, label):"));
+        assert!(module.contains("def constraint_violation_loss(trajectory):"));
         assert!(module.contains("def step(state, forcing, constants, slot_providers, dt):"));
         assert!(module.contains(
             "def rollout(initial_state, forcing_steps, constants, slot_providers, dt, params=None):"
@@ -1530,6 +1696,7 @@ mod tests {
             "def consistency_loss(trajectory, forcing_steps=None, constants=None, slot_providers=None):"
         ));
         assert!(module.contains("def total_loss(trajectory, observations):"));
+        assert!(module.contains("\"constraint_violation_loss\": constraint_violation,"));
         assert!(module.contains(
             "current[\"stomata\"] = _project_output(\"stomata\", slot_providers[\"controller\"]("
         ));
@@ -1556,6 +1723,7 @@ mod tests {
         assert!(module.contains("from jax import lax"));
         assert!(module.contains("COMPILE_MODE = \"train\""));
         assert!(module.contains("LOSS_HELPERS_ENABLED = True"));
+        assert!(module.contains("CONSTRAINT_RUNTIME_POLICY = \"project_learned_penalize_derived\""));
         assert!(module.contains("HORIZON_STEPS = 24"));
         assert!(module.contains("REQUIRED_INITIAL_STATE_NAMES = [\"carbon\", \"water\"]"));
         assert!(module.contains("LEARNED_SLOT_NAMES = [\"controller\"]"));
@@ -1564,6 +1732,8 @@ mod tests {
             "def validate_rollout_inputs(initial_state, forcing_series, constants, slot_providers, params=None):"
         ));
         assert!(module.contains("def validate_observations(observations):"));
+        assert!(module.contains("def _assert_valid(name, value, current, label):"));
+        assert!(module.contains("def constraint_violation_loss(history):"));
         assert!(module.contains("return lax.scan(_scan_step, initial_state, forcing_series)"));
         assert!(module.contains(
             "validate_rollout_inputs(initial_state, forcing_series, constants, slot_providers, params=params)"
@@ -1572,6 +1742,7 @@ mod tests {
         assert!(module.contains("jnp.maximum(jnp.sum(_mask), 1)"));
         assert!(module.contains("jnn.sigmoid"));
         assert!(module.contains("jnn.softplus"));
+        assert!(module.contains("current[\"_constraint_violation\"] = constraint_violation"));
         assert!(module.contains(
             "def consistency_loss(history, forcing_series=None, constants=None, slot_providers=None):"
         ));
