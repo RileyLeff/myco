@@ -3,6 +3,7 @@ pub mod constraints;
 pub mod demo;
 pub mod diagnostics;
 pub mod dimensions;
+pub mod egraph;
 pub mod emit;
 pub mod equality;
 pub mod introspect;
