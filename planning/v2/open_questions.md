@@ -50,6 +50,7 @@ Open questions:
 - How much nesting or recursive composition should be allowed?
 - How much of this should be erased before equality/planning?
 - Should schemas be instantiation templates, importable packages, or both?
+- Which semantics should survive into outputs for interpretability even if they are erased for execution?
 
 ## 4. What Belongs In The Function Registry?
 
@@ -62,6 +63,8 @@ Open questions:
 - What metadata should every registered function carry?
 - How much invertibility information is needed to be useful?
 - Should registry entries declare backend implementations directly, or lower through a backend-neutral intermediate form?
+- How much of the registry should ship as a small Myco standard library versus live in versioned external packages?
+- Should plant-physiology content live entirely in domain packages such as something like `rileyleff/plant_ecophys`?
 
 ## 5. How Should Local Solve Blocks Work?
 
@@ -117,6 +120,7 @@ Open questions:
 - Which constraints are compile-time checks versus runtime projections versus penalties versus assertions?
 - How much of the constraint design should live in the core language versus the registry?
 - Is there a useful generic constraint interface, or is it better to keep a typed family of explicit constraint kinds?
+- Can a generic user-facing constraint interface coexist with strongly typed lowering semantics underneath?
 
 ## 10. How Far Should Backend Agnosticism Go?
 
@@ -128,6 +132,7 @@ Open questions:
 - Which runtime semantics belong in each backend instead of in the core?
 - How much should backend-specific optimization shape the surface language?
 - When would PyTorch or a Rust-native backend become worth supporting seriously?
+- How can the project stay JAX-first in practice without letting JAX assumptions leak into the core architecture?
 
 ## 11. What Does A Healthy Registry Ecosystem Look Like?
 
@@ -139,8 +144,21 @@ Open questions:
 - Should registries be local, remote, or both?
 - How explicit should version pinning be?
 - How much should published packages expose internals versus only public schemas/functions?
+- Should Myco follow a `cargo` / `uv` style lockfile-and-registry model from the beginning of the package system?
+- How should package namespaces and ownership work for shareable scientific models?
 
-## 12. What Should Stay Out Of Scope?
+## 12. Should Uncertainty Stay Explicit In The Graph?
+
+There is a tempting future direction around uncertainty-aware models.
+
+Open questions:
+
+- Should uncertainty stay a modeling pattern built from ordinary nodes?
+- Should things like mean and standard deviation remain explicit graph structure?
+- Is a special probabilistic node model ever worth it, or is a wrapper-schema pattern enough for a long time?
+- When would real workflows justify deeper probabilistic semantics in the core?
+
+## 13. What Should Stay Out Of Scope?
 
 One of the strengths of `v1` was scope control.
 
@@ -161,6 +179,7 @@ The biggest unresolved themes are:
 - function registries
 - local solve blocks
 - richer observation and indexing models
+- explicit but composable uncertainty patterns
 - the right boundary between a backend-neutral core and backend-specific runtimes
 
 Those questions are probably more important than any single implementation task, because they determine what `v2` is actually trying to prove.

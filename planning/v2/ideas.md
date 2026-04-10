@@ -143,6 +143,25 @@ This is probably the single biggest unlock after `v1`.
 
 The long-term system should not require every scientific relation to be decomposed manually into primitive arithmetic in surface syntax.
 
+The healthiest shape is probably:
+
+- a small standard library for very common operations
+- a package-backed registry for domain-specific functions
+
+So the goal is likely not "put all scientific functions in Myco core."
+
+It is closer to:
+
+- ship a tiny standard library for common reusable pieces
+- let real scientific content live in versioned packages
+- allow models to depend on those packages explicitly
+
+That would support workflows like:
+
+- core language and common runtime helpers shipped by Myco
+- domain packages such as `rileyleff/plant_ecophys`
+- published reusable function families and model pieces imported rather than recopied
+
 Myco will likely want a registry of named scientific functions carrying:
 
 - signature
@@ -325,6 +344,35 @@ Especially useful would be examples showing:
 
 These examples would help shape both the language and the user mental model.
 
+### 13. Explicit Uncertainty Patterns
+
+Another long-term direction worth keeping in mind is uncertainty-aware modeling.
+
+One possible temptation would be to add special built-in concepts like:
+
+- probabilistic nodes
+- nodes with value plus variance
+- first-class distributions everywhere
+
+But a simpler and more composable direction may be:
+
+- keep the core graph semantics simple
+- represent uncertainty explicitly in the world model using ordinary structure
+
+Examples:
+
+- a Gaussian-valued quantity represented by mean and standard deviation nodes
+- a distribution wrapper schema that expands into parameter nodes
+- a "value plus uncertainty" semantic component layered above ordinary quantities
+
+That would let uncertainty remain visible and inspectable rather than becoming hidden compiler magic.
+
+So the likely direction is:
+
+- no rush toward a special probabilistic core
+- prefer explicit model patterns first
+- only add deeper uncertainty semantics if real workflows demand more than those patterns can express
+
 ## Candidate V2 Model Shapes
 
 These are not commitments. They are candidate scientific anchors for `v2`.
@@ -435,11 +483,13 @@ Longer-term, useful directions might include:
 - packages that export only scientific functions
 - packages that export complete model bundles
 - registry resolution pinned to explicit versions
+- a tiny standard library shipped with Myco plus richer package registries above it
 
 This is what could make workflows like these feel natural:
 
 - import a named plant model family and fill in parameters
 - reuse a published package across projects
+- depend on a domain package such as `rileyleff/plant_ecophys`
 - depend on a domain library without copying all of its internals into one repo
 
 This should likely be designed as a layer above the core compiler, not as a requirement for the core itself to understand package management deeply.
@@ -545,7 +595,9 @@ The healthiest long-term shape may be layered:
 - `myco-jax`
 - maybe `myco-torch`
 - maybe `myco-burn`
+- a tiny Myco standard library
 - one or more domain libraries like a `myco-plant`
+- package namespaces for published scientific work
 
 That would keep the compiler general while letting real scientific building blocks accumulate in a domain-specific way.
 
@@ -641,7 +693,7 @@ A good long-term outcome would mean:
 - Myco becomes the layer where structural models are declared once
 - workflows are bound explicitly
 - emitted backend artifacts remain ordinary tools
-- domain libraries carry real scientific content
+- a small standard library exists, while real scientific content lives in versioned packages
 - learned components sit on top of, not instead of, mechanistic structure
 
 ## Short Version
