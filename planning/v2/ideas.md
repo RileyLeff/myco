@@ -563,6 +563,38 @@ Potential later directions:
 
 This is likely useful eventually, but not necessary to justify the current compiler approach.
 
+### 6. Richer Symbolic Reasoning
+
+There is also a longer-term symbolic north star that is worth stating explicitly.
+
+Myco may eventually want a much stronger symbolic layer for reasoning about:
+
+- when a relation is invertible
+- under which assumptions a branch is valid
+- how constraints propagate through equivalent expressions
+- whether a transformation is exact, approximate, or only conditionally valid
+- how "invertible-ish" or numerically trustworthy a path is in a constrained region
+
+The biggest long-term opportunity here may be an excellent type-and-constraint system that can carry rich facts about the model and expose them to stronger symbolic tooling.
+
+That could eventually support:
+
+- assumption-aware inversion
+- branch selection justified by constraints
+- more formal reasoning about valid transformations
+- theorem-prover-like workflows over model structure
+- perhaps a more serious standalone symbolic subsystem inside the broader Myco ecosystem
+
+This is important as a north star, but it should not be mistaken for an immediate implementation target.
+
+The likely sequence is:
+
+- first learn what real models require
+- then improve the constraint language and its lowering semantics
+- then deepen symbolic reasoning where it directly pays off
+
+So the long-term vision can be ambitious without forcing `v2` to become a proof assistant or general CAS project prematurely.
+
 ## V3 And Longer-Term Directions
 
 The longer-term system could become significantly more ambitious, but it helps to separate "possible future" from "next step."
@@ -637,6 +669,40 @@ Longer-term UX ideas:
 - registry browsing and schema exploration tools
 
 These are not core to scientific correctness, but they could make the system much more usable.
+
+### 6. Constraint-Rich Symbolic Core
+
+A stronger long-term destination would be a symbolic layer that does much more than algebraic simplification.
+
+The real opportunity may be to let Myco carry rich typed facts about:
+
+- dimensions
+- bounds
+- monotonicity
+- domain restrictions
+- branch conditions
+- structural assumptions
+
+and then use those facts to drive:
+
+- safer inversion
+- better planning
+- stronger explanations
+- formal reasoning about what transformations are allowed
+
+In the strongest version of this idea, Myco might eventually borrow ideas from:
+
+- modern CAS systems
+- SMT / theorem-proving workflows
+- proof assistants like Lean
+
+Not because Myco should become those systems wholesale, but because scientific model compilation eventually starts asking questions like:
+
+- what do we know?
+- what follows from it?
+- under what assumptions is this valid?
+
+That feels like a plausible long-term north star even if the practical path toward it is gradual.
 
 ## Things To Be Careful About
 

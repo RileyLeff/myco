@@ -121,6 +121,7 @@ Open questions:
 - How much of the constraint design should live in the core language versus the registry?
 - Is there a useful generic constraint interface, or is it better to keep a typed family of explicit constraint kinds?
 - Can a generic user-facing constraint interface coexist with strongly typed lowering semantics underneath?
+- What would it take for the constraint system to eventually support stronger symbolic or theorem-prover-like reasoning?
 
 ## 10. How Far Should Backend Agnosticism Go?
 
@@ -169,6 +170,19 @@ Open questions:
 - How far can discrete-time plus local solve blocks take the science before continuous-time becomes unavoidable?
 - What would signal that Myco is drifting into a general CAS or general workflow system instead of staying a scientific compiler?
 
+## 14. What Is The Right Long-Term Symbolic North Star?
+
+There is a possible long-term direction where Myco becomes much stronger at symbolic reasoning than it is today.
+
+Open questions:
+
+- What facts should the type/constraint system eventually be able to carry?
+- Which kinds of invertibility questions should be answered automatically?
+- How much should branch validity depend on propagated assumptions?
+- When does it become worth introducing theorem-prover-like or SMT-like machinery?
+- Should a stronger symbolic subsystem live inside Myco core, or as a sibling package in the ecosystem?
+- What is the boundary between "useful scientific reasoning" and "accidentally building a huge CAS"?
+
 ## Short Version
 
 The biggest unresolved themes are:
@@ -180,6 +194,7 @@ The biggest unresolved themes are:
 - local solve blocks
 - richer observation and indexing models
 - explicit but composable uncertainty patterns
+- a richer type-and-constraint system as a foundation for stronger symbolic reasoning
 - the right boundary between a backend-neutral core and backend-specific runtimes
 
 Those questions are probably more important than any single implementation task, because they determine what `v2` is actually trying to prove.
