@@ -112,6 +112,24 @@ Questions:
 - which good ideas should be explicitly declared out of scope for the first `v2` proof?
 - what would signal that `v2` is drifting into platform-building rather than proving one real model family?
 
+## 11. How Much Of The Current Flat Ceiling Should Be Addressed Before Validation?
+
+The implemented compiler is still flat and quantity-first.
+
+It also still has:
+
+- a narrow arithmetic language
+- a narrow/stringly constraint layer
+- a small hard-coded dimensions system
+- whole-graph rather than demand-driven planning
+
+Questions:
+
+- which of these ceilings are acceptable for the first real benchmark?
+- which must be addressed first because they would invalidate the benchmark as a test of the intended production direction?
+- how much richer type/constraint/unit work is needed before the first real model is worth implementing?
+- should demand-driven planning remain an explicit post-first-proof scaling issue unless the benchmark forces it sooner?
+
 ## Short Version
 
 The main `v2` questions are:
@@ -122,3 +140,4 @@ The main `v2` questions are:
 - whether the target model truly needs a function registry and/or local solve blocks
 - what the minimal real-data observation/indexing ergonomics should be
 - how to stay JAX-first without turning the core into JAX-specific architecture
+- how much of the current flat/constraint/unit ceiling must be fixed before benchmark validation is meaningful

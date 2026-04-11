@@ -60,6 +60,31 @@ This is still useful context, but much of it is already landed in the codebase.
 - `v2` should stay narrow and prove one real plant workflow
 - JAX should remain the first-class backend for training workflows
 
+## Current Implementation Versus Planned Direction
+
+One point should be stated explicitly for reviewers:
+
+- the implemented compiler is still fundamentally flat and quantity-first
+- the newer `v2` direction is more node-first, recursive, and unit-rich
+
+That means the repo currently contains both:
+
+- **implemented reality**
+  - flat `quantity` / `relation` / `slot` / `temporal`
+  - a narrow arithmetic language
+  - a small but real dimensions layer
+  - a working workflow/compiler/runtime path
+
+- **planned direction**
+  - nodes with owned internal structure
+  - richer type/constraint language
+  - imported and definable units
+  - path-based binding over recursive structure
+  - stronger proof/verification support
+
+This gap is intentional and should be kept visible. It is one of the main
+reasons `v2` needs careful sequencing rather than feature accumulation.
+
 ## What Is Still Design Work
 
 - the exact node-first structural language
@@ -68,6 +93,19 @@ This is still useful context, but much of it is already landed in the codebase.
 - how generics and repeated structure should work
 - what should be borrowed from existing unit/type libraries such as `uom`
 - the exact first real plant model family and validation benchmark
+
+## Where The Benchmark Bridge Lives
+
+The benchmark/literature bridge should live under:
+
+- [target_papers/notes.md](./target_papers/notes.md)
+
+That note should connect:
+
+- target papers and reference implementations
+- the first real model family
+- the exact benchmark shape
+- the features Myco must support before that benchmark is meaningful
 
 ## What This Folder Is Not
 
