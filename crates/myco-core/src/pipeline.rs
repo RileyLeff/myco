@@ -56,7 +56,6 @@ pub struct ArtifactMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SlotInterfaceMetadata {
     pub slot: String,
-    pub kind: String,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
     pub input_arity: usize,
@@ -223,12 +222,7 @@ impl PreparedExperiment {
                 )
             })
             .count();
-        let learned_slot_count = self
-            .bound
-            .slot_bindings
-            .iter()
-            .filter(|slot| matches!(slot.kind, crate::compile::SlotBindingKind::Learned))
-            .count();
+        let learned_slot_count = self.bound.slot_bindings.iter().count();
         let learning_count = learned_initial_count + learned_slot_count;
 
         ExperimentSummary {
@@ -303,11 +297,6 @@ fn artifact_metadata(experiment: &PreparedExperiment, backend: BackendTarget) ->
         .iter()
         .map(|slot| SlotInterfaceMetadata {
             slot: slot.slot.clone(),
-            kind: match slot.kind {
-                crate::compile::SlotBindingKind::DataSeries => "data_series".to_string(),
-                crate::compile::SlotBindingKind::Constant => "constant".to_string(),
-                crate::compile::SlotBindingKind::Learned => "learned".to_string(),
-            },
             inputs: slot
                 .inputs
                 .iter()
@@ -370,7 +359,6 @@ fn artifact_metadata(experiment: &PreparedExperiment, backend: BackendTarget) ->
             .bound
             .slot_bindings
             .iter()
-            .filter(|slot| matches!(slot.kind, crate::compile::SlotBindingKind::Learned))
             .map(|slot| slot.slot.clone())
             .collect(),
         slot_interfaces,
@@ -382,8 +370,7 @@ mod tests {
     use super::*;
     use crate::compile::{
         CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-        InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
-        SlotBindingSpec,
+        InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
     };
 
     const TINY_TREE: &str = include_str!("../tests/fixtures/tiny_tree.myco");
@@ -447,7 +434,6 @@ mod tests {
                 ],
                 slot_bindings: vec![SlotBindingSpec {
                     slot: "controller".to_string(),
-                    kind: SlotBindingKind::Learned,
                 }],
                 observations: vec![ObservationSpec {
                     quantity: "transpiration".to_string(),
@@ -570,7 +556,6 @@ mod tests {
             ],
             slot_bindings: vec![SlotBindingSpec {
                 slot: "controller".to_string(),
-                kind: SlotBindingKind::Learned,
             }],
             observations: vec![ObservationSpec {
                 quantity: "transpiration".to_string(),

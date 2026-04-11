@@ -10,7 +10,6 @@ Mode = Literal["simulate", "fit", "train"]
 ConsistencyPolicy = Literal["off", "equation_only", "all"]
 AssumptionKind = Literal["series", "constant", "initial"]
 InitialStateSource = Literal["constant", "data", "learned"]
-SlotBindingKind = Literal["data_series", "constant", "learned"]
 LearningKind = Literal["slot", "initial"]
 LossKind = Literal["mse", "huber"]
 ObservationScheduleKind = Literal["dense_per_step", "sparse"]
@@ -453,7 +452,6 @@ class CompileSpec:
 @dataclass(frozen=True, slots=True)
 class SlotInterface:
     slot: str
-    kind: SlotBindingKind
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
     input_arity: int
@@ -463,7 +461,6 @@ class SlotInterface:
     def from_payload(cls, payload: dict[str, object]) -> "SlotInterface":
         return cls(
             slot=str(payload["slot"]),
-            kind=payload["kind"],  # type: ignore[arg-type]
             inputs=tuple(payload["inputs"]),
             outputs=tuple(payload["outputs"]),
             input_arity=int(payload["input_arity"]),

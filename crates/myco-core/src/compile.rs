@@ -52,14 +52,6 @@ pub enum InitialStateSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlotBindingSpec {
     pub slot: String,
-    pub kind: SlotBindingKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SlotBindingKind {
-    DataSeries,
-    Constant,
-    Learned,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +103,6 @@ pub struct ResolvedDirectBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSlotBinding {
     pub slot: String,
-    pub kind: SlotBindingKind,
     pub provides: Vec<QuantityId>,
     pub inputs: Vec<QuantityId>,
     pub input_arity: usize,
@@ -234,7 +225,6 @@ pub fn bind_compile_spec(
 
         slot_bindings.push(ResolvedSlotBinding {
             slot: slot.name.clone(),
-            kind: binding.kind,
             provides: slot.provides.clone(),
             inputs: slot.inputs.clone(),
             input_arity: slot.inputs.len(),
@@ -342,10 +332,7 @@ fn validate_mode_requirements(spec: &CompileSpec, diagnostics: &mut Vec<Diagnost
                 ));
             }
 
-            let has_learned_slot = spec
-                .slot_bindings
-                .iter()
-                .any(|binding| binding.kind == SlotBindingKind::Learned);
+            let has_learned_slot = !spec.slot_bindings.is_empty();
             let has_learned_initial_state = spec.direct_bindings.iter().any(|binding| {
                 matches!(
                     binding.kind,
@@ -487,7 +474,6 @@ mod tests {
             ],
             slot_bindings: vec![SlotBindingSpec {
                 slot: "controller".to_string(),
-                kind: SlotBindingKind::Learned,
             }],
             observations: vec![ObservationSpec {
                 quantity: "transpiration".to_string(),
@@ -593,7 +579,6 @@ mod tests {
             ],
             slot_bindings: vec![SlotBindingSpec {
                 slot: "controller".to_string(),
-                kind: SlotBindingKind::Learned,
             }],
             observations: Vec::new(),
         };
@@ -745,7 +730,6 @@ relation passthrough:
             ],
             slot_bindings: vec![SlotBindingSpec {
                 slot: "controller".to_string(),
-                kind: SlotBindingKind::Learned,
             }],
             observations: vec![],
         };
@@ -795,7 +779,6 @@ relation passthrough:
             ],
             slot_bindings: vec![SlotBindingSpec {
                 slot: "controller".to_string(),
-                kind: SlotBindingKind::Learned,
             }],
             observations: vec![],
         };

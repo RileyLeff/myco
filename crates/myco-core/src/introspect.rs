@@ -249,7 +249,6 @@ fn explain_slot_path(
         expression: Some(render_slot_expression(
             experiment,
             &slot.slot,
-            slot.kind,
             &slot.inputs,
             focused_output,
         )),
@@ -363,25 +362,16 @@ fn render_expr(experiment: &PreparedExperiment, expr: &CoreExpr) -> String {
 fn render_slot_expression(
     experiment: &PreparedExperiment,
     slot_name: &str,
-    kind: crate::compile::SlotBindingKind,
     inputs: &[QuantityId],
     focused_output: Option<QuantityId>,
 ) -> String {
     let output_suffix = focused_output
         .map(|output| format!(" -> {}", quantity_name(experiment, output)))
         .unwrap_or_default();
-    match kind {
-        crate::compile::SlotBindingKind::DataSeries => focused_output
-            .map(|output| format!("data_series({})", quantity_name(experiment, output)))
-            .unwrap_or_else(|| format!("data_series<{slot_name}>{output_suffix}")),
-        crate::compile::SlotBindingKind::Constant => focused_output
-            .map(|output| format!("constant({})", quantity_name(experiment, output)))
-            .unwrap_or_else(|| format!("constant<{slot_name}>{output_suffix}")),
-        crate::compile::SlotBindingKind::Learned => format!(
-            "{slot_name}({inputs}){output_suffix}",
-            inputs = quantity_name_list(experiment, inputs).join(", ")
-        ),
-    }
+    format!(
+        "{slot_name}({inputs}){output_suffix}",
+        inputs = quantity_name_list(experiment, inputs).join(", ")
+    )
 }
 
 fn alternative_expression(
@@ -393,13 +383,11 @@ fn alternative_expression(
             Some(render_expr(experiment, expression))
         }
         crate::plan::AlternativePayload::Slot {
-            kind,
             inputs,
             output_index: _,
         } => Some(render_slot_expression(
             experiment,
             &plan_source_name(&alternative.source),
-            *kind,
             inputs,
             Some(alternative.output),
         )),
@@ -417,15 +405,7 @@ fn blocked_candidate_expression(
             .slot_steps
             .iter()
             .find(|slot| slot.slot == *slot_name)
-            .map(|slot| {
-                render_slot_expression(
-                    experiment,
-                    slot_name,
-                    slot.kind,
-                    &slot.inputs,
-                    Some(quantity),
-                )
-            })
+            .map(|slot| render_slot_expression(experiment, slot_name, &slot.inputs, Some(quantity)))
             .or_else(|| {
                 experiment
                     .bound
@@ -433,13 +413,7 @@ fn blocked_candidate_expression(
                     .iter()
                     .find(|slot| slot.slot == *slot_name)
                     .map(|slot| {
-                        render_slot_expression(
-                            experiment,
-                            slot_name,
-                            slot.kind,
-                            &slot.inputs,
-                            Some(quantity),
-                        )
+                        render_slot_expression(experiment, slot_name, &slot.inputs, Some(quantity))
                     })
             }),
         PlanSource::Equation {
@@ -590,8 +564,7 @@ mod tests {
     use crate::{
         compile::{
             CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
-            SlotBindingSpec,
+            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
         },
         pipeline::{load_model, prepare_experiment},
     };
@@ -729,7 +702,6 @@ relation blocked:
             ],
             slot_bindings: vec![SlotBindingSpec {
                 slot: "controller".to_string(),
-                kind: SlotBindingKind::Learned,
             }],
             observations: vec![ObservationSpec {
                 quantity: "transpiration".to_string(),

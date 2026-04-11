@@ -1,5 +1,5 @@
 use crate::{
-    compile::{ConsistencyPolicy, DirectBindingKind, InitialStateSource, SlotBindingKind},
+    compile::{ConsistencyPolicy, DirectBindingKind, InitialStateSource},
     constraints::{ConstraintBound, PenaltySpec},
     equality::{CoreExpr, QuantityId, SpecialRef, TimeReference},
     pipeline::PreparedExperiment,
@@ -149,9 +149,8 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
             .map(|quantity| quantity_name(experiment, *quantity))
             .collect::<Vec<_>>();
         lines.push(format!(
-            "    {:?}: {{\"kind\": {:?}, \"inputs\": {}, \"outputs\": {}, \"input_arity\": {}, \"output_arity\": {}}},",
+            "    {:?}: {{\"inputs\": {}, \"outputs\": {}, \"input_arity\": {}, \"output_arity\": {}}},",
             slot.slot,
-            slot.kind_name(),
             render_py_string_list(&input_names),
             render_py_string_list(&output_names),
             slot.input_arity,
@@ -672,9 +671,8 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
             .map(|quantity| quantity_name(experiment, *quantity))
             .collect::<Vec<_>>();
         lines.push(format!(
-            "    {:?}: {{\"kind\": {:?}, \"inputs\": {}, \"outputs\": {}, \"input_arity\": {}, \"output_arity\": {}}},",
+            "    {:?}: {{\"inputs\": {}, \"outputs\": {}, \"input_arity\": {}, \"output_arity\": {}}},",
             slot.slot,
-            slot.kind_name(),
             render_py_string_list(&input_names),
             render_py_string_list(&output_names),
             slot.input_arity,
@@ -1002,7 +1000,6 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
                     ));
                     lines.push("    total += jnp.sum(_residual * _residual)".to_string());
                 } else if let AlternativePayload::Slot {
-                    kind,
                     inputs,
                     output_index,
                 } = &alternative.payload
@@ -1011,7 +1008,6 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
                     let alt_expr = render_slot_output_expr_for_history(
                         experiment,
                         &alternative.source,
-                        *kind,
                         inputs,
                         alternative.output,
                         *output_index,
@@ -1083,7 +1079,7 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
 }
 
 fn emit_slot_step(experiment: &PreparedExperiment, slot: &PlannedSlot, lines: &mut Vec<String>) {
-    if slot.kind == SlotBindingKind::Learned && slot.outputs.len() > 1 {
+    if slot.outputs.len() > 1 {
         let call = render_learned_slot_call(experiment, &slot.slot, &slot.inputs, "current");
         lines.push(format!("    _slot_out = {call}"));
         for (index, output) in slot.outputs.iter().enumerate() {
@@ -1096,14 +1092,8 @@ fn emit_slot_step(experiment: &PreparedExperiment, slot: &PlannedSlot, lines: &m
     }
 
     for (index, output) in slot.outputs.iter().enumerate() {
-        let raw_value = render_slot_output_expr_for_step(
-            experiment,
-            &slot.slot,
-            slot.kind,
-            &slot.inputs,
-            *output,
-            index,
-        );
+        let raw_value =
+            render_slot_output_expr_for_step(experiment, &slot.slot, &slot.inputs, *output, index);
         let output_name = quantity_name(experiment, *output);
         lines.push(format!(
             "    current[{output}] = _project_output({output}, {raw_value}, current)",
@@ -1154,13 +1144,11 @@ fn emit_alternative_step(
             render_expr_for_output_unit(experiment, alternative.output, expression)
         }
         AlternativePayload::Slot {
-            kind,
             inputs,
             output_index,
         } => render_slot_output_expr_for_current(
             experiment,
             &alternative.source,
-            *kind,
             inputs,
             alternative.output,
             *output_index,
@@ -1346,15 +1334,6 @@ fn forcing_quantity_names(experiment: &PreparedExperiment) -> Vec<String> {
             _ => None,
         })
         .collect::<Vec<_>>();
-    for slot in &experiment.bound.slot_bindings {
-        if slot.kind == SlotBindingKind::DataSeries {
-            names.extend(
-                slot.provides
-                    .iter()
-                    .map(|quantity| quantity_name(experiment, *quantity)),
-            );
-        }
-    }
     names.sort();
     names.dedup();
     names
@@ -1370,15 +1349,6 @@ fn constant_quantity_names(experiment: &PreparedExperiment) -> Vec<String> {
             _ => None,
         })
         .collect::<Vec<_>>();
-    for slot in &experiment.bound.slot_bindings {
-        if slot.kind == SlotBindingKind::Constant {
-            names.extend(
-                slot.provides
-                    .iter()
-                    .map(|quantity| quantity_name(experiment, *quantity)),
-            );
-        }
-    }
     names.sort();
     names.dedup();
     names
@@ -1444,7 +1414,6 @@ fn learned_slot_names(bound: &crate::compile::BoundModel) -> Vec<String> {
     let mut names = bound
         .slot_bindings
         .iter()
-        .filter(|slot| slot.kind == SlotBindingKind::Learned)
         .map(|slot| slot.slot.clone())
         .collect::<Vec<_>>();
     names.sort();
@@ -1521,56 +1490,32 @@ fn render_learned_slot_call(
 fn render_slot_output_expr_for_step(
     experiment: &PreparedExperiment,
     slot_name: &str,
-    kind: SlotBindingKind,
     inputs: &[QuantityId],
-    output: QuantityId,
+    _output: QuantityId,
     output_index: usize,
 ) -> String {
-    let output_name = py_string(&quantity_name(experiment, output));
-    match kind {
-        SlotBindingKind::DataSeries => format!("forcing[{output_name}]"),
-        SlotBindingKind::Constant => format!("constants[{output_name}]"),
-        SlotBindingKind::Learned => {
-            let call = render_learned_slot_call(experiment, slot_name, inputs, "current");
-            if output_index == 0 {
-                call
-            } else {
-                format!("({call})[{output_index}]")
-            }
-        }
+    let call = render_learned_slot_call(experiment, slot_name, inputs, "current");
+    if output_index == 0 {
+        call
+    } else {
+        format!("({call})[{output_index}]")
     }
 }
 
 fn render_slot_output_expr_for_current(
     experiment: &PreparedExperiment,
     source: &crate::plan::PlanSource,
-    kind: SlotBindingKind,
     inputs: &[QuantityId],
     output: QuantityId,
     output_index: usize,
 ) -> String {
-    let raw = match kind {
-        SlotBindingKind::DataSeries => {
-            format!("forcing[{}]", py_string(&quantity_name(experiment, output)))
-        }
-        SlotBindingKind::Constant => {
-            format!(
-                "constants[{}]",
-                py_string(&quantity_name(experiment, output))
-            )
-        }
-        SlotBindingKind::Learned => {
-            let call = render_learned_slot_call(
-                experiment,
-                slot_name_from_source(source),
-                inputs,
-                "current",
-            );
-            if output_index == 0 {
-                call
-            } else {
-                format!("({call})[{output_index}]")
-            }
+    let raw = {
+        let call =
+            render_learned_slot_call(experiment, slot_name_from_source(source), inputs, "current");
+        if output_index == 0 {
+            call
+        } else {
+            format!("({call})[{output_index}]")
         }
     };
     format!(
@@ -1582,27 +1527,18 @@ fn render_slot_output_expr_for_current(
 fn render_slot_output_expr_for_history(
     experiment: &PreparedExperiment,
     source: &crate::plan::PlanSource,
-    kind: SlotBindingKind,
     inputs: &[QuantityId],
     output: QuantityId,
     output_index: usize,
 ) -> String {
     let output_name = py_string(&quantity_name(experiment, output));
-    let raw = match kind {
-        SlotBindingKind::DataSeries => format!("forcing_series[{output_name}]"),
-        SlotBindingKind::Constant => format!("constants[{output_name}]"),
-        SlotBindingKind::Learned => {
-            let call = render_learned_slot_call(
-                experiment,
-                slot_name_from_source(source),
-                inputs,
-                "history",
-            );
-            if output_index == 0 {
-                call
-            } else {
-                format!("({call})[{output_index}]")
-            }
+    let raw = {
+        let call =
+            render_learned_slot_call(experiment, slot_name_from_source(source), inputs, "history");
+        if output_index == 0 {
+            call
+        } else {
+            format!("({call})[{output_index}]")
         }
     };
     format!("_project_output({output_name}, {raw}, history)")
@@ -1656,28 +1592,13 @@ fn render_python_penalties(penalties: &[PenaltySpec]) -> String {
     format!("[{rendered}]")
 }
 
-trait SlotKindName {
-    fn kind_name(&self) -> &'static str;
-}
-
-impl SlotKindName for crate::compile::ResolvedSlotBinding {
-    fn kind_name(&self) -> &'static str {
-        match self.kind {
-            crate::compile::SlotBindingKind::DataSeries => "data_series",
-            crate::compile::SlotBindingKind::Constant => "constant",
-            crate::compile::SlotBindingKind::Learned => "learned",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         compile::{
             CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
-            SlotBindingSpec,
+            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
         },
         pipeline::{load_model, prepare_experiment},
     };
@@ -1831,7 +1752,6 @@ temporal water_step:
                 ],
                 slot_bindings: vec![SlotBindingSpec {
                     slot: "controller".to_string(),
-                    kind: SlotBindingKind::Learned,
                 }],
                 observations: vec![ObservationSpec {
                     quantity: "stomata".to_string(),
@@ -2001,75 +1921,6 @@ temporal water_step:
     }
 
     #[test]
-    fn emits_data_and_constant_slot_runtime_semantics() {
-        let source = r#"
-model SlotKinds
-
-quantity forcing : scalar
-quantity water : scalar
-quantity data_out : scalar
-quantity const_out : scalar
-
-slot data_slot provides [data_out]:
-  inputs = [forcing]
-
-slot const_slot provides [const_out]:
-  inputs = [forcing]
-
-temporal water_step:
-  water[t+1] = water[t]
-"#;
-
-        let model = load_model(source).expect("model should load");
-        let experiment = prepare_experiment(
-            &model,
-            &CompileSpec {
-                mode: CompileMode::Simulate,
-                horizon_steps: 4,
-                consistency_policy: ConsistencyPolicy::EquationOnly,
-                direct_bindings: vec![DirectBindingSpec {
-                    quantity: "water".to_string(),
-                    kind: DirectBindingKind::InitialState {
-                        source: InitialStateSource::Constant,
-                    },
-                }],
-                slot_bindings: vec![
-                    SlotBindingSpec {
-                        slot: "data_slot".to_string(),
-                        kind: SlotBindingKind::DataSeries,
-                    },
-                    SlotBindingSpec {
-                        slot: "const_slot".to_string(),
-                        kind: SlotBindingKind::Constant,
-                    },
-                ],
-                observations: vec![],
-            },
-        )
-        .expect("experiment should prepare");
-
-        let python_module = emit_python_module(&experiment);
-        assert!(python_module.contains("FORCING_NAMES = [\"data_out\"]"));
-        assert!(python_module.contains("CONSTANT_NAMES = [\"const_out\"]"));
-        assert!(python_module.contains(
-            "current[\"data_out\"] = _project_output(\"data_out\", forcing[\"data_out\"], current)"
-        ));
-        assert!(python_module.contains(
-            "current[\"const_out\"] = _project_output(\"const_out\", constants[\"const_out\"], current)"
-        ));
-
-        let jax_module = emit_jax_module(&experiment);
-        assert!(jax_module.contains("FORCING_NAMES = [\"data_out\"]"));
-        assert!(jax_module.contains("CONSTANT_NAMES = [\"const_out\"]"));
-        assert!(jax_module.contains(
-            "current[\"data_out\"] = _project_output(\"data_out\", forcing[\"data_out\"], current)"
-        ));
-        assert!(jax_module.contains(
-            "current[\"const_out\"] = _project_output(\"const_out\", constants[\"const_out\"], current)"
-        ));
-    }
-
-    #[test]
     fn consistency_policy_off_disables_emission() {
         let model = load_model(TINY_TREE).expect("model should load");
         let mut spec = tiny_tree_spec();
@@ -2154,7 +2005,6 @@ temporal water_step:
                 ],
                 slot_bindings: vec![SlotBindingSpec {
                     slot: "provider".to_string(),
-                    kind: SlotBindingKind::Learned,
                 }],
                 observations: vec![ObservationSpec {
                     quantity: "x".to_string(),
@@ -2268,7 +2118,6 @@ temporal water_step:
             ],
             slot_bindings: vec![SlotBindingSpec {
                 slot: "controller".to_string(),
-                kind: SlotBindingKind::Learned,
             }],
             observations: vec![ObservationSpec {
                 quantity: "transpiration".to_string(),

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    compile::{BoundModel, ResolvedSlotBinding, SlotBindingKind},
+    compile::{BoundModel, ResolvedSlotBinding},
     diagnostics::Diagnostic,
     egraph::{DirectionalRegistration, ExpressionDirection, extract_available_expression},
     equality::{CoreExpr, EquationId, QuantityId, QuantityRef, SpecialRef, TimeReference},
@@ -22,7 +22,6 @@ pub struct SingleStepPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedSlot {
     pub slot: String,
-    pub kind: SlotBindingKind,
     pub inputs: Vec<QuantityId>,
     pub outputs: Vec<QuantityId>,
     pub cost: u32,
@@ -71,7 +70,6 @@ pub enum PlanSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AlternativePayload {
     Slot {
-        kind: SlotBindingKind,
         inputs: Vec<QuantityId>,
         output_index: usize,
     },
@@ -232,10 +230,9 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
         }
 
         match &candidate.payload {
-            CandidatePayload::Slot { kind, inputs } => {
+            CandidatePayload::Slot { inputs } => {
                 planned_slots.push(PlannedSlot {
                     slot: candidate.name.clone(),
-                    kind: *kind,
                     inputs: inputs.clone(),
                     outputs: candidate.outputs.clone(),
                     cost: entry.cost,
@@ -401,7 +398,6 @@ struct Candidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CandidatePayload {
     Slot {
-        kind: SlotBindingKind,
         inputs: Vec<QuantityId>,
     },
     Equation {
@@ -442,10 +438,9 @@ impl Candidate {
             timing: CandidateTiming::Current,
             outputs: slot.provides,
             payload: CandidatePayload::Slot {
-                kind: slot.kind,
                 inputs: slot.inputs,
             },
-            cost: slot_cost(slot.kind),
+            cost: slot_cost(),
             scheduled: false,
         }
     }
@@ -482,25 +477,19 @@ impl Candidate {
         available_current: &HashSet<QuantityId>,
     ) -> Result<Option<ResolvedCandidate>, Diagnostic> {
         match &self.payload {
-            CandidatePayload::Slot { kind, inputs } => {
-                let dependencies = match kind {
-                    SlotBindingKind::DataSeries | SlotBindingKind::Constant => Vec::new(),
-                    SlotBindingKind::Learned => inputs
-                        .iter()
-                        .copied()
-                        .map(|quantity| Dependency {
-                            quantity: Some(quantity),
-                            timing: DependencyTiming::Current,
-                        })
-                        .collect(),
-                };
+            CandidatePayload::Slot { inputs } => {
+                let dependencies = inputs
+                    .iter()
+                    .copied()
+                    .map(|quantity| Dependency {
+                        quantity: Some(quantity),
+                        timing: DependencyTiming::Current,
+                    })
+                    .collect();
 
-                let ready = match kind {
-                    SlotBindingKind::DataSeries | SlotBindingKind::Constant => true,
-                    SlotBindingKind::Learned => inputs
-                        .iter()
-                        .all(|quantity| available_current.contains(quantity)),
-                };
+                let ready = inputs
+                    .iter()
+                    .all(|quantity| available_current.contains(quantity));
 
                 if ready {
                     Ok(Some(ResolvedCandidate {
@@ -552,10 +541,7 @@ impl Candidate {
 
     fn current_dependencies(&self) -> Vec<QuantityId> {
         match &self.payload {
-            CandidatePayload::Slot { kind, inputs } => match kind {
-                SlotBindingKind::DataSeries | SlotBindingKind::Constant => Vec::new(),
-                SlotBindingKind::Learned => inputs.clone(),
-            },
+            CandidatePayload::Slot { inputs } => inputs.clone(),
             CandidatePayload::Equation { registration } => {
                 collect_dependencies(&registration.seed_expression)
                     .ok()
@@ -582,14 +568,11 @@ impl Candidate {
         available_current: &HashSet<QuantityId>,
     ) -> Vec<QuantityId> {
         match &self.payload {
-            CandidatePayload::Slot { kind, inputs } => match kind {
-                SlotBindingKind::DataSeries | SlotBindingKind::Constant => Vec::new(),
-                SlotBindingKind::Learned => inputs
-                    .iter()
-                    .copied()
-                    .filter(|quantity| !available_current.contains(quantity))
-                    .collect(),
-            },
+            CandidatePayload::Slot { inputs } => inputs
+                .iter()
+                .copied()
+                .filter(|quantity| !available_current.contains(quantity))
+                .collect(),
             CandidatePayload::Equation { .. } => self
                 .best_case(bound)
                 .ok()
@@ -616,18 +599,15 @@ impl Candidate {
 
     fn best_case(&self, bound: &BoundModel) -> Result<Option<ResolvedCandidate>, Diagnostic> {
         match &self.payload {
-            CandidatePayload::Slot { kind, inputs } => {
-                let dependencies = match kind {
-                    SlotBindingKind::DataSeries | SlotBindingKind::Constant => Vec::new(),
-                    SlotBindingKind::Learned => inputs
-                        .iter()
-                        .copied()
-                        .map(|quantity| Dependency {
-                            quantity: Some(quantity),
-                            timing: DependencyTiming::Current,
-                        })
-                        .collect(),
-                };
+            CandidatePayload::Slot { inputs } => {
+                let dependencies = inputs
+                    .iter()
+                    .copied()
+                    .map(|quantity| Dependency {
+                        quantity: Some(quantity),
+                        timing: DependencyTiming::Current,
+                    })
+                    .collect();
 
                 Ok(Some(ResolvedCandidate {
                     expression: None,
@@ -672,8 +652,7 @@ impl Candidate {
 
     fn alternative_payload_for(&self, output: QuantityId) -> AlternativePayload {
         match &self.payload {
-            CandidatePayload::Slot { kind, inputs } => AlternativePayload::Slot {
-                kind: *kind,
+            CandidatePayload::Slot { inputs } => AlternativePayload::Slot {
                 inputs: inputs.clone(),
                 output_index: self
                     .outputs
@@ -742,11 +721,8 @@ fn collect_dependencies_into(
     Ok(())
 }
 
-fn slot_cost(kind: SlotBindingKind) -> u32 {
-    match kind {
-        SlotBindingKind::DataSeries | SlotBindingKind::Constant => 0,
-        SlotBindingKind::Learned => 5,
-    }
+fn slot_cost() -> u32 {
+    5
 }
 
 fn detect_cycle(candidates: &[&Candidate]) -> Option<Vec<QuantityId>> {
@@ -820,8 +796,8 @@ mod tests {
     use crate::{
         compile::{
             CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
-            SlotBindingSpec, bind_compile_spec,
+            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
+            bind_compile_spec,
         },
         equality, semantic,
         syntax::parse_and_validate,
@@ -1015,7 +991,6 @@ temporal water_step:
                 ],
                 slot_bindings: vec![SlotBindingSpec {
                     slot: "controller".to_string(),
-                    kind: SlotBindingKind::Learned,
                 }],
                 observations: vec![ObservationSpec {
                     quantity: "transpiration".to_string(),

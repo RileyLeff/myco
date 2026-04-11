@@ -408,7 +408,8 @@ The metadata includes things like:
 - constraint runtime policy
 - learned slot names
 - learned initial-state names
-- slot interfaces
+- slot interfaces:
+  input names, output names, and arities for each learned slot
 
 So the user can inspect not just the generated source, but the contract of the compiled artifact.
 

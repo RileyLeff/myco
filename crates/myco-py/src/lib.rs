@@ -3,8 +3,7 @@ use std::{fs, path::PathBuf};
 use myco_core::{
     compile::{
         CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-        InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
-        SlotBindingSpec,
+        InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
     },
     demo,
     diagnostics::Diagnostic,
@@ -332,7 +331,6 @@ fn parse_learning_binding(item: Bound<'_, PyAny>) -> PyResult<LearningBindingSpe
         })),
         "slot" => Ok(LearningBindingSpec::Slot(SlotBindingSpec {
             slot: required_str_item(dict, "slot")?,
-            kind: SlotBindingKind::Learned,
         })),
         other => Err(PyValueError::new_err(format!(
             "unsupported learning kind '{other}'"

@@ -68,7 +68,6 @@ def test_experiment_builder_compiles_real_spec():
     assert artifact.metadata.learned_slots == ("controller",)
     controller = artifact.slot_interface("controller")
     assert controller is not None
-    assert controller.kind == "learned"
     assert controller.inputs == (
         "water",
         "carbon",

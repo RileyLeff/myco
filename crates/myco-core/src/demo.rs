@@ -1,7 +1,6 @@
 use crate::compile::{
     CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-    InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingKind,
-    SlotBindingSpec,
+    InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
 };
 
 pub fn tiny_tree_training_spec() -> CompileSpec {
@@ -45,7 +44,6 @@ pub fn tiny_tree_training_spec() -> CompileSpec {
         ],
         slot_bindings: vec![SlotBindingSpec {
             slot: "controller".to_string(),
-            kind: SlotBindingKind::Learned,
         }],
         observations: vec![ObservationSpec {
             quantity: "transpiration".to_string(),
