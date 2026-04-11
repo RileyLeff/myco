@@ -8,6 +8,8 @@ It captures one design decision that should probably be settled before building 
 
 This is an implementation note, not a final spec.
 
+For the concrete migration sequence, see [v2_do_this_first_implementation_plan.md](./v2_do_this_first_implementation_plan.md).
+
 ## Why This Matters
 
 If this boundary stays blurry, Myco will accumulate debt in exactly the wrong place:
