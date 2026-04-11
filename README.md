@@ -1,6 +1,6 @@
 # Myco
 
-Myco is a compiler prototype for acausal scientific models with compile-time
+Myco is a compiler for workflow-neutral scientific models with explicit
 binding, provider-aware planning, and Python/JAX artifact emission.
 
 ## Python development
@@ -27,15 +27,14 @@ After changing the Rust extension crate, rebuild the editable package with:
 UV_PROJECT_ENVIRONMENT=venv uv sync --reinstall-package myco
 ```
 
-The initial Python surface is intentionally narrow:
+## Recommended Python Workflow
 
-- `myco.load_model_source(...)`
-- `myco.load_model_path(...)`
-- `myco.compile_demo_source(...)`
-- `myco.compile_demo_path(...)`
-- `myco.write_demo_path(...)`
+The main user path is:
 
-There is also an initial real experiment/binding surface:
+1. load a structural `.myco` model
+2. create an experiment for one workflow
+3. `assume_*`, `observe_*`, and `learn_*`
+4. compile to an ordinary Python or JAX artifact
 
 ```python
 from pathlib import Path
@@ -56,14 +55,31 @@ experiment.learn_slot("controller")
 experiment.observe_dense("transpiration")
 
 artifact = experiment.compile(backend="jax")
-artifact.write()
+module = artifact.to_module("tiny_tree_artifact")
 ```
 
 The workflow vocabulary is:
 
-- `assume_*` for directly supplied values
+- `assume_*` for supplied values
 - `observe_*` for evidence
 - `learn_*` for trainable components
+
+Compiled artifacts expose typed metadata and slot contracts:
+
+```python
+import myco
+
+artifact = myco.compile_spec_path(
+    "crates/myco-core/tests/fixtures/tiny_tree.myco",
+    "examples/tiny_tree_spec.json",
+    backend="jax",
+)
+
+print(artifact.metadata.compile_mode)
+print(artifact.metadata.persistent_quantities)
+print(artifact.metadata.learned_slots)
+print(artifact.slot_interface("controller"))
+```
 
 The Python package now has a conventional structure:
 
@@ -83,3 +99,6 @@ artifact = myco.compile_spec_path(
     backend="jax",
 )
 ```
+
+For a longer walkthrough of the same TinyTree flow, see
+[docs/end_to_end_walkthrough.md](docs/end_to_end_walkthrough.md).

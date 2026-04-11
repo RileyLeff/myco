@@ -19,7 +19,7 @@ The walkthrough uses the current TinyTree demo as the concrete example:
 From the user’s point of view, Myco has three layers:
 
 1. a `.myco` file that describes the world
-2. a Python-side experiment binding that says what is data, what is fixed, what is learned, and what is observed
+2. a Python-side experiment binding that says what is assumed, what is observed, and what is learned for one workflow
 3. a compiled artifact that behaves like ordinary Python or JAX code
 
 The important idea is that the `.myco` file is not a training script and not a simulator script. It is the shared structural model.
@@ -281,13 +281,13 @@ File:
 
 - [compile.rs](../crates/myco-core/src/compile.rs)
 
-This is where Myco answers:
+This is where Myco answers workflow questions such as:
 
-- which quantities are dense forcing?
-- which are constants?
-- which quantities need workflow initial values?
+- which quantities are assumed as per-step series?
+- which are assumed as constants?
+- which quantities have workflow initial values?
 - which slots are learned?
-- which quantities are observed?
+- which quantities are observed as evidence?
 
 For TinyTree training, the binding says:
 
@@ -406,10 +406,11 @@ The metadata includes things like:
 - compile mode
 - consistency policy
 - constraint runtime policy
+- persistent quantities
 - learned slot names
 - learned initial-state names
 - slot interfaces:
-  input names, output names, and arities for each learned slot
+  slot name, input names, output names, and arities for each learned slot
 
 So the user can inspect not just the generated source, but the contract of the compiled artifact.
 
