@@ -141,6 +141,22 @@ The compiler should be able to say:
 
 without depending on a `state` keyword in the source model.
 
+### Current Status
+
+The first slice of this phase is now implemented:
+
+- equality lowering infers persistent quantities from temporal update left-hand sides
+- compile validation uses inferred persistence when deciding which quantities require initial-state bindings
+- emitted artifacts and typed artifact metadata now expose persistent quantities explicitly
+
+For compatibility during the migration:
+
+- legacy source-level `state` declarations still contribute to persistence
+
+That is deliberate.
+
+It means the compiler's internal source of truth is no longer only the source keyword, while existing models continue to compile until binding-time persistence annotations are ready.
+
 ## Phase 2: Expand Binding-Time Role Annotations
 
 ### Objective

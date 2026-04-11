@@ -31,15 +31,10 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         render_py_string_list(&quantity_names)
     ));
 
-    let state_names = bound
-        .quantities
-        .iter()
-        .filter(|quantity| matches!(quantity.quantity.kind, crate::syntax::QuantityKind::State))
-        .map(|quantity| quantity.quantity.name.as_str())
-        .collect::<Vec<_>>();
+    let persistent_quantity_names = persistent_quantity_names(bound, experiment);
     lines.push(format!(
-        "STATE_NAMES = {}",
-        render_py_string_list(&state_names)
+        "PERSISTENT_QUANTITY_NAMES = {}",
+        render_py_string_list(&persistent_quantity_names)
     ));
 
     let forcing_names = forcing_quantity_names(experiment);
@@ -215,7 +210,10 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
 
     lines.push("def _safe_div(numerator, denominator):".to_string());
     lines.push("    if abs(denominator) < SAFE_DIV_EPS:".to_string());
-    lines.push("        raise ZeroDivisionError(\"division denominator is too close to zero\")".to_string());
+    lines.push(
+        "        raise ZeroDivisionError(\"division denominator is too close to zero\")"
+            .to_string(),
+    );
     lines.push("    return numerator / denominator".to_string());
     lines.push(String::new());
 
@@ -247,8 +245,7 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
     lines.push("    violation = _bound_violation(name, value, current)".to_string());
     lines.push("    if violation > 0.0:".to_string());
     lines.push(
-        "        raise ValueError(f\"{label} for {name!r} violates declared bounds\")"
-            .to_string(),
+        "        raise ValueError(f\"{label} for {name!r} violates declared bounds\")".to_string(),
     );
     lines.push(String::new());
 
@@ -290,7 +287,8 @@ pub fn emit_python_module(experiment: &PreparedExperiment) -> String {
         "def validate_rollout_inputs(initial_state, forcing_steps, constants, slot_providers, params=None):"
             .to_string(),
     );
-    lines.push("    constants = _require_keys(constants, CONSTANT_NAMES, \"constant\")".to_string());
+    lines
+        .push("    constants = _require_keys(constants, CONSTANT_NAMES, \"constant\")".to_string());
     lines.push("    for name in CONSTANT_NAMES:".to_string());
     lines.push("        _assert_valid(name, constants[name], constants, \"constant\")".to_string());
     lines.push("    slot_providers = {} if slot_providers is None else slot_providers".to_string());
@@ -557,15 +555,10 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         render_py_string_list(&quantity_names)
     ));
 
-    let state_names = bound
-        .quantities
-        .iter()
-        .filter(|quantity| matches!(quantity.quantity.kind, crate::syntax::QuantityKind::State))
-        .map(|quantity| quantity.quantity.name.as_str())
-        .collect::<Vec<_>>();
+    let persistent_quantity_names = persistent_quantity_names(bound, experiment);
     lines.push(format!(
-        "STATE_NAMES = {}",
-        render_py_string_list(&state_names)
+        "PERSISTENT_QUANTITY_NAMES = {}",
+        render_py_string_list(&persistent_quantity_names)
     ));
 
     let forcing_names = forcing_quantity_names(experiment);
@@ -774,8 +767,7 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
     lines.push("    violation = _bound_violation(name, value, current)".to_string());
     lines.push("    if bool(violation > 0):".to_string());
     lines.push(
-        "        raise ValueError(f\"{label} for {name!r} violates declared bounds\")"
-            .to_string(),
+        "        raise ValueError(f\"{label} for {name!r} violates declared bounds\")".to_string(),
     );
     lines.push(String::new());
 
@@ -824,10 +816,14 @@ pub fn emit_jax_module(experiment: &PreparedExperiment) -> String {
         "def validate_rollout_inputs(initial_state, forcing_series, constants, slot_providers, params=None):"
             .to_string(),
     );
-    lines.push("    constants = _require_keys(constants, CONSTANT_NAMES, \"constant\")".to_string());
+    lines
+        .push("    constants = _require_keys(constants, CONSTANT_NAMES, \"constant\")".to_string());
     lines.push("    for name in CONSTANT_NAMES:".to_string());
     lines.push("        _assert_valid(name, constants[name], constants, \"constant\")".to_string());
-    lines.push("    forcing_series = _require_keys(forcing_series, FORCING_NAMES, \"forcing\")".to_string());
+    lines.push(
+        "    forcing_series = _require_keys(forcing_series, FORCING_NAMES, \"forcing\")"
+            .to_string(),
+    );
     lines.push("    slot_providers = {} if slot_providers is None else slot_providers".to_string());
     lines.push("    for slot_name in LEARNED_SLOT_NAMES:".to_string());
     lines.push("        if slot_name not in slot_providers:".to_string());
@@ -1407,6 +1403,21 @@ fn learned_initial_state_names(
     names
 }
 
+fn persistent_quantity_names(
+    bound: &crate::compile::BoundModel,
+    experiment: &PreparedExperiment,
+) -> Vec<String> {
+    let mut names = bound
+        .quantities
+        .iter()
+        .filter(|quantity| quantity.persistent)
+        .map(|quantity| quantity_name(experiment, quantity.quantity.id))
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
 fn required_initial_state_names(
     bound: &crate::compile::BoundModel,
     experiment: &PreparedExperiment,
@@ -1418,7 +1429,9 @@ fn required_initial_state_names(
             DirectBindingKind::InitialState {
                 source: InitialStateSource::Learned,
             } => None,
-            DirectBindingKind::InitialState { .. } => Some(quantity_name(experiment, binding.quantity)),
+            DirectBindingKind::InitialState { .. } => {
+                Some(quantity_name(experiment, binding.quantity))
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1684,6 +1697,7 @@ mod tests {
         assert!(module.contains("CONSTRAINT_RUNTIME_POLICY = \"project_learned_raise_derived\""));
         assert!(module.contains("HORIZON_STEPS = 24"));
         assert!(module.contains("SAFE_DIV_EPS = 1e-8"));
+        assert!(module.contains("PERSISTENT_QUANTITY_NAMES = [\"carbon\", \"water\"]"));
         assert!(module.contains("REQUIRED_INITIAL_STATE_NAMES = [\"carbon\", \"water\"]"));
         assert!(module.contains("LEARNED_SLOT_NAMES = [\"controller\"]"));
         assert!(module.contains("TRAINABLE_METADATA = {\"learned_initial_state\": [], \"learned_slots\": [\"controller\"]}"));
@@ -1738,9 +1752,12 @@ mod tests {
         assert!(module.contains("from jax import lax"));
         assert!(module.contains("COMPILE_MODE = \"train\""));
         assert!(module.contains("LOSS_HELPERS_ENABLED = True"));
-        assert!(module.contains("CONSTRAINT_RUNTIME_POLICY = \"project_learned_penalize_derived\""));
+        assert!(
+            module.contains("CONSTRAINT_RUNTIME_POLICY = \"project_learned_penalize_derived\"")
+        );
         assert!(module.contains("HORIZON_STEPS = 24"));
         assert!(module.contains("SAFE_DIV_EPS = 1e-8"));
+        assert!(module.contains("PERSISTENT_QUANTITY_NAMES = [\"carbon\", \"water\"]"));
         assert!(module.contains("REQUIRED_INITIAL_STATE_NAMES = [\"carbon\", \"water\"]"));
         assert!(module.contains("LEARNED_SLOT_NAMES = [\"controller\"]"));
         assert!(module.contains("TRAINABLE_METADATA = {\"learned_initial_state\": [], \"learned_slots\": [\"controller\"]}"));

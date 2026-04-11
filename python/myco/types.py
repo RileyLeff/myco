@@ -421,6 +421,7 @@ class ArtifactMetadata:
     consistency_policy: ConsistencyPolicy
     constraint_runtime_policy: str
     loss_helpers_enabled: bool
+    persistent_quantities: tuple[str, ...]
     learned_initial_state: tuple[str, ...]
     learned_slots: tuple[str, ...]
     slot_interfaces: tuple[SlotInterface, ...]
@@ -432,6 +433,7 @@ class ArtifactMetadata:
             consistency_policy=payload["consistency_policy"],  # type: ignore[arg-type]
             constraint_runtime_policy=str(payload["constraint_runtime_policy"]),
             loss_helpers_enabled=bool(payload["loss_helpers_enabled"]),
+            persistent_quantities=tuple(payload["persistent_quantities"]),
             learned_initial_state=tuple(payload["learned_initial_state"]),
             learned_slots=tuple(payload["learned_slots"]),
             slot_interfaces=tuple(

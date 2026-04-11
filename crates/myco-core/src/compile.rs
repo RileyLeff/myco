@@ -3,7 +3,6 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     diagnostics::Diagnostic,
     equality::{EqualityModel, EqualitySlot, Quantity, QuantityId},
-    syntax::QuantityKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +96,7 @@ pub struct BoundModel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundQuantity {
     pub quantity: Quantity,
+    pub persistent: bool,
     pub direct_binding: Option<DirectBindingKind>,
     pub slot_provider: Option<String>,
     pub observed: bool,
@@ -144,6 +144,11 @@ pub fn bind_compile_spec(
         .iter()
         .map(|quantity| (quantity.name.as_str(), quantity))
         .collect();
+    let persistent_quantities = model
+        .persistent_quantities
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
     let slot_index: HashMap<&str, &EqualitySlot> = model
         .slots
         .iter()
@@ -166,6 +171,7 @@ pub fn bind_compile_spec(
             quantity,
             &binding.kind,
             spec.horizon_steps,
+            persistent_quantities.contains(&quantity.id),
             &mut diagnostics,
         );
 
@@ -264,14 +270,14 @@ pub fn bind_compile_spec(
     }
 
     for quantity in &model.quantities {
-        if quantity.kind == QuantityKind::State
+        if persistent_quantities.contains(&quantity.id)
             && !matches!(
                 direct_binding_by_quantity.get(&quantity.id),
                 Some(DirectBindingKind::InitialState { .. })
             )
         {
             diagnostics.push(Diagnostic::error(format!(
-                "state quantity '{}' requires an explicit initial-state binding",
+                "persistent quantity '{}' requires an explicit initial-state binding",
                 quantity.name
             )));
         }
@@ -286,6 +292,7 @@ pub fn bind_compile_spec(
         .iter()
         .cloned()
         .map(|quantity| BoundQuantity {
+            persistent: persistent_quantities.contains(&quantity.id),
             direct_binding: direct_binding_by_quantity.get(&quantity.id).cloned(),
             slot_provider: slot_provider_by_quantity.get(&quantity.id).cloned(),
             observed: observed_quantities.contains(&quantity.id),
@@ -348,6 +355,7 @@ fn validate_direct_binding(
     quantity: &Quantity,
     kind: &DirectBindingKind,
     horizon_steps: usize,
+    persistent: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match kind {
@@ -370,9 +378,9 @@ fn validate_direct_binding(
         }
         DirectBindingKind::Constant => {}
         DirectBindingKind::InitialState { .. } => {
-            if quantity.kind != QuantityKind::State {
+            if !persistent {
                 diagnostics.push(Diagnostic::error(format!(
-                    "quantity '{}' is not a state and cannot use an initial-state binding",
+                    "quantity '{}' is not persistent across timesteps and cannot use an initial-state binding",
                     quantity.name
                 )));
             }
@@ -499,6 +507,7 @@ mod tests {
             .expect("stomata should exist");
         assert_eq!(stomata.slot_provider.as_deref(), Some("controller"));
         assert!(stomata.direct_binding.is_none());
+        assert!(!stomata.persistent);
 
         let transpiration = bound
             .quantities
@@ -506,6 +515,13 @@ mod tests {
             .find(|quantity| quantity.quantity.name == "transpiration")
             .expect("transpiration should exist");
         assert!(transpiration.observed);
+
+        let water = bound
+            .quantities
+            .iter()
+            .find(|quantity| quantity.quantity.name == "water")
+            .expect("water should exist");
+        assert!(water.persistent);
     }
 
     #[test]
@@ -549,7 +565,9 @@ mod tests {
             direct_bindings: vec![
                 DirectBindingSpec {
                     quantity: "vpd_scale".to_string(),
-                    kind: DirectBindingKind::DataSeries { steps: vec![0, 2, 3] },
+                    kind: DirectBindingKind::DataSeries {
+                        steps: vec![0, 2, 3],
+                    },
                 },
                 DirectBindingSpec {
                     quantity: "soil_water".to_string(),
@@ -599,7 +617,44 @@ mod tests {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic
                 .message
-                .contains("state quantity 'carbon' requires an explicit initial-state binding")
+                .contains("persistent quantity 'carbon' requires an explicit initial-state binding")
+        }));
+    }
+
+    #[test]
+    fn requires_initial_state_for_temporal_node_even_without_state_keyword() {
+        let source = r#"
+model TemporalNode
+
+node stock : scalar
+node forcing : scalar
+
+temporal stock_step:
+  stock[t+1] = stock[t] + forcing[t]
+"#;
+
+        let syntax = parse_and_validate(source).expect("syntax should validate");
+        let semantic = semantic::lower_model(&syntax).expect("semantic lowering should succeed");
+        let equality = equality::lower_model(&semantic).expect("equality lowering should succeed");
+        let spec = CompileSpec {
+            mode: CompileMode::Simulate,
+            horizon_steps: 4,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
+            direct_bindings: vec![DirectBindingSpec {
+                quantity: "forcing".to_string(),
+                kind: DirectBindingKind::DataSeries {
+                    steps: (0..4).collect(),
+                },
+            }],
+            slot_bindings: vec![],
+            observations: vec![],
+        };
+
+        let diagnostics = bind_compile_spec(&equality, &spec).expect_err("binding should fail");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("persistent quantity 'stock' requires an explicit initial-state binding")
         }));
     }
 

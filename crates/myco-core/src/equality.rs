@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    sync::Arc,
+};
 
 use crate::{
     constraints::QuantityConstraintSet,
@@ -13,6 +17,7 @@ use crate::{
 pub struct EqualityModel {
     pub name: String,
     pub quantities: Vec<Quantity>,
+    pub persistent_quantities: Vec<QuantityId>,
     pub core: Arc<EqualityCore>,
     pub slots: Vec<EqualitySlot>,
 }
@@ -205,10 +210,12 @@ pub fn lower_model(model: &SemanticModel) -> Result<EqualityModel, Vec<Diagnosti
     }
 
     if diagnostics.is_empty() {
+        let persistent_quantities = infer_persistent_quantities(&quantities, &equations);
         let core = Arc::new(egraph::build_core(&equations));
         Ok(EqualityModel {
             name: model.name.clone(),
             quantities,
+            persistent_quantities,
             core,
             slots,
         })
@@ -312,6 +319,40 @@ fn parse_time_reference(input: &str) -> Result<TimeReference, String> {
     Ok(TimeReference::Relative(offset))
 }
 
+fn infer_persistent_quantities(
+    quantities: &[Quantity],
+    equations: &[EqualityEquation],
+) -> Vec<QuantityId> {
+    let mut persistent = HashSet::new();
+    for quantity in quantities {
+        if quantity.kind == QuantityKind::State {
+            persistent.insert(quantity.id);
+        }
+    }
+    for equation in equations {
+        if equation.kind != BlockKind::Temporal {
+            continue;
+        }
+        if let Some(quantity) = persistent_lhs_quantity(&equation.lhs) {
+            persistent.insert(quantity);
+        }
+    }
+
+    let mut persistent = persistent.into_iter().collect::<Vec<_>>();
+    persistent.sort_by_key(|quantity| quantity.0);
+    persistent
+}
+
+fn persistent_lhs_quantity(expr: &CoreExpr) -> Option<QuantityId> {
+    match expr {
+        CoreExpr::Quantity(QuantityRef {
+            quantity,
+            time: TimeReference::Relative(_),
+        }) => Some(*quantity),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +368,10 @@ mod tests {
 
         assert_eq!(equality.name, "TinyTree");
         assert_eq!(equality.quantities.len(), 8);
+        assert_eq!(
+            equality.persistent_quantities,
+            vec![QuantityId(3), QuantityId(4)]
+        );
         assert_eq!(equality.core.equations.len(), 3);
         assert_eq!(equality.slots.len(), 1);
 
@@ -368,6 +413,25 @@ mod tests {
 
         let rhs_text = water_step.equation.rhs.to_string();
         assert!(rhs_text.contains("dt"));
+    }
+
+    #[test]
+    fn infers_persistent_quantities_from_temporal_lhs() {
+        let source = r#"
+model TemporalNode
+
+node stock : scalar
+node flow : scalar
+
+temporal stock_step:
+  stock[t+1] = stock[t] + flow[t]
+"#;
+
+        let syntax = parse_and_validate(source).expect("syntax should validate");
+        let semantic = semantic::lower_model(&syntax).expect("semantic lowering should succeed");
+        let equality = lower_model(&semantic).expect("equality lowering should succeed");
+
+        assert_eq!(equality.persistent_quantities, vec![QuantityId(0)]);
     }
 
     #[test]

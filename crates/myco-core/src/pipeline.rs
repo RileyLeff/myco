@@ -47,6 +47,7 @@ pub struct ArtifactMetadata {
     pub consistency_policy: String,
     pub constraint_runtime_policy: String,
     pub loss_helpers_enabled: bool,
+    pub persistent_quantities: Vec<String>,
     pub learned_initial_state: Vec<String>,
     pub learned_slots: Vec<String>,
     pub slot_interfaces: Vec<SlotInterfaceMetadata>,
@@ -287,6 +288,15 @@ fn sanitize_module_name(input: &str) -> String {
 }
 
 fn artifact_metadata(experiment: &PreparedExperiment, backend: BackendTarget) -> ArtifactMetadata {
+    let mut persistent_quantities = experiment
+        .bound
+        .quantities
+        .iter()
+        .filter(|quantity| quantity.persistent)
+        .map(|quantity| quantity.quantity.name.clone())
+        .collect::<Vec<_>>();
+    persistent_quantities.sort();
+
     let slot_interfaces = experiment
         .bound
         .slot_bindings
@@ -340,6 +350,7 @@ fn artifact_metadata(experiment: &PreparedExperiment, backend: BackendTarget) ->
             experiment.bound.mode,
             crate::compile::CompileMode::Simulate
         ),
+        persistent_quantities,
         learned_initial_state: experiment
             .bound
             .direct_bindings
@@ -483,6 +494,10 @@ mod tests {
         );
         assert!(artifact.metadata.loss_helpers_enabled);
         assert_eq!(
+            artifact.metadata.persistent_quantities,
+            vec!["carbon".to_string(), "water".to_string()]
+        );
+        assert_eq!(
             artifact.metadata.learned_slots,
             vec!["controller".to_string()]
         );
@@ -504,6 +519,10 @@ mod tests {
         assert_eq!(
             artifact.metadata.constraint_runtime_policy,
             "project_learned_penalize_derived"
+        );
+        assert_eq!(
+            artifact.metadata.persistent_quantities,
+            vec!["carbon".to_string(), "water".to_string()]
         );
         assert_eq!(
             artifact.metadata.slot_interfaces[0].outputs,

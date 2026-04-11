@@ -38,6 +38,7 @@ Current phase: post-`v1.3` checkpoint; pre-`v2` hardening is complete and the ne
 
 ## In Progress
 
+- `v2` boundary migration, starting with persistence moving from source-level semantics toward inferred/compiler semantics
 - choosing the first concrete `v2` plant-model family and writing the corresponding implementation plan
 
 ## Open Risks
@@ -47,5 +48,6 @@ Current phase: post-`v1.3` checkpoint; pre-`v2` hardening is complete and the ne
 ## Next Action
 
 1. use `planning/v2/charter.md` and `planning/v2/v2_do_this_first.md` as the near-term guide for the next compiler milestone
-2. keep avoiding broad frontend-language expansion outside one concrete plant-model target
-3. treat `planning/v_long_term/` as north-star material, not immediate implementation scope
+2. finish the `v2_do_this_first` migration by expanding binding-time workflow roles and reducing dependence on source-level quantity-role keywords
+3. keep avoiding broad frontend-language expansion outside one concrete plant-model target
+4. treat `planning/v_long_term/` as north-star material, not immediate implementation scope
