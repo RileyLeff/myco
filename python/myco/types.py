@@ -483,8 +483,16 @@ def data_series(quantity: str, steps: Iterable[int]) -> DirectBinding:
     return DirectBinding(quantity=quantity, kind="data_series", steps=list(steps))
 
 
+def assume_series(quantity: str, steps: Iterable[int]) -> DirectBinding:
+    return data_series(quantity, steps)
+
+
 def constant(quantity: str) -> DirectBinding:
     return DirectBinding(quantity=quantity, kind="constant")
+
+
+def assume_constant(quantity: str) -> DirectBinding:
+    return constant(quantity)
 
 
 def initial_state(
@@ -492,6 +500,13 @@ def initial_state(
     source: InitialStateSource = "constant",
 ) -> DirectBinding:
     return DirectBinding(quantity=quantity, kind="initial_state", source=source)
+
+
+def assume_initial(
+    quantity: str,
+    source: InitialStateSource = "constant",
+) -> DirectBinding:
+    return initial_state(quantity, source=source)
 
 
 def slot(slot_name: str, kind: SlotBindingKind = "learned") -> SlotBinding:

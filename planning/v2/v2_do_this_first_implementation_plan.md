@@ -198,6 +198,20 @@ Something closer to:
 
 or a grouped equivalent that still keeps the underlying semantics clear.
 
+### Current Status
+
+The first slice of this phase is now implemented:
+
+- `initial_state` bindings now make a quantity rollout-persistent in the compiled workflow, even if the source model did not already mark or imply persistence
+- the Python API now exposes `assume_series(...)`, `assume_constant(...)`, and `assume_initial(...)` aliases alongside the older `bind_*` names
+
+This matters because it gives config a real way to carry persistence intent.
+
+That means the remaining legacy dependence on source-level `state` is now much smaller:
+
+- source-level `state` is still accepted and still contributes persistence during migration
+- but config can now express persistence for non-`state` quantities directly
+
 ## Phase 3: Make Persistence A Compiler Property, Not A Source-Level Role
 
 ### Objective

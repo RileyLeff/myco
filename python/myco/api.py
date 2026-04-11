@@ -68,21 +68,30 @@ class Experiment:
     model: Model
     spec: CompileSpec
 
-    def bind_data_series(self, quantity: str, steps) -> "Experiment":
+    def assume_series(self, quantity: str, steps) -> "Experiment":
         self.spec.direct_bindings.append(
             DirectBinding(quantity=quantity, kind="data_series", steps=list(steps))
         )
         return self
 
-    def bind_constant(self, quantity: str) -> "Experiment":
+    def bind_data_series(self, quantity: str, steps) -> "Experiment":
+        return self.assume_series(quantity, steps)
+
+    def assume_constant(self, quantity: str) -> "Experiment":
         self.spec.direct_bindings.append(DirectBinding(quantity=quantity, kind="constant"))
         return self
 
-    def bind_initial_state(self, quantity: str, source: str = "constant") -> "Experiment":
+    def bind_constant(self, quantity: str) -> "Experiment":
+        return self.assume_constant(quantity)
+
+    def assume_initial(self, quantity: str, source: str = "constant") -> "Experiment":
         self.spec.direct_bindings.append(
             DirectBinding(quantity=quantity, kind="initial_state", source=source)
         )
         return self
+
+    def bind_initial_state(self, quantity: str, source: str = "constant") -> "Experiment":
+        return self.assume_initial(quantity, source=source)
 
     def bind_slot(self, slot: str, kind: str = "learned") -> "Experiment":
         self.spec.slot_bindings.append(SlotBinding(slot=slot, kind=kind))

@@ -78,7 +78,26 @@ def test_experiment_builder_compiles_real_spec():
     assert controller.outputs == ("stomata",)
     assert controller.input_arity == 6
     assert controller.output_arity == 1
+    assert artifact.metadata.persistent_quantities == ("carbon", "water")
     assert "def total_loss(" in artifact.source
+
+
+def test_experiment_assume_aliases_compile_real_spec():
+    model = myco.load(FIXTURE)
+    experiment = model.experiment(mode="train", horizon_steps=24)
+    experiment.assume_series("vpd_scale", range(24))
+    experiment.assume_series("soil_water", range(24))
+    experiment.assume_constant("hydraulic_cond")
+    experiment.assume_constant("g_max")
+    experiment.assume_initial("water")
+    experiment.assume_initial("carbon")
+    experiment.bind_slot("controller", kind="learned")
+    experiment.observe_dense("transpiration")
+
+    artifact = experiment.compile(backend="jax")
+
+    assert artifact.metadata.persistent_quantities == ("carbon", "water")
+    assert "PERSISTENT_QUANTITY_NAMES = [\"carbon\", \"water\"]" in artifact.source
 
 
 def test_experiment_explain_plan_returns_typed_paths():

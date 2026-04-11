@@ -144,7 +144,7 @@ pub fn bind_compile_spec(
         .iter()
         .map(|quantity| (quantity.name.as_str(), quantity))
         .collect();
-    let persistent_quantities = model
+    let inferred_persistent_quantities = model
         .persistent_quantities
         .iter()
         .copied()
@@ -171,7 +171,6 @@ pub fn bind_compile_spec(
             quantity,
             &binding.kind,
             spec.horizon_steps,
-            persistent_quantities.contains(&quantity.id),
             &mut diagnostics,
         );
 
@@ -269,8 +268,22 @@ pub fn bind_compile_spec(
         });
     }
 
+    let workflow_persistent_quantities = model
+        .persistent_quantities
+        .iter()
+        .copied()
+        .chain(
+            direct_bindings
+                .iter()
+                .filter_map(|binding| match binding.kind {
+                    DirectBindingKind::InitialState { .. } => Some(binding.quantity),
+                    _ => None,
+                }),
+        )
+        .collect::<HashSet<_>>();
+
     for quantity in &model.quantities {
-        if persistent_quantities.contains(&quantity.id)
+        if inferred_persistent_quantities.contains(&quantity.id)
             && !matches!(
                 direct_binding_by_quantity.get(&quantity.id),
                 Some(DirectBindingKind::InitialState { .. })
@@ -292,7 +305,7 @@ pub fn bind_compile_spec(
         .iter()
         .cloned()
         .map(|quantity| BoundQuantity {
-            persistent: persistent_quantities.contains(&quantity.id),
+            persistent: workflow_persistent_quantities.contains(&quantity.id),
             direct_binding: direct_binding_by_quantity.get(&quantity.id).cloned(),
             slot_provider: slot_provider_by_quantity.get(&quantity.id).cloned(),
             observed: observed_quantities.contains(&quantity.id),
@@ -355,7 +368,6 @@ fn validate_direct_binding(
     quantity: &Quantity,
     kind: &DirectBindingKind,
     horizon_steps: usize,
-    persistent: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match kind {
@@ -377,14 +389,7 @@ fn validate_direct_binding(
             }
         }
         DirectBindingKind::Constant => {}
-        DirectBindingKind::InitialState { .. } => {
-            if !persistent {
-                diagnostics.push(Diagnostic::error(format!(
-                    "quantity '{}' is not persistent across timesteps and cannot use an initial-state binding",
-                    quantity.name
-                )));
-            }
-        }
+        DirectBindingKind::InitialState { .. } => {}
     }
 }
 
@@ -656,6 +661,47 @@ temporal stock_step:
                 .message
                 .contains("persistent quantity 'stock' requires an explicit initial-state binding")
         }));
+    }
+
+    #[test]
+    fn initial_state_binding_makes_node_persistent_in_workflow() {
+        let source = r#"
+model WorkflowPersistent
+
+node latent_store : scalar
+node forcing : scalar
+
+relation passthrough:
+  forcing = forcing
+"#;
+
+        let syntax = parse_and_validate(source).expect("syntax should validate");
+        let semantic = semantic::lower_model(&syntax).expect("semantic lowering should succeed");
+        let equality = equality::lower_model(&semantic).expect("equality lowering should succeed");
+        let spec = CompileSpec {
+            mode: CompileMode::Simulate,
+            horizon_steps: 4,
+            consistency_policy: ConsistencyPolicy::EquationOnly,
+            direct_bindings: vec![
+                DirectBindingSpec {
+                    quantity: "forcing".to_string(),
+                    kind: DirectBindingKind::DataSeries {
+                        steps: (0..4).collect(),
+                    },
+                },
+                initial_state("latent_store"),
+            ],
+            slot_bindings: vec![],
+            observations: vec![],
+        };
+
+        let bound = bind_compile_spec(&equality, &spec).expect("binding should succeed");
+        let latent_store = bound
+            .quantities
+            .iter()
+            .find(|quantity| quantity.quantity.name == "latent_store")
+            .expect("latent_store should exist");
+        assert!(latent_store.persistent);
     }
 
     #[test]

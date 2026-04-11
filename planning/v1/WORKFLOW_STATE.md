@@ -39,6 +39,8 @@ Current phase: post-`v1.3` checkpoint; pre-`v2` hardening is complete and the ne
 ## In Progress
 
 - `v2` boundary migration, starting with persistence moving from source-level semantics toward inferred/compiler semantics
+- binding-time workflow roles are starting to land:
+  `initial_state` now confers workflow persistence and the Python API exposes `assume_*` aliases
 - choosing the first concrete `v2` plant-model family and writing the corresponding implementation plan
 
 ## Open Risks
