@@ -393,6 +393,50 @@ class CompileSpec:
     def read_json(cls, path: str | Path) -> "CompileSpec":
         return cls.from_json(Path(path).read_text())
 
+    def assume_series(self, quantity: str, steps: Iterable[int]) -> "CompileSpec":
+        self.direct_bindings.append(data_series(quantity, steps))
+        return self
+
+    def assume_constant(self, quantity: str) -> "CompileSpec":
+        self.direct_bindings.append(constant(quantity))
+        return self
+
+    def assume_initial(
+        self,
+        quantity: str,
+        source: InitialStateSource = "constant",
+    ) -> "CompileSpec":
+        self.direct_bindings.append(initial_state(quantity, source=source))
+        return self
+
+    def learn_initial(self, quantity: str) -> "CompileSpec":
+        self.direct_bindings.append(initial_state(quantity, source="learned"))
+        return self
+
+    def learn_slot(self, slot_name: str) -> "CompileSpec":
+        self.slot_bindings.append(slot(slot_name, kind="learned"))
+        return self
+
+    def observe_dense(self, quantity: str, loss: LossKind = "mse") -> "CompileSpec":
+        self.observations.append(Observation(quantity=quantity, loss=loss))
+        return self
+
+    def observe_sparse(
+        self,
+        quantity: str,
+        steps: Iterable[int],
+        loss: LossKind = "mse",
+    ) -> "CompileSpec":
+        self.observations.append(
+            Observation(
+                quantity=quantity,
+                loss=loss,
+                schedule="sparse",
+                steps=list(steps),
+            )
+        )
+        return self
+
 
 @dataclass(frozen=True, slots=True)
 class SlotInterface:
@@ -509,8 +553,16 @@ def assume_initial(
     return initial_state(quantity, source=source)
 
 
+def learn_initial(quantity: str) -> DirectBinding:
+    return initial_state(quantity, source="learned")
+
+
 def slot(slot_name: str, kind: SlotBindingKind = "learned") -> SlotBinding:
     return SlotBinding(slot=slot_name, kind=kind)
+
+
+def learn_slot(slot_name: str) -> SlotBinding:
+    return slot(slot_name, kind="learned")
 
 
 def observe_dense(quantity: str, loss: LossKind = "mse") -> Observation:

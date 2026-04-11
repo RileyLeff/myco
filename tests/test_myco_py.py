@@ -100,6 +100,24 @@ def test_experiment_assume_aliases_compile_real_spec():
     assert "PERSISTENT_QUANTITY_NAMES = [\"carbon\", \"water\"]" in artifact.source
 
 
+def test_compile_spec_role_builders_compile_real_spec():
+    model = myco.load(FIXTURE)
+    spec = myco.CompileSpec(mode="train", horizon_steps=24)
+    spec.assume_series("vpd_scale", range(24))
+    spec.assume_series("soil_water", range(24))
+    spec.assume_constant("hydraulic_cond")
+    spec.assume_constant("g_max")
+    spec.assume_initial("water")
+    spec.assume_initial("carbon")
+    spec.learn_slot("controller")
+    spec.observe_dense("transpiration")
+
+    artifact = model.compile(spec, backend="jax")
+
+    assert artifact.metadata.persistent_quantities == ("carbon", "water")
+    assert artifact.metadata.learned_slots == ("controller",)
+
+
 def test_experiment_explain_plan_returns_typed_paths():
     model = myco.load(FIXTURE)
     experiment = model.experiment(mode="train", horizon_steps=24)

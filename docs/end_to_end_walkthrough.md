@@ -87,13 +87,13 @@ import myco
 model = myco.load("crates/myco-core/tests/fixtures/tiny_tree.myco")
 experiment = model.experiment(mode="train", horizon_steps=64)
 
-experiment.bind_data_series("vpd_scale", range(64))
-experiment.bind_data_series("soil_water", range(64))
-experiment.bind_constant("hydraulic_cond")
-experiment.bind_constant("g_max")
-experiment.bind_initial_state("water")
-experiment.bind_initial_state("carbon")
-experiment.bind_slot("controller", kind="learned")
+experiment.assume_series("vpd_scale", range(64))
+experiment.assume_series("soil_water", range(64))
+experiment.assume_constant("hydraulic_cond")
+experiment.assume_constant("g_max")
+experiment.assume_initial("water")
+experiment.assume_initial("carbon")
+experiment.learn_slot("controller")
 
 experiment.observe_dense("transpiration")
 experiment.observe_sparse("water", range(0, 64, 8))
@@ -110,6 +110,15 @@ The user is doing four conceptual things here:
 4. use that artifact directly in ordinary Python/JAX code
 
 That is the intended Myco ergonomics: compile-time binding, then ordinary runtime execution.
+
+The current Python surface is intentionally moving toward a smaller workflow
+vocabulary:
+
+- `assume_*` for supplied values
+- `observe_*` for measurements and evidence
+- `learn_*` for trainable components
+
+Older `bind_*` helpers still exist as compatibility aliases.
 
 ## What The User Sees In The Artifact
 

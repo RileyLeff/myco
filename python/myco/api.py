@@ -93,9 +93,15 @@ class Experiment:
     def bind_initial_state(self, quantity: str, source: str = "constant") -> "Experiment":
         return self.assume_initial(quantity, source=source)
 
+    def learn_initial(self, quantity: str) -> "Experiment":
+        return self.assume_initial(quantity, source="learned")
+
     def bind_slot(self, slot: str, kind: str = "learned") -> "Experiment":
         self.spec.slot_bindings.append(SlotBinding(slot=slot, kind=kind))
         return self
+
+    def learn_slot(self, slot: str) -> "Experiment":
+        return self.bind_slot(slot, kind="learned")
 
     def set_consistency_policy(self, policy: str) -> "Experiment":
         self.spec.consistency_policy = policy

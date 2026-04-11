@@ -204,6 +204,7 @@ The first slice of this phase is now implemented:
 
 - `initial_state` bindings now make a quantity rollout-persistent in the compiled workflow, even if the source model did not already mark or imply persistence
 - the Python API now exposes `assume_series(...)`, `assume_constant(...)`, and `assume_initial(...)` aliases alongside the older `bind_*` names
+- the Python API and `CompileSpec` now expose `learn_slot(...)`, with docs/examples starting to use the `assume` / `observe` / `learn` vocabulary directly
 
 This matters because it gives config a real way to carry persistence intent.
 

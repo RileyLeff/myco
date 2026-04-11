@@ -46,18 +46,25 @@ fixture = Path("crates/myco-core/tests/fixtures/tiny_tree.myco")
 
 model = myco.load(fixture)
 experiment = model.experiment(mode="train", horizon_steps=24)
-experiment.bind_data_series("vpd_scale", range(24))
-experiment.bind_data_series("soil_water", range(24))
-experiment.bind_constant("hydraulic_cond")
-experiment.bind_constant("g_max")
-experiment.bind_initial_state("water")
-experiment.bind_initial_state("carbon")
-experiment.bind_slot("controller", kind="learned")
+experiment.assume_series("vpd_scale", range(24))
+experiment.assume_series("soil_water", range(24))
+experiment.assume_constant("hydraulic_cond")
+experiment.assume_constant("g_max")
+experiment.assume_initial("water")
+experiment.assume_initial("carbon")
+experiment.learn_slot("controller")
 experiment.observe_dense("transpiration")
 
 artifact = experiment.compile(backend="jax")
 artifact.write()
 ```
+
+The older `bind_*` helpers still exist as compatibility aliases, but the intended
+workflow vocabulary is now:
+
+- `assume_*` for directly supplied values
+- `observe_*` for evidence
+- `learn_*` for trainable components
 
 The Python package now has a conventional structure:
 
