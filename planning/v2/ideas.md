@@ -6,6 +6,7 @@ If you want the bigger-picture material, see:
 
 - [v2_do_this_first.md](./v2_do_this_first.md)
 - [charter.md](./charter.md)
+- [sparse_multi_context_training_notes.md](./sparse_multi_context_training_notes.md)
 - [../v_long_term/README.md](../v_long_term/README.md)
 
 ## V2 In One Sentence
