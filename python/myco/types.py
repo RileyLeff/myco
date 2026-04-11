@@ -223,7 +223,7 @@ class PlanExplanation:
 @dataclass(frozen=True, slots=True)
 class QuantityExplanation:
     quantity: str
-    direct_binding: str | None
+    assumption: str | None
     slot_provider: str | None
     observed: bool
     chosen_current: PathExplanation | None
@@ -238,7 +238,7 @@ class QuantityExplanation:
         temporal = payload.get("chosen_temporal")
         return cls(
             quantity=str(payload["quantity"]),
-            direct_binding=payload.get("direct_binding"),
+            assumption=payload.get("assumption"),
             slot_provider=payload.get("slot_provider"),
             observed=bool(payload["observed"]),
             chosen_current=(
@@ -361,13 +361,21 @@ class CompileSpec:
 
     @classmethod
     def from_dict(cls, payload: dict[str, object]) -> "CompileSpec":
-        legacy_fields = {"direct_bindings", "slot_bindings"}
-        present_legacy = sorted(field for field in legacy_fields if field in payload)
-        if present_legacy:
-            joined = ", ".join(present_legacy)
+        allowed_fields = {
+            "mode",
+            "horizon_steps",
+            "consistency_policy",
+            "assumptions",
+            "learning",
+            "observations",
+        }
+        unknown_fields = sorted(field for field in payload if field not in allowed_fields)
+        if unknown_fields:
+            joined = ", ".join(unknown_fields)
             raise ValueError(
-                f"legacy compile-spec fields are no longer supported: {joined}; "
-                "use 'assumptions', 'learning', and 'observations'"
+                "unsupported compile-spec fields: "
+                f"{joined}; allowed fields are mode, horizon_steps, "
+                "consistency_policy, assumptions, learning, observations"
             )
         return cls(
             mode=payload["mode"],  # type: ignore[arg-type]

@@ -163,7 +163,7 @@ def test_experiment_explain_quantity_surfaces_alternatives_and_unresolved():
     g_max = unresolved.explain_quantity("g_max")
     assert g_max.unresolved is True
     assert g_max.chosen_current is None
-    assert g_max.direct_binding is None
+    assert g_max.assumption is None
 
 
 def test_structured_myco_error_exposes_diagnostics():
@@ -198,8 +198,8 @@ def test_load_spec_and_compile_from_file():
     assert "import jax.numpy as jnp" in artifact.source
 
 
-def test_legacy_compile_spec_fields_are_rejected():
-    with pytest.raises(ValueError, match="legacy compile-spec fields"):
+def test_unknown_compile_spec_fields_are_rejected():
+    with pytest.raises(ValueError, match="unsupported compile-spec fields"):
         myco.CompileSpec.from_dict(
             {
                 "mode": "train",

@@ -17,8 +17,8 @@ pub struct CompileSpec {
     pub mode: CompileMode,
     pub horizon_steps: usize,
     pub consistency_policy: ConsistencyPolicy,
-    pub direct_bindings: Vec<DirectBindingSpec>,
-    pub slot_bindings: Vec<SlotBindingSpec>,
+    pub assumptions: Vec<AssumptionSpec>,
+    pub learned_slots: Vec<LearnedSlotSpec>,
     pub observations: Vec<ObservationSpec>,
 }
 
@@ -30,13 +30,13 @@ pub enum ConsistencyPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DirectBindingSpec {
+pub struct AssumptionSpec {
     pub quantity: String,
-    pub kind: DirectBindingKind,
+    pub kind: AssumptionKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DirectBindingKind {
+pub enum AssumptionKind {
     DataSeries { steps: Vec<usize> },
     Constant,
     InitialState { source: InitialStateSource },
@@ -50,7 +50,7 @@ pub enum InitialStateSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlotBindingSpec {
+pub struct LearnedSlotSpec {
     pub slot: String,
 }
 
@@ -80,8 +80,8 @@ pub struct BoundModel {
     pub consistency_policy: ConsistencyPolicy,
     pub quantities: Vec<BoundQuantity>,
     pub core: std::sync::Arc<crate::egraph::EqualityCore>,
-    pub direct_bindings: Vec<ResolvedDirectBinding>,
-    pub slot_bindings: Vec<ResolvedSlotBinding>,
+    pub assumptions: Vec<ResolvedAssumption>,
+    pub learned_slots: Vec<ResolvedLearnedSlot>,
     pub observations: Vec<ResolvedObservation>,
 }
 
@@ -89,19 +89,19 @@ pub struct BoundModel {
 pub struct BoundQuantity {
     pub quantity: Quantity,
     pub persistent: bool,
-    pub direct_binding: Option<DirectBindingKind>,
+    pub assumption: Option<AssumptionKind>,
     pub slot_provider: Option<String>,
     pub observed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedDirectBinding {
+pub struct ResolvedAssumption {
     pub quantity: QuantityId,
-    pub kind: DirectBindingKind,
+    pub kind: AssumptionKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedSlotBinding {
+pub struct ResolvedLearnedSlot {
     pub slot: String,
     pub provides: Vec<QuantityId>,
     pub inputs: Vec<QuantityId>,
@@ -146,50 +146,50 @@ pub fn bind_compile_spec(
         .map(|slot| (slot.name.as_str(), slot))
         .collect();
 
-    let mut direct_bindings = Vec::new();
-    let mut direct_binding_by_quantity = HashMap::<QuantityId, DirectBindingKind>::new();
+    let mut assumptions = Vec::new();
+    let mut assumption_by_quantity = HashMap::<QuantityId, AssumptionKind>::new();
 
-    for binding in &spec.direct_bindings {
+    for binding in &spec.assumptions {
         let Some(quantity) = quantity_index.get(binding.quantity.as_str()) else {
             diagnostics.push(Diagnostic::error(format!(
-                "direct binding references unknown quantity '{}'",
+                "assumption references unknown quantity '{}'",
                 binding.quantity
             )));
             continue;
         };
 
-        validate_direct_binding(
+        validate_assumption(
             quantity,
             &binding.kind,
             spec.horizon_steps,
             &mut diagnostics,
         );
 
-        if direct_binding_by_quantity
+        if assumption_by_quantity
             .insert(quantity.id, binding.kind.clone())
             .is_some()
         {
             diagnostics.push(Diagnostic::error(format!(
-                "quantity '{}' has multiple direct bindings",
+                "quantity '{}' has multiple assumptions",
                 quantity.name
             )));
             continue;
         }
 
-        direct_bindings.push(ResolvedDirectBinding {
+        assumptions.push(ResolvedAssumption {
             quantity: quantity.id,
             kind: binding.kind.clone(),
         });
     }
 
-    let mut slot_bindings = Vec::new();
+    let mut learned_slots = Vec::new();
     let mut bound_slots = HashSet::new();
     let mut slot_provider_by_quantity = HashMap::<QuantityId, String>::new();
 
-    for binding in &spec.slot_bindings {
+    for binding in &spec.learned_slots {
         let Some(slot) = slot_index.get(binding.slot.as_str()) else {
             diagnostics.push(Diagnostic::error(format!(
-                "slot binding references unknown slot '{}'",
+                "learned slot references unknown slot '{}'",
                 binding.slot
             )));
             continue;
@@ -204,10 +204,10 @@ pub fn bind_compile_spec(
         }
 
         for provided in &slot.provides {
-            if direct_binding_by_quantity.contains_key(provided) {
+            if assumption_by_quantity.contains_key(provided) {
                 let quantity_name = &model.quantities[provided.0].name;
                 diagnostics.push(Diagnostic::error(format!(
-                    "quantity '{}' has both a direct binding and slot provider '{}'",
+                    "quantity '{}' has both an assumption and learned slot '{}'",
                     quantity_name, slot.name
                 )));
             }
@@ -223,7 +223,7 @@ pub fn bind_compile_spec(
             }
         }
 
-        slot_bindings.push(ResolvedSlotBinding {
+        learned_slots.push(ResolvedLearnedSlot {
             slot: slot.name.clone(),
             provides: slot.provides.clone(),
             inputs: slot.inputs.clone(),
@@ -262,21 +262,17 @@ pub fn bind_compile_spec(
         .persistent_quantities
         .iter()
         .copied()
-        .chain(
-            direct_bindings
-                .iter()
-                .filter_map(|binding| match binding.kind {
-                    DirectBindingKind::InitialState { .. } => Some(binding.quantity),
-                    _ => None,
-                }),
-        )
+        .chain(assumptions.iter().filter_map(|binding| match binding.kind {
+            AssumptionKind::InitialState { .. } => Some(binding.quantity),
+            _ => None,
+        }))
         .collect::<HashSet<_>>();
 
     for quantity in &model.quantities {
         if inferred_persistent_quantities.contains(&quantity.id)
             && !matches!(
-                direct_binding_by_quantity.get(&quantity.id),
-                Some(DirectBindingKind::InitialState { .. })
+                assumption_by_quantity.get(&quantity.id),
+                Some(AssumptionKind::InitialState { .. })
             )
         {
             diagnostics.push(Diagnostic::error(format!(
@@ -296,7 +292,7 @@ pub fn bind_compile_spec(
         .cloned()
         .map(|quantity| BoundQuantity {
             persistent: workflow_persistent_quantities.contains(&quantity.id),
-            direct_binding: direct_binding_by_quantity.get(&quantity.id).cloned(),
+            assumption: assumption_by_quantity.get(&quantity.id).cloned(),
             slot_provider: slot_provider_by_quantity.get(&quantity.id).cloned(),
             observed: observed_quantities.contains(&quantity.id),
             quantity,
@@ -309,8 +305,8 @@ pub fn bind_compile_spec(
         consistency_policy: spec.consistency_policy,
         quantities,
         core: std::sync::Arc::clone(&model.core),
-        direct_bindings,
-        slot_bindings,
+        assumptions,
+        learned_slots,
         observations,
     })
 }
@@ -321,22 +317,22 @@ fn validate_mode_requirements(spec: &CompileSpec, diagnostics: &mut Vec<Diagnost
         CompileMode::Fit => {
             if spec.observations.is_empty() {
                 diagnostics.push(Diagnostic::error(
-                    "fit mode requires at least one observation binding",
+                    "fit mode requires at least one observation",
                 ));
             }
         }
         CompileMode::Train => {
             if spec.observations.is_empty() {
                 diagnostics.push(Diagnostic::error(
-                    "train mode requires at least one observation binding",
+                    "train mode requires at least one observation",
                 ));
             }
 
-            let has_learned_slot = !spec.slot_bindings.is_empty();
-            let has_learned_initial_state = spec.direct_bindings.iter().any(|binding| {
+            let has_learned_slot = !spec.learned_slots.is_empty();
+            let has_learned_initial_state = spec.assumptions.iter().any(|binding| {
                 matches!(
                     binding.kind,
-                    DirectBindingKind::InitialState {
+                    AssumptionKind::InitialState {
                         source: InitialStateSource::Learned
                     }
                 )
@@ -351,19 +347,19 @@ fn validate_mode_requirements(spec: &CompileSpec, diagnostics: &mut Vec<Diagnost
     }
 }
 
-fn validate_direct_binding(
+fn validate_assumption(
     quantity: &Quantity,
-    kind: &DirectBindingKind,
+    kind: &AssumptionKind,
     horizon_steps: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match kind {
-        DirectBindingKind::DataSeries { steps } => {
+        AssumptionKind::DataSeries { steps } => {
             validate_step_list(
                 steps,
                 horizon_steps,
                 &quantity.name,
-                "direct binding",
+                "assumption",
                 diagnostics,
             );
             let expected = (0..horizon_steps).collect::<HashSet<_>>();
@@ -375,8 +371,8 @@ fn validate_direct_binding(
                 )));
             }
         }
-        DirectBindingKind::Constant => {}
-        DirectBindingKind::InitialState { .. } => {}
+        AssumptionKind::Constant => {}
+        AssumptionKind::InitialState { .. } => {}
     }
 }
 
@@ -438,41 +434,41 @@ mod tests {
             mode: CompileMode::Train,
             horizon_steps: 24,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![
-                DirectBindingSpec {
+            assumptions: vec![
+                AssumptionSpec {
                     quantity: "vpd_scale".to_string(),
-                    kind: DirectBindingKind::DataSeries {
+                    kind: AssumptionKind::DataSeries {
                         steps: (0..24).collect(),
                     },
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "soil_water".to_string(),
-                    kind: DirectBindingKind::DataSeries {
+                    kind: AssumptionKind::DataSeries {
                         steps: (0..24).collect(),
                     },
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "hydraulic_cond".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "g_max".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "water".to_string(),
-                    kind: DirectBindingKind::InitialState {
+                    kind: AssumptionKind::InitialState {
                         source: InitialStateSource::Constant,
                     },
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "carbon".to_string(),
-                    kind: DirectBindingKind::InitialState {
+                    kind: AssumptionKind::InitialState {
                         source: InitialStateSource::Constant,
                     },
                 },
             ],
-            slot_bindings: vec![SlotBindingSpec {
+            learned_slots: vec![LearnedSlotSpec {
                 slot: "controller".to_string(),
             }],
             observations: vec![ObservationSpec {
@@ -485,10 +481,10 @@ mod tests {
         let bound = bind_compile_spec(&model, &spec).expect("binding should succeed");
 
         assert_eq!(bound.horizon_steps, 24);
-        assert_eq!(bound.direct_bindings.len(), 6);
-        assert_eq!(bound.slot_bindings.len(), 1);
-        assert_eq!(bound.slot_bindings[0].input_arity, 6);
-        assert_eq!(bound.slot_bindings[0].output_arity, 1);
+        assert_eq!(bound.assumptions.len(), 6);
+        assert_eq!(bound.learned_slots.len(), 1);
+        assert_eq!(bound.learned_slots[0].input_arity, 6);
+        assert_eq!(bound.learned_slots[0].output_arity, 1);
         assert_eq!(bound.observations.len(), 1);
 
         let stomata = bound
@@ -497,7 +493,7 @@ mod tests {
             .find(|quantity| quantity.quantity.name == "stomata")
             .expect("stomata should exist");
         assert_eq!(stomata.slot_provider.as_deref(), Some("controller"));
-        assert!(stomata.direct_binding.is_none());
+        assert!(stomata.assumption.is_none());
         assert!(!stomata.persistent);
 
         let transpiration = bound
@@ -516,25 +512,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multiple_direct_bindings_for_same_quantity() {
+    fn rejects_multiple_assumptions_for_same_quantity() {
         let model = tiny_tree_equality_model();
         let spec = CompileSpec {
             mode: CompileMode::Simulate,
             horizon_steps: 4,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![
-                DirectBindingSpec {
+            assumptions: vec![
+                AssumptionSpec {
                     quantity: "hydraulic_cond".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "hydraulic_cond".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
                 initial_state("water"),
                 initial_state("carbon"),
             ],
-            slot_bindings: vec![],
+            learned_slots: vec![],
             observations: vec![],
         };
 
@@ -542,7 +538,7 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.message.contains("multiple direct bindings"))
+                .any(|diagnostic| diagnostic.message.contains("multiple assumptions"))
         );
     }
 
@@ -553,31 +549,31 @@ mod tests {
             mode: CompileMode::Simulate,
             horizon_steps: 4,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![
-                DirectBindingSpec {
+            assumptions: vec![
+                AssumptionSpec {
                     quantity: "vpd_scale".to_string(),
-                    kind: DirectBindingKind::DataSeries {
+                    kind: AssumptionKind::DataSeries {
                         steps: vec![0, 2, 3],
                     },
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "soil_water".to_string(),
-                    kind: DirectBindingKind::DataSeries {
+                    kind: AssumptionKind::DataSeries {
                         steps: (0..4).collect(),
                     },
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "hydraulic_cond".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "g_max".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
                 initial_state("water"),
                 initial_state("carbon"),
             ],
-            slot_bindings: vec![SlotBindingSpec {
+            learned_slots: vec![LearnedSlotSpec {
                 slot: "controller".to_string(),
             }],
             observations: Vec::new(),
@@ -598,8 +594,8 @@ mod tests {
             mode: CompileMode::Simulate,
             horizon_steps: 4,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![],
-            slot_bindings: vec![],
+            assumptions: vec![],
+            learned_slots: vec![],
             observations: vec![],
         };
 
@@ -630,13 +626,13 @@ temporal stock_step:
             mode: CompileMode::Simulate,
             horizon_steps: 4,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![DirectBindingSpec {
+            assumptions: vec![AssumptionSpec {
                 quantity: "forcing".to_string(),
-                kind: DirectBindingKind::DataSeries {
+                kind: AssumptionKind::DataSeries {
                     steps: (0..4).collect(),
                 },
             }],
-            slot_bindings: vec![],
+            learned_slots: vec![],
             observations: vec![],
         };
 
@@ -667,16 +663,16 @@ relation passthrough:
             mode: CompileMode::Simulate,
             horizon_steps: 4,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![
-                DirectBindingSpec {
+            assumptions: vec![
+                AssumptionSpec {
                     quantity: "forcing".to_string(),
-                    kind: DirectBindingKind::DataSeries {
+                    kind: AssumptionKind::DataSeries {
                         steps: (0..4).collect(),
                     },
                 },
                 initial_state("latent_store"),
             ],
-            slot_bindings: vec![],
+            learned_slots: vec![],
             observations: vec![],
         };
 
@@ -696,8 +692,8 @@ relation passthrough:
             mode: CompileMode::Fit,
             horizon_steps: 3,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![initial_state("water"), initial_state("carbon")],
-            slot_bindings: vec![],
+            assumptions: vec![initial_state("water"), initial_state("carbon")],
+            learned_slots: vec![],
             observations: vec![ObservationSpec {
                 quantity: "transpiration".to_string(),
                 loss: LossKind::Huber,
@@ -714,21 +710,21 @@ relation passthrough:
     }
 
     #[test]
-    fn rejects_direct_binding_and_slot_provider_conflict() {
+    fn rejects_assumption_and_learned_slot_conflict() {
         let model = tiny_tree_equality_model();
         let spec = CompileSpec {
             mode: CompileMode::Train,
             horizon_steps: 6,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![
-                DirectBindingSpec {
+            assumptions: vec![
+                AssumptionSpec {
                     quantity: "stomata".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
                 initial_state("water"),
                 initial_state("carbon"),
             ],
-            slot_bindings: vec![SlotBindingSpec {
+            learned_slots: vec![LearnedSlotSpec {
                 slot: "controller".to_string(),
             }],
             observations: vec![],
@@ -736,9 +732,9 @@ relation passthrough:
 
         let diagnostics = bind_compile_spec(&model, &spec).expect_err("binding should fail");
         assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains(
-                "quantity 'stomata' has both a direct binding and slot provider 'controller'",
-            )
+            diagnostic
+                .message
+                .contains("quantity 'stomata' has both an assumption and learned slot 'controller'")
         }));
     }
 
@@ -749,8 +745,8 @@ relation passthrough:
             mode: CompileMode::Fit,
             horizon_steps: 6,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![initial_state("water"), initial_state("carbon")],
-            slot_bindings: vec![],
+            assumptions: vec![initial_state("water"), initial_state("carbon")],
+            learned_slots: vec![],
             observations: vec![],
         };
 
@@ -758,7 +754,7 @@ relation passthrough:
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic
                 .message
-                .contains("fit mode requires at least one observation binding")
+                .contains("fit mode requires at least one observation")
         }));
     }
 
@@ -769,15 +765,15 @@ relation passthrough:
             mode: CompileMode::Train,
             horizon_steps: 6,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![
-                DirectBindingSpec {
+            assumptions: vec![
+                AssumptionSpec {
                     quantity: "g_max".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
                 initial_state("water"),
                 initial_state("carbon"),
             ],
-            slot_bindings: vec![SlotBindingSpec {
+            learned_slots: vec![LearnedSlotSpec {
                 slot: "controller".to_string(),
             }],
             observations: vec![],
@@ -788,22 +784,22 @@ relation passthrough:
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic
                 .message
-                .contains("train mode requires at least one observation binding")
+                .contains("train mode requires at least one observation")
         }));
 
         let no_learned = CompileSpec {
             mode: CompileMode::Train,
             horizon_steps: 6,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![
-                DirectBindingSpec {
+            assumptions: vec![
+                AssumptionSpec {
                     quantity: "g_max".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
                 initial_state("water"),
                 initial_state("carbon"),
             ],
-            slot_bindings: vec![],
+            learned_slots: vec![],
             observations: vec![ObservationSpec {
                 quantity: "transpiration".to_string(),
                 loss: LossKind::Mse,
@@ -825,10 +821,10 @@ relation passthrough:
         equality::lower_model(&semantic).expect("equality lowering should succeed")
     }
 
-    fn initial_state(quantity: &str) -> DirectBindingSpec {
-        DirectBindingSpec {
+    fn initial_state(quantity: &str) -> AssumptionSpec {
+        AssumptionSpec {
             quantity: quantity.to_string(),
-            kind: DirectBindingKind::InitialState {
+            kind: AssumptionKind::InitialState {
                 source: InitialStateSource::Constant,
             },
         }

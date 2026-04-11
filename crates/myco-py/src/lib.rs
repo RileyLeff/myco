@@ -2,8 +2,8 @@ use std::{fs, path::PathBuf};
 
 use myco_core::{
     compile::{
-        CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-        InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
+        AssumptionKind, AssumptionSpec, CompileMode, CompileSpec, ConsistencyPolicy,
+        InitialStateSource, LearnedSlotSpec, LossKind, ObservationSchedule, ObservationSpec,
     },
     demo,
     diagnostics::Diagnostic,
@@ -258,13 +258,13 @@ fn read_source(path: &str) -> PyResult<String> {
 
 fn parse_compile_spec(spec: &Bound<'_, PyAny>) -> PyResult<CompileSpec> {
     let dict = spec.downcast::<PyDict>()?;
-    reject_legacy_compile_spec_fields(dict)?;
+    reject_unknown_compile_spec_fields(dict)?;
 
-    let mut direct_bindings = optional_list_items(dict, "assumptions")?
+    let mut assumptions = optional_list_items(dict, "assumptions")?
         .into_iter()
         .map(parse_assumption)
         .collect::<PyResult<Vec<_>>>()?;
-    let mut slot_bindings = Vec::new();
+    let mut learned_slots = Vec::new();
 
     for learning in optional_list_items(dict, "learning")?
         .into_iter()
@@ -272,8 +272,8 @@ fn parse_compile_spec(spec: &Bound<'_, PyAny>) -> PyResult<CompileSpec> {
         .collect::<PyResult<Vec<_>>>()?
     {
         match learning {
-            LearningBindingSpec::Initial(binding) => direct_bindings.push(binding),
-            LearningBindingSpec::Slot(binding) => slot_bindings.push(binding),
+            LearningBindingSpec::Initial(binding) => assumptions.push(binding),
+            LearningBindingSpec::Slot(binding) => learned_slots.push(binding),
         }
     }
 
@@ -283,8 +283,8 @@ fn parse_compile_spec(spec: &Bound<'_, PyAny>) -> PyResult<CompileSpec> {
         consistency_policy: parse_consistency_policy(
             optional_str_item(dict, "consistency_policy")?.as_deref(),
         )?,
-        direct_bindings,
-        slot_bindings,
+        assumptions,
+        learned_slots,
         observations: optional_list_items(dict, "observations")?
             .into_iter()
             .map(parse_observation)
@@ -292,14 +292,14 @@ fn parse_compile_spec(spec: &Bound<'_, PyAny>) -> PyResult<CompileSpec> {
     })
 }
 
-fn parse_assumption(item: Bound<'_, PyAny>) -> PyResult<DirectBindingSpec> {
+fn parse_assumption(item: Bound<'_, PyAny>) -> PyResult<AssumptionSpec> {
     let dict = item.downcast::<PyDict>()?;
     let kind = match required_str_item(dict, "kind")?.as_str() {
-        "series" => DirectBindingKind::DataSeries {
+        "series" => AssumptionKind::DataSeries {
             steps: optional_extract_item(dict, "steps")?.unwrap_or_default(),
         },
-        "constant" => DirectBindingKind::Constant,
-        "initial" => DirectBindingKind::InitialState {
+        "constant" => AssumptionKind::Constant,
+        "initial" => AssumptionKind::InitialState {
             source: parse_initial_state_source(optional_str_item(dict, "source")?.as_deref())?,
         },
         other => {
@@ -309,27 +309,27 @@ fn parse_assumption(item: Bound<'_, PyAny>) -> PyResult<DirectBindingSpec> {
         }
     };
 
-    Ok(DirectBindingSpec {
+    Ok(AssumptionSpec {
         quantity: required_str_item(dict, "quantity")?,
         kind,
     })
 }
 
 enum LearningBindingSpec {
-    Initial(DirectBindingSpec),
-    Slot(SlotBindingSpec),
+    Initial(AssumptionSpec),
+    Slot(LearnedSlotSpec),
 }
 
 fn parse_learning_binding(item: Bound<'_, PyAny>) -> PyResult<LearningBindingSpec> {
     let dict = item.downcast::<PyDict>()?;
     match required_str_item(dict, "kind")?.as_str() {
-        "initial" => Ok(LearningBindingSpec::Initial(DirectBindingSpec {
+        "initial" => Ok(LearningBindingSpec::Initial(AssumptionSpec {
             quantity: required_str_item(dict, "quantity")?,
-            kind: DirectBindingKind::InitialState {
+            kind: AssumptionKind::InitialState {
                 source: InitialStateSource::Learned,
             },
         })),
-        "slot" => Ok(LearningBindingSpec::Slot(SlotBindingSpec {
+        "slot" => Ok(LearningBindingSpec::Slot(LearnedSlotSpec {
             slot: required_str_item(dict, "slot")?,
         })),
         other => Err(PyValueError::new_err(format!(
@@ -386,23 +386,33 @@ fn required_item<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'p
     })
 }
 
-fn reject_legacy_compile_spec_fields(dict: &Bound<'_, PyDict>) -> PyResult<()> {
-    let legacy_fields = ["direct_bindings", "slot_bindings"];
-    let present = legacy_fields
+fn reject_unknown_compile_spec_fields(dict: &Bound<'_, PyDict>) -> PyResult<()> {
+    let allowed_fields = [
+        "mode",
+        "horizon_steps",
+        "consistency_policy",
+        "assumptions",
+        "learning",
+        "observations",
+    ];
+    let present = dict
+        .keys()
+        .into_iter()
+        .map(|key| key.extract::<String>())
+        .collect::<PyResult<Vec<_>>>()?;
+    let mut unknown = present
         .iter()
-        .filter_map(|field| {
-            dict.contains(field)
-                .ok()
-                .and_then(|has| has.then_some(*field))
-        })
+        .filter(|field| !allowed_fields.contains(&field.as_str()))
+        .cloned()
         .collect::<Vec<_>>();
+    unknown.sort();
 
-    if present.is_empty() {
+    if unknown.is_empty() {
         Ok(())
     } else {
         Err(PyValueError::new_err(format!(
-            "legacy compile-spec fields are no longer supported: {}; use 'assumptions', 'learning', and 'observations'",
-            present.join(", ")
+            "unsupported compile-spec fields: {}; allowed fields are mode, horizon_steps, consistency_policy, assumptions, learning, observations",
+            unknown.join(", ")
         )))
     }
 }

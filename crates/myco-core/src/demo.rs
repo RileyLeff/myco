@@ -1,6 +1,6 @@
 use crate::compile::{
-    CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-    InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
+    AssumptionKind, AssumptionSpec, CompileMode, CompileSpec, ConsistencyPolicy,
+    InitialStateSource, LearnedSlotSpec, LossKind, ObservationSchedule, ObservationSpec,
 };
 
 pub fn tiny_tree_training_spec() -> CompileSpec {
@@ -8,41 +8,41 @@ pub fn tiny_tree_training_spec() -> CompileSpec {
         mode: CompileMode::Train,
         horizon_steps: 24,
         consistency_policy: ConsistencyPolicy::EquationOnly,
-        direct_bindings: vec![
-            DirectBindingSpec {
+        assumptions: vec![
+            AssumptionSpec {
                 quantity: "vpd_scale".to_string(),
-                kind: DirectBindingKind::DataSeries {
+                kind: AssumptionKind::DataSeries {
                     steps: (0..24).collect(),
                 },
             },
-            DirectBindingSpec {
+            AssumptionSpec {
                 quantity: "soil_water".to_string(),
-                kind: DirectBindingKind::DataSeries {
+                kind: AssumptionKind::DataSeries {
                     steps: (0..24).collect(),
                 },
             },
-            DirectBindingSpec {
+            AssumptionSpec {
                 quantity: "hydraulic_cond".to_string(),
-                kind: DirectBindingKind::Constant,
+                kind: AssumptionKind::Constant,
             },
-            DirectBindingSpec {
+            AssumptionSpec {
                 quantity: "g_max".to_string(),
-                kind: DirectBindingKind::Constant,
+                kind: AssumptionKind::Constant,
             },
-            DirectBindingSpec {
+            AssumptionSpec {
                 quantity: "water".to_string(),
-                kind: DirectBindingKind::InitialState {
+                kind: AssumptionKind::InitialState {
                     source: InitialStateSource::Constant,
                 },
             },
-            DirectBindingSpec {
+            AssumptionSpec {
                 quantity: "carbon".to_string(),
-                kind: DirectBindingKind::InitialState {
+                kind: AssumptionKind::InitialState {
                     source: InitialStateSource::Constant,
                 },
             },
         ],
-        slot_bindings: vec![SlotBindingSpec {
+        learned_slots: vec![LearnedSlotSpec {
             slot: "controller".to_string(),
         }],
         observations: vec![ObservationSpec {
@@ -62,8 +62,8 @@ mod tests {
         let spec = tiny_tree_training_spec();
         assert_eq!(spec.mode, CompileMode::Train);
         assert_eq!(spec.horizon_steps, 24);
-        assert_eq!(spec.direct_bindings.len(), 6);
-        assert_eq!(spec.slot_bindings.len(), 1);
+        assert_eq!(spec.assumptions.len(), 6);
+        assert_eq!(spec.learned_slots.len(), 1);
         assert_eq!(spec.observations.len(), 1);
     }
 }

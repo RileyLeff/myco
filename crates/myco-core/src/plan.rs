@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    compile::{BoundModel, ResolvedSlotBinding},
+    compile::{BoundModel, ResolvedLearnedSlot},
     diagnostics::Diagnostic,
     egraph::{DirectionalRegistration, ExpressionDirection, extract_available_expression},
     equality::{CoreExpr, EquationId, QuantityId, QuantityRef, SpecialRef, TimeReference},
@@ -115,12 +115,12 @@ pub fn build_single_step_plan(bound: &BoundModel) -> Result<SingleStepPlan, Vec<
     let mut available_current: HashSet<QuantityId> = bound
         .quantities
         .iter()
-        .filter(|quantity| quantity.direct_binding.is_some())
+        .filter(|quantity| quantity.assumption.is_some())
         .map(|quantity| quantity.quantity.id)
         .collect();
 
     let mut current_candidates = bound
-        .slot_bindings
+        .learned_slots
         .iter()
         .cloned()
         .map(Candidate::from_slot)
@@ -430,7 +430,7 @@ struct ResolvedCandidate {
 }
 
 impl Candidate {
-    fn from_slot(slot: ResolvedSlotBinding) -> Self {
+    fn from_slot(slot: ResolvedLearnedSlot) -> Self {
         Self {
             name: slot.slot.clone(),
             source: PlanSource::Slot(slot.slot),
@@ -795,8 +795,8 @@ mod tests {
     use super::*;
     use crate::{
         compile::{
-            CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-            InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
+            AssumptionKind, AssumptionSpec, CompileMode, CompileSpec, ConsistencyPolicy,
+            InitialStateSource, LearnedSlotSpec, LossKind, ObservationSchedule, ObservationSpec,
             bind_compile_spec,
         },
         equality, semantic,
@@ -854,27 +854,27 @@ temporal water_step:
                 mode: CompileMode::Simulate,
                 horizon_steps: 12,
                 consistency_policy: ConsistencyPolicy::EquationOnly,
-                direct_bindings: vec![
-                    DirectBindingSpec {
+                assumptions: vec![
+                    AssumptionSpec {
                         quantity: "vpd_scale".to_string(),
-                        kind: DirectBindingKind::DataSeries {
+                        kind: AssumptionKind::DataSeries {
                             steps: (0..12).collect(),
                         },
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "transpiration".to_string(),
-                        kind: DirectBindingKind::DataSeries {
+                        kind: AssumptionKind::DataSeries {
                             steps: (0..12).collect(),
                         },
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "water".to_string(),
-                        kind: DirectBindingKind::InitialState {
+                        kind: AssumptionKind::InitialState {
                             source: InitialStateSource::Constant,
                         },
                     },
                 ],
-                slot_bindings: vec![],
+                learned_slots: vec![],
                 observations: vec![],
             },
         )
@@ -925,13 +925,13 @@ temporal water_step:
                 mode: CompileMode::Simulate,
                 horizon_steps: 4,
                 consistency_policy: ConsistencyPolicy::EquationOnly,
-                direct_bindings: vec![DirectBindingSpec {
+                assumptions: vec![AssumptionSpec {
                     quantity: "water".to_string(),
-                    kind: DirectBindingKind::InitialState {
+                    kind: AssumptionKind::InitialState {
                         source: InitialStateSource::Constant,
                     },
                 }],
-                slot_bindings: vec![],
+                learned_slots: vec![],
                 observations: vec![],
             },
         )
@@ -955,41 +955,41 @@ temporal water_step:
                 mode: CompileMode::Train,
                 horizon_steps: 24,
                 consistency_policy: ConsistencyPolicy::EquationOnly,
-                direct_bindings: vec![
-                    DirectBindingSpec {
+                assumptions: vec![
+                    AssumptionSpec {
                         quantity: "vpd_scale".to_string(),
-                        kind: DirectBindingKind::DataSeries {
+                        kind: AssumptionKind::DataSeries {
                             steps: (0..24).collect(),
                         },
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "soil_water".to_string(),
-                        kind: DirectBindingKind::DataSeries {
+                        kind: AssumptionKind::DataSeries {
                             steps: (0..24).collect(),
                         },
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "hydraulic_cond".to_string(),
-                        kind: DirectBindingKind::Constant,
+                        kind: AssumptionKind::Constant,
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "g_max".to_string(),
-                        kind: DirectBindingKind::Constant,
+                        kind: AssumptionKind::Constant,
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "water".to_string(),
-                        kind: DirectBindingKind::InitialState {
+                        kind: AssumptionKind::InitialState {
                             source: InitialStateSource::Constant,
                         },
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "carbon".to_string(),
-                        kind: DirectBindingKind::InitialState {
+                        kind: AssumptionKind::InitialState {
                             source: InitialStateSource::Constant,
                         },
                     },
                 ],
-                slot_bindings: vec![SlotBindingSpec {
+                learned_slots: vec![LearnedSlotSpec {
                     slot: "controller".to_string(),
                 }],
                 observations: vec![ObservationSpec {

@@ -226,8 +226,8 @@ fn print_plan_explanation(explanation: &myco_core::introspect::PlanExplanation) 
 fn print_quantity_explanation(explanation: &myco_core::introspect::QuantityExplanation) {
     println!("quantity: {}", explanation.quantity);
     println!(
-        "direct binding: {}",
-        explanation.direct_binding.as_deref().unwrap_or("<none>")
+        "assumption: {}",
+        explanation.assumption.as_deref().unwrap_or("<none>")
     );
     println!(
         "slot provider: {}",

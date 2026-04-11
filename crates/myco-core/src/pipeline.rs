@@ -211,23 +211,23 @@ impl PreparedExperiment {
     pub fn summary(&self) -> ExperimentSummary {
         let learned_initial_count = self
             .bound
-            .direct_bindings
+            .assumptions
             .iter()
             .filter(|binding| {
                 matches!(
                     binding.kind,
-                    crate::compile::DirectBindingKind::InitialState {
+                    crate::compile::AssumptionKind::InitialState {
                         source: crate::compile::InitialStateSource::Learned,
                     }
                 )
             })
             .count();
-        let learned_slot_count = self.bound.slot_bindings.iter().count();
+        let learned_slot_count = self.bound.learned_slots.iter().count();
         let learning_count = learned_initial_count + learned_slot_count;
 
         ExperimentSummary {
             name: self.model.syntax.name.clone(),
-            assumption_count: self.bound.direct_bindings.len() - learned_initial_count,
+            assumption_count: self.bound.assumptions.len() - learned_initial_count,
             learning_count,
             observation_count: self.bound.observations.len(),
             planned_slot_steps: self.plan.slot_steps.len(),
@@ -293,7 +293,7 @@ fn artifact_metadata(experiment: &PreparedExperiment, backend: BackendTarget) ->
 
     let slot_interfaces = experiment
         .bound
-        .slot_bindings
+        .learned_slots
         .iter()
         .map(|slot| SlotInterfaceMetadata {
             slot: slot.slot.clone(),
@@ -342,10 +342,10 @@ fn artifact_metadata(experiment: &PreparedExperiment, backend: BackendTarget) ->
         persistent_quantities,
         learned_initial_state: experiment
             .bound
-            .direct_bindings
+            .assumptions
             .iter()
             .filter_map(|binding| match binding.kind {
-                crate::compile::DirectBindingKind::InitialState {
+                crate::compile::AssumptionKind::InitialState {
                     source: crate::compile::InitialStateSource::Learned,
                 } => Some(
                     experiment.model.equality.quantities[binding.quantity.0]
@@ -357,7 +357,7 @@ fn artifact_metadata(experiment: &PreparedExperiment, backend: BackendTarget) ->
             .collect(),
         learned_slots: experiment
             .bound
-            .slot_bindings
+            .learned_slots
             .iter()
             .map(|slot| slot.slot.clone())
             .collect(),
@@ -369,8 +369,8 @@ fn artifact_metadata(experiment: &PreparedExperiment, backend: BackendTarget) ->
 mod tests {
     use super::*;
     use crate::compile::{
-        CompileMode, CompileSpec, ConsistencyPolicy, DirectBindingKind, DirectBindingSpec,
-        InitialStateSource, LossKind, ObservationSchedule, ObservationSpec, SlotBindingSpec,
+        AssumptionKind, AssumptionSpec, CompileMode, CompileSpec, ConsistencyPolicy,
+        InitialStateSource, LearnedSlotSpec, LossKind, ObservationSchedule, ObservationSpec,
     };
 
     const TINY_TREE: &str = include_str!("../tests/fixtures/tiny_tree.myco");
@@ -398,41 +398,41 @@ mod tests {
                 mode: CompileMode::Train,
                 horizon_steps: 24,
                 consistency_policy: ConsistencyPolicy::EquationOnly,
-                direct_bindings: vec![
-                    DirectBindingSpec {
+                assumptions: vec![
+                    AssumptionSpec {
                         quantity: "vpd_scale".to_string(),
-                        kind: DirectBindingKind::DataSeries {
+                        kind: AssumptionKind::DataSeries {
                             steps: (0..24).collect(),
                         },
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "soil_water".to_string(),
-                        kind: DirectBindingKind::DataSeries {
+                        kind: AssumptionKind::DataSeries {
                             steps: (0..24).collect(),
                         },
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "hydraulic_cond".to_string(),
-                        kind: DirectBindingKind::Constant,
+                        kind: AssumptionKind::Constant,
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "g_max".to_string(),
-                        kind: DirectBindingKind::Constant,
+                        kind: AssumptionKind::Constant,
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "water".to_string(),
-                        kind: DirectBindingKind::InitialState {
+                        kind: AssumptionKind::InitialState {
                             source: InitialStateSource::Constant,
                         },
                     },
-                    DirectBindingSpec {
+                    AssumptionSpec {
                         quantity: "carbon".to_string(),
-                        kind: DirectBindingKind::InitialState {
+                        kind: AssumptionKind::InitialState {
                             source: InitialStateSource::Constant,
                         },
                     },
                 ],
-                slot_bindings: vec![SlotBindingSpec {
+                learned_slots: vec![LearnedSlotSpec {
                     slot: "controller".to_string(),
                 }],
                 observations: vec![ObservationSpec {
@@ -520,41 +520,41 @@ mod tests {
             mode: CompileMode::Train,
             horizon_steps: 24,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![
-                DirectBindingSpec {
+            assumptions: vec![
+                AssumptionSpec {
                     quantity: "vpd_scale".to_string(),
-                    kind: DirectBindingKind::DataSeries {
+                    kind: AssumptionKind::DataSeries {
                         steps: (0..24).collect(),
                     },
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "soil_water".to_string(),
-                    kind: DirectBindingKind::DataSeries {
+                    kind: AssumptionKind::DataSeries {
                         steps: (0..24).collect(),
                     },
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "hydraulic_cond".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "g_max".to_string(),
-                    kind: DirectBindingKind::Constant,
+                    kind: AssumptionKind::Constant,
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "water".to_string(),
-                    kind: DirectBindingKind::InitialState {
+                    kind: AssumptionKind::InitialState {
                         source: InitialStateSource::Constant,
                     },
                 },
-                DirectBindingSpec {
+                AssumptionSpec {
                     quantity: "carbon".to_string(),
-                    kind: DirectBindingKind::InitialState {
+                    kind: AssumptionKind::InitialState {
                         source: InitialStateSource::Constant,
                     },
                 },
             ],
-            slot_bindings: vec![SlotBindingSpec {
+            learned_slots: vec![LearnedSlotSpec {
                 slot: "controller".to_string(),
             }],
             observations: vec![ObservationSpec {
