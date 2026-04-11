@@ -1,18 +1,17 @@
 # Myco V2 Open Questions
 
-This note is a companion to [ideas.md](./ideas.md).
+This note is about unresolved questions for the next real compiler milestone.
 
-The ideas note captures direction.
+It is intentionally narrower than the long-term vision material. For higher-altitude questions, see:
 
-This file captures the design questions that still feel unresolved or intentionally open.
-
-It is not a checklist. The point is to preserve uncertainty honestly so that `v2` can be shaped by real scientific targets rather than by momentum alone.
+- [../v_long_term/README.md](../v_long_term/README.md)
+- [v2_do_this_first.md](./v2_do_this_first.md)
 
 ## 1. What Is The First Real Plant Model Family?
 
-This is still the most important open question.
+This is still the most important question.
 
-Reasonable candidates include:
+Reasonable candidates:
 
 - hydraulic + stomatal control
 - water + carbon + allocation
@@ -20,181 +19,106 @@ Reasonable candidates include:
 
 Questions:
 
-- Which family creates the most scientific value soonest?
-- Which family forces the smallest but most meaningful `v2` compiler expansion?
-- Which family fits best with currently accessible data?
-- Which family is ambitious enough to matter but narrow enough to finish?
+- which family creates real scientific value fastest?
+- which family forces the smallest meaningful compiler expansion?
+- which family best matches near-term data access?
 
-## 2. What Should Count As A Parameter?
+## 2. How Far Do We Push The World/Workflow Separation In V2?
 
-`v1` can treat many fixed values as constants, but `v2` likely wants a clearer parameter role.
+The key design rule is clear, but its practical implementation still needs decisions.
 
-Open questions:
+Questions:
 
-- Should parameters be a distinct quantity kind?
-- Should they be grouped separately from external forcing and state?
-- How much trainability belongs in the core versus in backend-specific wrappers?
-- Should parameter bundles be attachable to semantic schemas like `Leaf` or `Tree`?
+- how much of the current source-level role vocabulary should be deprecated in `v2`?
+- which workflow annotations should live only in config?
+- which structural facts should be inferred from temporal relations vs declared explicitly at binding time?
 
-## 3. What Is The Right Layer For Semantic Schemas?
+## 3. What Should Count As A Parameter?
 
-There is a likely future distinction between:
+`v2` likely needs clearer rollout-stable quantity semantics.
 
-- physical/base quantity types
-- semantic component schemas
-- functions and relations
+Questions:
 
-Open questions:
+- should `parameter` become a first-class concept in the language or only in binding/runtime?
+- how should fixed vs learned vs assumed parameter status be expressed?
+- how should parameters differ from constants in practice, if at all, for the first real model?
 
-- Should things like `Leaf`, `Tree`, or `Sperry_2017_Tree` be called types, schemas, bundles, or components?
-- How much nesting or recursive composition should be allowed?
-- How much of this should be erased before equality/planning?
-- Should schemas be instantiation templates, importable packages, or both?
-- Which semantics should survive into outputs for interpretability even if they are erased for execution?
+## 4. What Is The Smallest Useful Function Registry?
 
-## 4. What Belongs In The Function Registry?
+The first real model may need named scientific functions.
 
-The registry is one of the most important likely `v2` additions, but it is still underdefined.
+Questions:
 
-Open questions:
+- which functions truly need registry support for the chosen model family?
+- what metadata is minimally required for each registered function?
+- should the first registry be entirely local/project-level, with package-backed registries deferred?
 
-- Which functions should remain expressible directly as surface arithmetic?
-- Which functions deserve registry-backed identities?
-- What metadata should every registered function carry?
-- How much invertibility information is needed to be useful?
-- Should registry entries declare backend implementations directly, or lower through a backend-neutral intermediate form?
-- How much of the registry should ship as a small Myco standard library versus live in versioned external packages?
-- Should plant-physiology content live entirely in domain packages such as something like `rileyleff/plant_ecophys`?
+## 5. Does The First Real Model Require Local Solve Blocks?
 
-## 5. How Should Local Solve Blocks Work?
+This should be decided empirically from the target model family.
 
-Same-step algebraic loops will become unavoidable for real plant models.
+Questions:
 
-Open questions:
+- can the first real model be represented as an explicit step plan?
+- if not, what is the narrowest useful same-step solve abstraction?
+- how much solver detail should the compiler know vs defer to the backend?
 
-- What should the surface syntax of a solve block look like?
-- How explicit should unknowns and solver hints be?
-- Should solve blocks live inside the model language or as registry-backed components?
-- How much should the compiler know about solver internals versus simply wiring backend hooks?
+## 6. What Is The Smallest Useful Observation-Operator Layer?
 
-## 6. How Rich Should Observation Operators Become?
+The TinyTree observation story is intentionally simple.
 
-Observation operators are likely essential for real workflows.
+Questions:
 
-Open questions:
+- what non-identity observation operators are required by the chosen model family?
+- how should loss configuration stay simple while becoming more realistic?
+- how much observation metadata belongs in the core language vs binding vs registry?
 
-- Should operators be simple expressions, registry-backed functions, or both?
-- How should they attach to sparse or irregular schedules?
-- How should uncertainty, weights, or sigmas be represented?
-- When does an observation operator become a small model in its own right?
+## 7. What Is The Right V2 Indexing Story?
 
-## 7. What Is The Right Indexing Story?
+Real data will likely force clearer schedule/index semantics.
 
-Sparse and irregular data need a clearer story than "short vectors with masks."
+Questions:
 
-Open questions:
+- are explicit timestep indices enough for `v2`?
+- when do timestamp-based alignments become necessary?
+- which data adapters should be supported first: plain dicts, pandas, xarray, polars?
 
-- Should indexing be timestep-based, timestamp-based, or both?
-- Should schedules be reusable named objects?
-- How should multiple sparse series align against one compile grid?
-- Should interpolation ever live inside Myco, or always happen before binding?
+## 8. How Much Binding Ergonomics Is Worth Adding In V2?
 
-## 8. How Ergonomic Should Binding Become?
+The current API is explicit and semantically honest, but verbose.
 
-The current Python API is explicit and semantically honest, but somewhat verbose.
+Questions:
 
-Open questions:
+- what small convenience layer would materially help without making semantics fuzzy?
+- should dataframe/xarray adapters be in-scope for the first real model?
+- how much should the package optimize for interactive human use vs agent-assisted use?
 
-- Should convenience layers live inside `myco` or in add-on packages?
-- How much bulk binding should be allowed before semantics get fuzzy again?
-- Should `pandas` / `xarray` adapters be core, optional, or external?
-- How much should the package optimize for human ergonomics versus agent ergonomics?
+## 9. How Far Should Backend Agnosticism Be Protected In V2?
 
-## 9. How Broad Should The Constraint System Get?
+The current implementation is backend-agnostic in core architecture, but JAX-first in practice.
 
-There is likely a large future design space for constraints.
+Questions:
 
-Open questions:
+- what minimum backend-neutral contract should remain protected while building the first real model?
+- what JAX-specific assumptions are acceptable in `v2` product work?
+- which backend questions can be explicitly deferred until there is a real PyTorch or Rust-native use case?
 
-- Which constraint kinds matter most for the first real model?
-- Which constraints are compile-time checks versus runtime projections versus penalties versus assertions?
-- How much of the constraint design should live in the core language versus the registry?
-- Is there a useful generic constraint interface, or is it better to keep a typed family of explicit constraint kinds?
-- Can a generic user-facing constraint interface coexist with strongly typed lowering semantics underneath?
-- What would it take for the constraint system to eventually support stronger symbolic or theorem-prover-like reasoning?
-
-## 10. How Far Should Backend Agnosticism Go?
-
-Myco core should probably stay backend-agnostic, but the implementation is currently JAX-first.
-
-Open questions:
-
-- What is the minimum backend-neutral contract the core should emit?
-- Which runtime semantics belong in each backend instead of in the core?
-- How much should backend-specific optimization shape the surface language?
-- When would PyTorch or a Rust-native backend become worth supporting seriously?
-- How can the project stay JAX-first in practice without letting JAX assumptions leak into the core architecture?
-
-## 11. What Does A Healthy Registry Ecosystem Look Like?
-
-If Myco grows packages and registries, versioning and dependency semantics will matter.
-
-Open questions:
-
-- How should models declare package dependencies?
-- Should registries be local, remote, or both?
-- How explicit should version pinning be?
-- How much should published packages expose internals versus only public schemas/functions?
-- Should Myco follow a `cargo` / `uv` style lockfile-and-registry model from the beginning of the package system?
-- How should package namespaces and ownership work for shareable scientific models?
-
-## 12. Should Uncertainty Stay Explicit In The Graph?
-
-There is a tempting future direction around uncertainty-aware models.
-
-Open questions:
-
-- Should uncertainty stay a modeling pattern built from ordinary nodes?
-- Should things like mean and standard deviation remain explicit graph structure?
-- Is a special probabilistic node model ever worth it, or is a wrapper-schema pattern enough for a long time?
-- When would real workflows justify deeper probabilistic semantics in the core?
-
-## 13. What Should Stay Out Of Scope?
+## 10. What Should Be Explicitly Deferred?
 
 One of the strengths of `v1` was scope control.
 
-Open questions:
+Questions:
 
-- What should be explicitly deferred even if it sounds exciting?
-- Which ideas belong in domain libraries rather than in the core?
-- How far can discrete-time plus local solve blocks take the science before continuous-time becomes unavoidable?
-- What would signal that Myco is drifting into a general CAS or general workflow system instead of staying a scientific compiler?
-
-## 14. What Is The Right Long-Term Symbolic North Star?
-
-There is a possible long-term direction where Myco becomes much stronger at symbolic reasoning than it is today.
-
-Open questions:
-
-- What facts should the type/constraint system eventually be able to carry?
-- Which kinds of invertibility questions should be answered automatically?
-- How much should branch validity depend on propagated assumptions?
-- When does it become worth introducing theorem-prover-like or SMT-like machinery?
-- Should a stronger symbolic subsystem live inside Myco core, or as a sibling package in the ecosystem?
-- What is the boundary between "useful scientific reasoning" and "accidentally building a huge CAS"?
+- which good ideas should be explicitly declared out of scope for the first `v2` proof?
+- what would signal that `v2` is drifting into platform-building rather than proving one real model family?
 
 ## Short Version
 
-The biggest unresolved themes are:
+The main `v2` questions are:
 
-- the first real model family
-- parameter semantics
-- semantic schemas and packages
-- function registries
-- local solve blocks
-- richer observation and indexing models
-- explicit but composable uncertainty patterns
-- a richer type-and-constraint system as a foundation for stronger symbolic reasoning
-- the right boundary between a backend-neutral core and backend-specific runtimes
-
-Those questions are probably more important than any single implementation task, because they determine what `v2` is actually trying to prove.
+- what real plant model family to target
+- how to finish the world/workflow boundary shift
+- how to represent parameters cleanly
+- whether the target model truly needs a function registry and/or local solve blocks
+- what the minimal real-data observation/indexing ergonomics should be
+- how to stay JAX-first without turning the core into JAX-specific architecture

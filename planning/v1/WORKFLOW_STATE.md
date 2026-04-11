@@ -1,6 +1,6 @@
 # Workflow State
 
-Current phase: post-`v1.3` checkpoint; pre-`v2` hardening is complete and the next step is a focused `v2` plan
+Current phase: post-`v1.3` checkpoint; pre-`v2` hardening is complete and the next step is the focused `v2` plan captured in `planning/v2/`
 
 ## Completed
 
@@ -46,6 +46,6 @@ Current phase: post-`v1.3` checkpoint; pre-`v2` hardening is complete and the ne
 
 ## Next Action
 
-1. open a dedicated `v2` plan around one real plant-model family
-2. keep avoiding broad frontend-language expansion outside that concrete target
-3. use the next external review round to pressure-test the `v2` target rather than the `v1` core
+1. use `planning/v2/charter.md` and `planning/v2/v2_do_this_first.md` as the near-term guide for the next compiler milestone
+2. keep avoiding broad frontend-language expansion outside one concrete plant-model target
+3. treat `planning/v_long_term/` as north-star material, not immediate implementation scope
