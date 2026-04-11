@@ -360,10 +360,10 @@ mod tests {
         let source = r#"
 model DimOk
 
-external driver : potential
-external rate : conductance
-state water : potential
-node flux : water_flux
+quantity driver : potential
+quantity rate : conductance
+quantity water : potential
+quantity flux : water_flux
 
 relation flow:
   flux = rate * driver
@@ -383,8 +383,8 @@ temporal water_step:
         let source = r#"
 model DimBad
 
-external rate : conductance
-state water : potential
+quantity rate : conductance
+quantity water : potential
 
 relation bad:
   water = water + rate
@@ -406,8 +406,8 @@ relation bad:
         let source = r#"
 model BoundBad
 
-node x : potential { self <= limit }
-node limit : conductance
+quantity x : potential { self <= limit }
+quantity limit : conductance
 "#;
 
         let syntax = parse_and_validate(source).expect("syntax");
@@ -426,7 +426,7 @@ node limit : conductance
         let source = r#"
 model UnitBad
 
-node psi : potential@bar
+quantity psi : potential@bar
 "#;
 
         let syntax = parse_and_validate(source).expect("syntax");

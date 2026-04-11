@@ -143,19 +143,12 @@ without depending on a `state` keyword in the source model.
 
 ### Current Status
 
-The first slice of this phase is now implemented:
+This phase is now landed:
 
 - equality lowering infers persistent quantities from temporal update left-hand sides
 - compile validation uses inferred persistence when deciding which quantities require initial-state bindings
-- emitted artifacts and typed artifact metadata now expose persistent quantities explicitly
-
-For compatibility during the migration:
-
-- legacy source-level `state` declarations still contribute to persistence
-
-That is deliberate.
-
-It means the compiler's internal source of truth is no longer only the source keyword, while existing models continue to compile until binding-time persistence annotations are ready.
+- emitted artifacts and typed artifact metadata expose persistent quantities explicitly
+- source-level `state` declarations no longer contribute persistence semantics
 
 ## Phase 2: Expand Binding-Time Role Annotations
 
@@ -194,24 +187,19 @@ Something closer to:
 - `assume_initial(...)`
 - `observe_dense(...)`
 - `observe_sparse(...)`
-- `bind_slot(..., kind="learned")`
+- `learn_slot(...)`
 
 or a grouped equivalent that still keeps the underlying semantics clear.
 
 ### Current Status
 
-The first slice of this phase is now implemented:
+This phase is now landed:
 
-- `initial_state` bindings now make a quantity rollout-persistent in the compiled workflow, even if the source model did not already mark or imply persistence
-- the Python API now exposes `assume_series(...)`, `assume_constant(...)`, and `assume_initial(...)` aliases alongside the older `bind_*` names
-- the Python API and `CompileSpec` now expose `learn_slot(...)`, with docs/examples starting to use the `assume` / `observe` / `learn` vocabulary directly
+- `initial_state` bindings make a quantity rollout-persistent in the compiled workflow, even if the source model did not already imply persistence
+- the public Python API uses `assume_*`, `observe_*`, and `learn_*`
+- the public compile-spec JSON shape is `assumptions`, `learning`, and `observations`
 
-This matters because it gives config a real way to carry persistence intent.
-
-That means the remaining legacy dependence on source-level `state` is now much smaller:
-
-- source-level `state` is still accepted and still contributes persistence during migration
-- but config can now express persistence for non-`state` quantities directly
+Config now carries the workflow facts the compiler needs without relying on source-level role keywords.
 
 ## Phase 3: Make Persistence A Compiler Property, Not A Source-Level Role
 
@@ -239,6 +227,13 @@ The system should be able to reject:
 
 even if the source model never used a `state` keyword.
 
+### Current Status
+
+This phase is now landed:
+
+- initialization requirements are driven by inferred persistence plus binding-time workflow declarations
+- artifact metadata and runtime validation now surface the resulting persistent quantities explicitly
+
 ## Phase 4: Simplify The Source Language
 
 ### Objective
@@ -260,6 +255,13 @@ Two reasonable options:
 Because this project has no public compatibility burden, the codebase can be fairly aggressive here once the internal semantics are ready.
 
 Still, the refactor should be staged enough that tests continue to protect the planner and emitter behavior.
+
+### Current Status
+
+This phase is now landed:
+
+- `.myco` quantity declarations now use a single `quantity ...` form
+- the old `external` / `state` / `node` source split has been removed from the parser, lowering pipeline, and fixtures
 
 ## Phase 5: Clean Up Docs, Examples, And Tests
 
@@ -305,11 +307,12 @@ This refactor is successful when all of the following are true:
 4. runtime artifacts and metadata reflect the new source of truth cleanly
 5. tests and docs describe the system in terms of world structure plus workflow binding, not source-level role keywords
 
-## Recommended Immediate Next Step
+## Status
 
-Start with a narrow internal pass:
+The `v2_do_this_first` migration is largely complete:
 
-- infer persistent quantities from temporal structure
-- thread that through compile validation and artifact metadata
+- workflow-neutral `quantity` declarations now define the world model
+- workflow roles now live in config/binding
+- persistence is a compiler/binding property rather than a source keyword
 
-That is the smallest change that begins to detach the execution semantics from `QuantityKind::State`, and it will make the rest of the refactor much easier to reason about.
+The next work should build on this boundary rather than reopen it.

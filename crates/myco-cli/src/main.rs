@@ -55,13 +55,11 @@ fn run() -> Result<(), String> {
                     let summary = model.summary();
                     println!("model: {}", summary.name);
                     println!(
-                        "counts: quantities={}, relations={}, slots={}, external={}, state={}, node={}, temporal={}",
+                        "counts: quantities={}, relations={}, slots={}, persistent={}, temporal={}",
                         summary.quantity_count,
                         summary.relation_count,
                         summary.slot_count,
-                        summary.external_count,
-                        summary.state_count,
-                        summary.node_count,
+                        summary.persistent_quantity_count,
                         summary.temporal_count
                     );
                     println!("quantities: {}", summary.quantity_names.join(", "));

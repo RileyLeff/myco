@@ -53,20 +53,26 @@ And config/binding should own things like:
 
 The world should not need to know where the data came from.
 
-## What This Means For Current Syntax
+## What This Means For Source Syntax
 
-Today the language has source-level categories like:
+The old source split of:
 
 - `external`
 - `state`
 - `node`
 
-That split was useful in `v1`, but it mixes structural semantics with workflow semantics more than we probably want long term.
+was useful in `v1`, but it mixed structural semantics with workflow semantics more than we want long term.
 
 In particular:
 
 - `external` is mostly a workflow role, not a world fact
 - `state` may also be better treated as a binding-time or inferred property rather than a mandatory source-level distinction
+
+The current direction is now the flatter:
+
+- `quantity`
+
+declaration form, with workflow meaning carried by binding/config instead.
 
 The clean mental model is:
 

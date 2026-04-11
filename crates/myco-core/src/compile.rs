@@ -613,7 +613,7 @@ mod tests {
             mode: CompileMode::Simulate,
             horizon_steps: 4,
             consistency_policy: ConsistencyPolicy::EquationOnly,
-            direct_bindings: vec![initial_state("water")],
+            direct_bindings: vec![],
             slot_bindings: vec![],
             observations: vec![],
         };
@@ -622,7 +622,7 @@ mod tests {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic
                 .message
-                .contains("persistent quantity 'carbon' requires an explicit initial-state binding")
+                .contains("persistent quantity 'water' requires an explicit initial-state binding")
         }));
     }
 
@@ -631,8 +631,8 @@ mod tests {
         let source = r#"
 model TemporalNode
 
-node stock : scalar
-node forcing : scalar
+quantity stock : scalar
+quantity forcing : scalar
 
 temporal stock_step:
   stock[t+1] = stock[t] + forcing[t]
@@ -668,8 +668,8 @@ temporal stock_step:
         let source = r#"
 model WorkflowPersistent
 
-node latent_store : scalar
-node forcing : scalar
+quantity latent_store : scalar
+quantity forcing : scalar
 
 relation passthrough:
   forcing = forcing

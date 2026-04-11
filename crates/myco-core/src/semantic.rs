@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::{
     diagnostics::{Diagnostic, SourceSpan},
-    syntax::{BlockDecl, BlockKind, Item, ModelFile, QuantityDecl, QuantityKind, SlotDecl},
+    syntax::{BlockDecl, BlockKind, Item, ModelFile, QuantityDecl, SlotDecl},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,7 +15,6 @@ pub struct SemanticModel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Declaration {
-    pub kind: QuantityKind,
     pub name: String,
     pub ty: String,
     pub constraints: Vec<String>,
@@ -89,9 +88,7 @@ pub fn lower_model(model: &ModelFile) -> Result<SemanticModel, Vec<Diagnostic>> 
 
     for item in &model.items {
         match item {
-            Item::External(quantity) | Item::State(quantity) | Item::Node(quantity) => {
-                declarations.push(lower_declaration(quantity));
-            }
+            Item::Quantity(quantity) => declarations.push(lower_declaration(quantity)),
             Item::Relation(block) | Item::Temporal(block) => match lower_block(block) {
                 Ok(block) => relations.push(block),
                 Err(mut errs) => diagnostics.append(&mut errs),
@@ -114,7 +111,6 @@ pub fn lower_model(model: &ModelFile) -> Result<SemanticModel, Vec<Diagnostic>> 
 
 fn lower_declaration(quantity: &QuantityDecl) -> Declaration {
     Declaration {
-        kind: quantity.kind,
         name: quantity.name.clone(),
         ty: quantity.ty.clone(),
         constraints: quantity.constraints.clone(),

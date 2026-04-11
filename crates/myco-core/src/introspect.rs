@@ -666,10 +666,10 @@ mod tests {
         let source = r#"
 model BlockedEquation
 
-external x : scalar
-node w : scalar
-node u : scalar
-node y : scalar
+quantity x : scalar
+quantity w : scalar
+quantity u : scalar
+quantity y : scalar
 
 relation blocked:
   y = (x + w) * (u + 1)

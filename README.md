@@ -59,8 +59,7 @@ artifact = experiment.compile(backend="jax")
 artifact.write()
 ```
 
-The older `bind_*` helpers still exist as compatibility aliases, but the intended
-workflow vocabulary is now:
+The workflow vocabulary is:
 
 - `assume_*` for directly supplied values
 - `observe_*` for evidence

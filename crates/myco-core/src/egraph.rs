@@ -557,9 +557,9 @@ mod tests {
         let source = r#"
 model Commute
 
-node x : scalar
-node y : scalar
-node z : scalar
+quantity x : scalar
+quantity y : scalar
+quantity z : scalar
 
 relation pair:
   z = x + y
@@ -636,11 +636,11 @@ relation pair:
         let source = r#"
 model NoLeak
 
-external a : scalar
-external b : scalar
-external c : scalar
-external d : scalar
-node y : scalar
+quantity a : scalar
+quantity b : scalar
+quantity c : scalar
+quantity d : scalar
+quantity y : scalar
 
 relation first:
   y = a + b
@@ -685,7 +685,9 @@ relation second:
 
         assert!(first_extracted.is_none());
         assert_eq!(
-            second_extracted.expect("second path should be available").expression,
+            second_extracted
+                .expect("second path should be available")
+                .expression,
             CoreExpr::Binary {
                 op: BinaryOp::Add,
                 left: Box::new(CoreExpr::Quantity(QuantityRef {

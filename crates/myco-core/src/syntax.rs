@@ -11,24 +11,14 @@ pub struct ModelFile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
-    External(QuantityDecl),
-    State(QuantityDecl),
-    Node(QuantityDecl),
+    Quantity(QuantityDecl),
     Relation(BlockDecl),
     Slot(SlotDecl),
     Temporal(BlockDecl),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuantityKind {
-    External,
-    State,
-    Node,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuantityDecl {
-    pub kind: QuantityKind,
     pub name: String,
     pub ty: String,
     pub constraints: Vec<String>,
@@ -73,7 +63,7 @@ pub fn validate_model(model: &ModelFile) -> Result<(), Vec<Diagnostic>> {
     let mut declared = HashSet::new();
 
     for item in &model.items {
-        if let Item::External(quantity) | Item::State(quantity) | Item::Node(quantity) = item {
+        if let Item::Quantity(quantity) = item {
             if !declared.insert(quantity.name.clone()) {
                 diagnostics.push(
                     Diagnostic::error(format!("duplicate declaration for '{}'", quantity.name))
@@ -87,9 +77,7 @@ pub fn validate_model(model: &ModelFile) -> Result<(), Vec<Diagnostic>> {
         .items
         .iter()
         .filter_map(|item| match item {
-            Item::External(quantity) | Item::State(quantity) | Item::Node(quantity) => {
-                Some(quantity.name.as_str())
-            }
+            Item::Quantity(quantity) => Some(quantity.name.as_str()),
             _ => None,
         })
         .collect();
@@ -192,32 +180,10 @@ impl<'a> Parser<'a> {
 
             let trimmed = line.trimmed();
 
-            if trimmed.starts_with("external ") {
-                match self.parse_quantity(cursor, QuantityKind::External) {
+            if trimmed.starts_with("quantity ") {
+                match self.parse_quantity(cursor) {
                     Ok((item, next)) => {
-                        items.push(Item::External(item));
-                        cursor = next;
-                    }
-                    Err(diag) => {
-                        diagnostics.push(diag);
-                        cursor += 1;
-                    }
-                }
-            } else if trimmed.starts_with("state ") {
-                match self.parse_quantity(cursor, QuantityKind::State) {
-                    Ok((item, next)) => {
-                        items.push(Item::State(item));
-                        cursor = next;
-                    }
-                    Err(diag) => {
-                        diagnostics.push(diag);
-                        cursor += 1;
-                    }
-                }
-            } else if trimmed.starts_with("node ") {
-                match self.parse_quantity(cursor, QuantityKind::Node) {
-                    Ok((item, next)) => {
-                        items.push(Item::Node(item));
+                        items.push(Item::Quantity(item));
                         cursor = next;
                     }
                     Err(diag) => {
@@ -284,27 +250,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_quantity(
-        &self,
-        start_idx: usize,
-        kind: QuantityKind,
-    ) -> Result<(QuantityDecl, usize), Diagnostic> {
+    fn parse_quantity(&self, start_idx: usize) -> Result<(QuantityDecl, usize), Diagnostic> {
         let line = &self.lines[start_idx];
-        let keyword = match kind {
-            QuantityKind::External => "external ",
-            QuantityKind::State => "state ",
-            QuantityKind::Node => "node ",
-        };
-
         let rest = line
             .trimmed()
-            .strip_prefix(keyword)
+            .strip_prefix("quantity ")
             .expect("caller must guard keyword");
 
-        let (before_constraints, inline_constraints, multiline_open) =
-            parse_constraint_shape(rest).map_err(|message| {
-                Diagnostic::error(message).with_span(line.span())
-            })?;
+        let (before_constraints, inline_constraints, multiline_open) = parse_constraint_shape(rest)
+            .map_err(|message| Diagnostic::error(message).with_span(line.span()))?;
         let (name, ty) = parse_name_and_type(before_constraints).ok_or_else(|| {
             Diagnostic::error("expected `<name> : <type>`").with_span(line.span())
         })?;
@@ -342,7 +296,6 @@ impl<'a> Parser<'a> {
 
         Ok((
             QuantityDecl {
-                kind,
                 name: name.to_string(),
                 ty: ty.to_string(),
                 constraints,
@@ -589,7 +542,7 @@ mod tests {
         let bad = r#"
 model Bad
 
-node x : scalar
+quantity x : scalar
 
 slot provider provides [x]:
   inputs = [y]
@@ -604,7 +557,7 @@ slot provider provides [x]:
 
     #[test]
     fn rejects_missing_model_header() {
-        let diagnostics = parse_model("node x : scalar").expect_err("parse should fail");
+        let diagnostics = parse_model("quantity x : scalar").expect_err("parse should fail");
         assert!(diagnostics.iter().any(|diag| {
             diag.message
                 .contains("first non-empty line must declare a model")
@@ -616,7 +569,7 @@ slot provider provides [x]:
         let source = r#"
 model Bad
 
-node x : scalar {
+quantity x : scalar {
   self >= 0
 "#;
         let diagnostics = parse_model(source).expect_err("parse should fail");
@@ -631,7 +584,7 @@ node x : scalar {
         let source = r#"
 model Bad
 
-node x : scalar { self >= 0 } trailing
+quantity x : scalar { self >= 0 } trailing
 "#;
         let diagnostics = parse_model(source).expect_err("parse should fail");
         assert!(diagnostics.iter().any(|diag| {

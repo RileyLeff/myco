@@ -1788,14 +1788,14 @@ mod tests {
         let source = r#"
 model Penalized
 
-external forcing : scalar
-state water : scalar
-node stomata : scalar {
+quantity forcing : scalar
+quantity water : scalar
+quantity stomata : scalar {
   self >= 0
   self <= g_max
   penalty smooth(weight=0.25)
 }
-node g_max : scalar
+quantity g_max : scalar
 
 slot controller provides [stomata]:
   inputs = [forcing, g_max]
@@ -1861,10 +1861,10 @@ temporal water_step:
         let source = r#"
 model Recover
 
-external vpd_scale : scalar
-state water : scalar
-node stomata : scalar
-node transpiration : scalar
+quantity vpd_scale : scalar
+quantity water : scalar
+quantity stomata : scalar
+quantity transpiration : scalar
 
 relation demand_transpiration:
   transpiration = stomata * vpd_scale
@@ -1917,8 +1917,8 @@ temporal water_step:
         let source = r#"
 model UnitConvert
 
-node x : potential@MPa
-node y : potential@kPa
+quantity x : potential@MPa
+quantity y : potential@kPa
 
 relation assign:
   x = y
@@ -1957,7 +1957,7 @@ relation assign:
         let source = r#"
 model LearnedInit
 
-state water : scalar {
+quantity water : scalar {
   self >= 0
 }
 
@@ -2005,10 +2005,10 @@ temporal water_step:
         let source = r#"
 model SlotKinds
 
-external forcing : scalar
-state water : scalar
-node data_out : scalar
-node const_out : scalar
+quantity forcing : scalar
+quantity water : scalar
+quantity data_out : scalar
+quantity const_out : scalar
 
 slot data_slot provides [data_out]:
   inputs = [forcing]
@@ -2113,10 +2113,10 @@ temporal water_step:
         let source = r#"
 model SlotAlternative
 
-external forcing : scalar
-state water : scalar
-node x : scalar
-node y : scalar
+quantity forcing : scalar
+quantity water : scalar
+quantity x : scalar
+quantity y : scalar
 
 slot provider provides [x]:
   inputs = [forcing]
@@ -2176,10 +2176,10 @@ temporal water_step:
         let source = r#"
 model Recover
 
-external vpd_scale : scalar
-state water : scalar
-node stomata : scalar
-node transpiration : scalar
+quantity vpd_scale : scalar
+quantity water : scalar
+quantity stomata : scalar
+quantity transpiration : scalar
 
 relation demand_transpiration:
   transpiration = stomata * vpd_scale

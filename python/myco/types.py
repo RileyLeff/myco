@@ -8,9 +8,10 @@ from typing import Iterable, Literal
 
 Mode = Literal["simulate", "fit", "train"]
 ConsistencyPolicy = Literal["off", "equation_only", "all"]
-DirectBindingKind = Literal["data_series", "constant", "initial_state"]
+AssumptionKind = Literal["series", "constant", "initial"]
 InitialStateSource = Literal["constant", "data", "learned"]
 SlotBindingKind = Literal["data_series", "constant", "learned"]
+LearningKind = Literal["slot", "initial"]
 LossKind = Literal["mse", "huber"]
 ObservationScheduleKind = Literal["dense_per_step", "sparse"]
 Backend = Literal["python", "jax"]
@@ -22,9 +23,7 @@ class ModelSummary:
     quantity_count: int
     relation_count: int
     slot_count: int
-    external_count: int
-    state_count: int
-    node_count: int
+    persistent_quantity_count: int
     temporal_count: int
     quantity_names: tuple[str, ...]
     relation_names: tuple[str, ...]
@@ -37,9 +36,7 @@ class ModelSummary:
             quantity_count=int(payload["quantity_count"]),
             relation_count=int(payload["relation_count"]),
             slot_count=int(payload["slot_count"]),
-            external_count=int(payload["external_count"]),
-            state_count=int(payload["state_count"]),
-            node_count=int(payload["node_count"]),
+            persistent_quantity_count=int(payload["persistent_quantity_count"]),
             temporal_count=int(payload["temporal_count"]),
             quantity_names=tuple(payload["quantity_names"]),
             relation_names=tuple(payload["relation_names"]),
@@ -50,8 +47,8 @@ class ModelSummary:
 @dataclass(frozen=True, slots=True)
 class ExperimentSummary:
     name: str
-    direct_binding_count: int
-    slot_binding_count: int
+    assumption_count: int
+    learning_count: int
     observation_count: int
     planned_slot_steps: int
     planned_equation_steps: int
@@ -63,8 +60,8 @@ class ExperimentSummary:
     def from_payload(cls, payload: dict[str, object]) -> "ExperimentSummary":
         return cls(
             name=str(payload["name"]),
-            direct_binding_count=int(payload["direct_binding_count"]),
-            slot_binding_count=int(payload["slot_binding_count"]),
+            assumption_count=int(payload["assumption_count"]),
+            learning_count=int(payload["learning_count"]),
             observation_count=int(payload["observation_count"]),
             planned_slot_steps=int(payload["planned_slot_steps"]),
             planned_equation_steps=int(payload["planned_equation_steps"]),
@@ -268,9 +265,9 @@ class QuantityExplanation:
 
 
 @dataclass(slots=True)
-class DirectBinding:
+class Assumption:
     quantity: str
-    kind: DirectBindingKind
+    kind: AssumptionKind
     steps: list[int] = field(default_factory=list)
     source: InitialStateSource | None = None
 
@@ -283,7 +280,7 @@ class DirectBinding:
         return payload
 
     @classmethod
-    def from_dict(cls, payload: dict[str, object]) -> "DirectBinding":
+    def from_dict(cls, payload: dict[str, object]) -> "Assumption":
         return cls(
             quantity=str(payload["quantity"]),
             kind=payload["kind"],  # type: ignore[arg-type]
@@ -293,18 +290,27 @@ class DirectBinding:
 
 
 @dataclass(slots=True)
-class SlotBinding:
-    slot: str
-    kind: SlotBindingKind
+class LearningBinding:
+    kind: LearningKind
+    quantity: str | None = None
+    slot: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {"slot": self.slot, "kind": self.kind}
+        payload: dict[str, object] = {"kind": self.kind}
+        if self.quantity is not None:
+            payload["quantity"] = self.quantity
+        if self.slot is not None:
+            payload["slot"] = self.slot
+        return payload
 
     @classmethod
-    def from_dict(cls, payload: dict[str, object]) -> "SlotBinding":
+    def from_dict(cls, payload: dict[str, object]) -> "LearningBinding":
         return cls(
-            slot=str(payload["slot"]),
             kind=payload["kind"],  # type: ignore[arg-type]
+            quantity=(
+                str(payload["quantity"]) if payload.get("quantity") is not None else None
+            ),
+            slot=str(payload["slot"]) if payload.get("slot") is not None else None,
         )
 
 
@@ -340,8 +346,8 @@ class CompileSpec:
     mode: Mode
     horizon_steps: int
     consistency_policy: ConsistencyPolicy = "equation_only"
-    direct_bindings: list[DirectBinding] = field(default_factory=list)
-    slot_bindings: list[SlotBinding] = field(default_factory=list)
+    assumptions: list[Assumption] = field(default_factory=list)
+    learning: list[LearningBinding] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
@@ -349,24 +355,30 @@ class CompileSpec:
             "mode": self.mode,
             "horizon_steps": self.horizon_steps,
             "consistency_policy": self.consistency_policy,
-            "direct_bindings": [binding.to_dict() for binding in self.direct_bindings],
-            "slot_bindings": [binding.to_dict() for binding in self.slot_bindings],
+            "assumptions": [binding.to_dict() for binding in self.assumptions],
+            "learning": [binding.to_dict() for binding in self.learning],
             "observations": [observation.to_dict() for observation in self.observations],
         }
 
     @classmethod
     def from_dict(cls, payload: dict[str, object]) -> "CompileSpec":
+        legacy_fields = {"direct_bindings", "slot_bindings"}
+        present_legacy = sorted(field for field in legacy_fields if field in payload)
+        if present_legacy:
+            joined = ", ".join(present_legacy)
+            raise ValueError(
+                f"legacy compile-spec fields are no longer supported: {joined}; "
+                "use 'assumptions', 'learning', and 'observations'"
+            )
         return cls(
             mode=payload["mode"],  # type: ignore[arg-type]
             horizon_steps=int(payload["horizon_steps"]),
             consistency_policy=payload.get("consistency_policy", "equation_only"),  # type: ignore[arg-type]
-            direct_bindings=[
-                DirectBinding.from_dict(item)
-                for item in payload.get("direct_bindings", [])
+            assumptions=[
+                Assumption.from_dict(item) for item in payload.get("assumptions", [])
             ],
-            slot_bindings=[
-                SlotBinding.from_dict(item)
-                for item in payload.get("slot_bindings", [])
+            learning=[
+                LearningBinding.from_dict(item) for item in payload.get("learning", [])
             ],
             observations=[
                 Observation.from_dict(item)
@@ -394,11 +406,11 @@ class CompileSpec:
         return cls.from_json(Path(path).read_text())
 
     def assume_series(self, quantity: str, steps: Iterable[int]) -> "CompileSpec":
-        self.direct_bindings.append(data_series(quantity, steps))
+        self.assumptions.append(assume_series(quantity, steps))
         return self
 
     def assume_constant(self, quantity: str) -> "CompileSpec":
-        self.direct_bindings.append(constant(quantity))
+        self.assumptions.append(assume_constant(quantity))
         return self
 
     def assume_initial(
@@ -406,15 +418,15 @@ class CompileSpec:
         quantity: str,
         source: InitialStateSource = "constant",
     ) -> "CompileSpec":
-        self.direct_bindings.append(initial_state(quantity, source=source))
+        self.assumptions.append(assume_initial(quantity, source=source))
         return self
 
     def learn_initial(self, quantity: str) -> "CompileSpec":
-        self.direct_bindings.append(initial_state(quantity, source="learned"))
+        self.learning.append(learn_initial(quantity))
         return self
 
     def learn_slot(self, slot_name: str) -> "CompileSpec":
-        self.slot_bindings.append(slot(slot_name, kind="learned"))
+        self.learning.append(learn_slot(slot_name))
         return self
 
     def observe_dense(self, quantity: str, loss: LossKind = "mse") -> "CompileSpec":
@@ -523,46 +535,27 @@ class Artifact:
         return None
 
 
-def data_series(quantity: str, steps: Iterable[int]) -> DirectBinding:
-    return DirectBinding(quantity=quantity, kind="data_series", steps=list(steps))
+def assume_series(quantity: str, steps: Iterable[int]) -> Assumption:
+    return Assumption(quantity=quantity, kind="series", steps=list(steps))
 
 
-def assume_series(quantity: str, steps: Iterable[int]) -> DirectBinding:
-    return data_series(quantity, steps)
-
-
-def constant(quantity: str) -> DirectBinding:
-    return DirectBinding(quantity=quantity, kind="constant")
-
-
-def assume_constant(quantity: str) -> DirectBinding:
-    return constant(quantity)
-
-
-def initial_state(
-    quantity: str,
-    source: InitialStateSource = "constant",
-) -> DirectBinding:
-    return DirectBinding(quantity=quantity, kind="initial_state", source=source)
+def assume_constant(quantity: str) -> Assumption:
+    return Assumption(quantity=quantity, kind="constant")
 
 
 def assume_initial(
     quantity: str,
     source: InitialStateSource = "constant",
-) -> DirectBinding:
-    return initial_state(quantity, source=source)
+) -> Assumption:
+    return Assumption(quantity=quantity, kind="initial", source=source)
 
 
-def learn_initial(quantity: str) -> DirectBinding:
-    return initial_state(quantity, source="learned")
+def learn_initial(quantity: str) -> LearningBinding:
+    return LearningBinding(kind="initial", quantity=quantity)
 
 
-def slot(slot_name: str, kind: SlotBindingKind = "learned") -> SlotBinding:
-    return SlotBinding(slot=slot_name, kind=kind)
-
-
-def learn_slot(slot_name: str) -> SlotBinding:
-    return slot(slot_name, kind="learned")
+def learn_slot(slot_name: str) -> LearningBinding:
+    return LearningBinding(kind="slot", slot=slot_name)
 
 
 def observe_dense(quantity: str, loss: LossKind = "mse") -> Observation:

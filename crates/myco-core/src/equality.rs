@@ -10,7 +10,7 @@ use crate::{
     dimensions::QuantityTypeInfo,
     egraph::{self, EqualityCore},
     semantic::{BinaryOp, Equation, Expr, SemanticModel},
-    syntax::{BlockKind, QuantityKind},
+    syntax::BlockKind,
 };
 
 #[derive(Debug, Clone)]
@@ -37,7 +37,6 @@ pub struct Provenance {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Quantity {
     pub id: QuantityId,
-    pub kind: QuantityKind,
     pub name: String,
     pub ty: String,
     pub type_info: QuantityTypeInfo,
@@ -135,7 +134,6 @@ pub fn lower_model(model: &SemanticModel) -> Result<EqualityModel, Vec<Diagnosti
         quantity_ids.insert(declaration.name.clone(), id);
         quantities.push(Quantity {
             id,
-            kind: declaration.kind,
             name: declaration.name.clone(),
             ty: declaration.ty.clone(),
             dimension: type_info.dimension.clone(),
@@ -320,15 +318,10 @@ fn parse_time_reference(input: &str) -> Result<TimeReference, String> {
 }
 
 fn infer_persistent_quantities(
-    quantities: &[Quantity],
+    _quantities: &[Quantity],
     equations: &[EqualityEquation],
 ) -> Vec<QuantityId> {
     let mut persistent = HashSet::new();
-    for quantity in quantities {
-        if quantity.kind == QuantityKind::State {
-            persistent.insert(quantity.id);
-        }
-    }
     for equation in equations {
         if equation.kind != BlockKind::Temporal {
             continue;
@@ -368,10 +361,7 @@ mod tests {
 
         assert_eq!(equality.name, "TinyTree");
         assert_eq!(equality.quantities.len(), 8);
-        assert_eq!(
-            equality.persistent_quantities,
-            vec![QuantityId(3), QuantityId(4)]
-        );
+        assert_eq!(equality.persistent_quantities, vec![QuantityId(3)]);
         assert_eq!(equality.core.equations.len(), 3);
         assert_eq!(equality.slots.len(), 1);
 
@@ -420,8 +410,8 @@ mod tests {
         let source = r#"
 model TemporalNode
 
-node stock : scalar
-node flow : scalar
+quantity stock : scalar
+quantity flow : scalar
 
 temporal stock_step:
   stock[t+1] = stock[t] + flow[t]
@@ -439,7 +429,7 @@ temporal stock_step:
         let source = r#"
 model Broken
 
-node y : scalar
+quantity y : scalar
 
 relation bad:
   y = x + 1

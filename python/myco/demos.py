@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import optax
 
 from .api import compile_path
-from .types import CompileSpec, constant, data_series, initial_state, observe_dense, observe_sparse, slot
+from .types import CompileSpec
 
 
 DEFAULT_TINY_TREE_MODEL_PATH = (
@@ -34,23 +34,15 @@ class TrainingResult:
 
 def build_tiny_tree_training_spec(horizon_steps: int) -> CompileSpec:
     spec = CompileSpec(mode="train", horizon_steps=horizon_steps)
-    spec.direct_bindings.extend(
-        [
-            data_series("vpd_scale", range(horizon_steps)),
-            data_series("soil_water", range(horizon_steps)),
-            constant("hydraulic_cond"),
-            constant("g_max"),
-            initial_state("water"),
-            initial_state("carbon"),
-        ]
-    )
-    spec.slot_bindings.append(slot("controller", kind="learned"))
-    spec.observations.extend(
-        [
-            observe_dense("transpiration"),
-            observe_sparse("water", range(0, horizon_steps, 8)),
-        ]
-    )
+    spec.assume_series("vpd_scale", range(horizon_steps))
+    spec.assume_series("soil_water", range(horizon_steps))
+    spec.assume_constant("hydraulic_cond")
+    spec.assume_constant("g_max")
+    spec.assume_initial("water")
+    spec.assume_initial("carbon")
+    spec.learn_slot("controller")
+    spec.observe_dense("transpiration")
+    spec.observe_sparse("water", range(0, horizon_steps, 8))
     return spec
 
 

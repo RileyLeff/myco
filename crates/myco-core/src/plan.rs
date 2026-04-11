@@ -857,10 +857,10 @@ mod tests {
         let source = r#"
 model Recover
 
-external vpd_scale : scalar
-state water : scalar
-node stomata : scalar
-node transpiration : scalar
+quantity vpd_scale : scalar
+quantity water : scalar
+quantity stomata : scalar
+quantity transpiration : scalar
 
 relation demand_transpiration:
   transpiration = stomata * vpd_scale
@@ -926,9 +926,9 @@ temporal water_step:
         let source = r#"
 model Loopy
 
-state water : scalar
-node a : scalar
-node b : scalar
+quantity water : scalar
+quantity a : scalar
+quantity b : scalar
 
 relation a_from_b:
   a = b + 1

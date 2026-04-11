@@ -259,6 +259,24 @@ fn read_source(path: &str) -> PyResult<String> {
 
 fn parse_compile_spec(spec: &Bound<'_, PyAny>) -> PyResult<CompileSpec> {
     let dict = spec.downcast::<PyDict>()?;
+    reject_legacy_compile_spec_fields(dict)?;
+
+    let mut direct_bindings = optional_list_items(dict, "assumptions")?
+        .into_iter()
+        .map(parse_assumption)
+        .collect::<PyResult<Vec<_>>>()?;
+    let mut slot_bindings = Vec::new();
+
+    for learning in optional_list_items(dict, "learning")?
+        .into_iter()
+        .map(parse_learning_binding)
+        .collect::<PyResult<Vec<_>>>()?
+    {
+        match learning {
+            LearningBindingSpec::Initial(binding) => direct_bindings.push(binding),
+            LearningBindingSpec::Slot(binding) => slot_bindings.push(binding),
+        }
+    }
 
     Ok(CompileSpec {
         mode: parse_mode(&required_str_item(dict, "mode")?)?,
@@ -266,14 +284,8 @@ fn parse_compile_spec(spec: &Bound<'_, PyAny>) -> PyResult<CompileSpec> {
         consistency_policy: parse_consistency_policy(
             optional_str_item(dict, "consistency_policy")?.as_deref(),
         )?,
-        direct_bindings: optional_list_items(dict, "direct_bindings")?
-            .into_iter()
-            .map(parse_direct_binding)
-            .collect::<PyResult<Vec<_>>>()?,
-        slot_bindings: optional_list_items(dict, "slot_bindings")?
-            .into_iter()
-            .map(parse_slot_binding)
-            .collect::<PyResult<Vec<_>>>()?,
+        direct_bindings,
+        slot_bindings,
         observations: optional_list_items(dict, "observations")?
             .into_iter()
             .map(parse_observation)
@@ -281,19 +293,19 @@ fn parse_compile_spec(spec: &Bound<'_, PyAny>) -> PyResult<CompileSpec> {
     })
 }
 
-fn parse_direct_binding(item: Bound<'_, PyAny>) -> PyResult<DirectBindingSpec> {
+fn parse_assumption(item: Bound<'_, PyAny>) -> PyResult<DirectBindingSpec> {
     let dict = item.downcast::<PyDict>()?;
     let kind = match required_str_item(dict, "kind")?.as_str() {
-        "data_series" => DirectBindingKind::DataSeries {
+        "series" => DirectBindingKind::DataSeries {
             steps: optional_extract_item(dict, "steps")?.unwrap_or_default(),
         },
         "constant" => DirectBindingKind::Constant,
-        "initial_state" => DirectBindingKind::InitialState {
+        "initial" => DirectBindingKind::InitialState {
             source: parse_initial_state_source(optional_str_item(dict, "source")?.as_deref())?,
         },
         other => {
             return Err(PyValueError::new_err(format!(
-                "unsupported direct binding kind '{other}'"
+                "unsupported assumption kind '{other}'"
             )));
         }
     };
@@ -302,6 +314,30 @@ fn parse_direct_binding(item: Bound<'_, PyAny>) -> PyResult<DirectBindingSpec> {
         quantity: required_str_item(dict, "quantity")?,
         kind,
     })
+}
+
+enum LearningBindingSpec {
+    Initial(DirectBindingSpec),
+    Slot(SlotBindingSpec),
+}
+
+fn parse_learning_binding(item: Bound<'_, PyAny>) -> PyResult<LearningBindingSpec> {
+    let dict = item.downcast::<PyDict>()?;
+    match required_str_item(dict, "kind")?.as_str() {
+        "initial" => Ok(LearningBindingSpec::Initial(DirectBindingSpec {
+            quantity: required_str_item(dict, "quantity")?,
+            kind: DirectBindingKind::InitialState {
+                source: InitialStateSource::Learned,
+            },
+        })),
+        "slot" => Ok(LearningBindingSpec::Slot(SlotBindingSpec {
+            slot: required_str_item(dict, "slot")?,
+            kind: SlotBindingKind::Learned,
+        })),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported learning kind '{other}'"
+        ))),
+    }
 }
 
 fn parse_consistency_policy(value: Option<&str>) -> PyResult<ConsistencyPolicy> {
@@ -313,25 +349,6 @@ fn parse_consistency_policy(value: Option<&str>) -> PyResult<ConsistencyPolicy> 
             "unsupported consistency policy '{other}'"
         ))),
     }
-}
-
-fn parse_slot_binding(item: Bound<'_, PyAny>) -> PyResult<SlotBindingSpec> {
-    let dict = item.downcast::<PyDict>()?;
-    let kind = match required_str_item(dict, "kind")?.as_str() {
-        "data_series" => SlotBindingKind::DataSeries,
-        "constant" => SlotBindingKind::Constant,
-        "learned" => SlotBindingKind::Learned,
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "unsupported slot binding kind '{other}'"
-            )));
-        }
-    };
-
-    Ok(SlotBindingSpec {
-        slot: required_str_item(dict, "slot")?,
-        kind,
-    })
 }
 
 fn parse_observation(item: Bound<'_, PyAny>) -> PyResult<ObservationSpec> {
@@ -369,6 +386,27 @@ fn required_item<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'p
     dict.get_item(key)?.ok_or_else(|| {
         PyValueError::new_err(format!("missing required compile-spec field '{key}'"))
     })
+}
+
+fn reject_legacy_compile_spec_fields(dict: &Bound<'_, PyDict>) -> PyResult<()> {
+    let legacy_fields = ["direct_bindings", "slot_bindings"];
+    let present = legacy_fields
+        .iter()
+        .filter_map(|field| {
+            dict.contains(field)
+                .ok()
+                .and_then(|has| has.then_some(*field))
+        })
+        .collect::<Vec<_>>();
+
+    if present.is_empty() {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "legacy compile-spec fields are no longer supported: {}; use 'assumptions', 'learning', and 'observations'",
+            present.join(", ")
+        )))
+    }
 }
 
 fn required_extract_item<T>(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<T>
@@ -434,9 +472,10 @@ fn model_summary_dict(py: Python<'_>, summary: &ModelSummary) -> PyResult<Py<PyD
     dict.set_item("quantity_count", summary.quantity_count)?;
     dict.set_item("relation_count", summary.relation_count)?;
     dict.set_item("slot_count", summary.slot_count)?;
-    dict.set_item("external_count", summary.external_count)?;
-    dict.set_item("state_count", summary.state_count)?;
-    dict.set_item("node_count", summary.node_count)?;
+    dict.set_item(
+        "persistent_quantity_count",
+        summary.persistent_quantity_count,
+    )?;
     dict.set_item("temporal_count", summary.temporal_count)?;
     dict.set_item("quantity_names", &summary.quantity_names)?;
     dict.set_item("relation_names", &summary.relation_names)?;
@@ -447,8 +486,8 @@ fn model_summary_dict(py: Python<'_>, summary: &ModelSummary) -> PyResult<Py<PyD
 fn experiment_summary_dict(py: Python<'_>, summary: &ExperimentSummary) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("name", &summary.name)?;
-    dict.set_item("direct_binding_count", summary.direct_binding_count)?;
-    dict.set_item("slot_binding_count", summary.slot_binding_count)?;
+    dict.set_item("assumption_count", summary.assumption_count)?;
+    dict.set_item("learning_count", summary.learning_count)?;
     dict.set_item("observation_count", summary.observation_count)?;
     dict.set_item("planned_slot_steps", summary.planned_slot_steps)?;
     dict.set_item("planned_equation_steps", summary.planned_equation_steps)?;

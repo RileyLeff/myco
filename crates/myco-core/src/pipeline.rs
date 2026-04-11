@@ -69,9 +69,7 @@ pub struct ModelSummary {
     pub quantity_count: usize,
     pub relation_count: usize,
     pub slot_count: usize,
-    pub external_count: usize,
-    pub state_count: usize,
-    pub node_count: usize,
+    pub persistent_quantity_count: usize,
     pub temporal_count: usize,
     pub quantity_names: Vec<String>,
     pub relation_names: Vec<String>,
@@ -81,8 +79,8 @@ pub struct ModelSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExperimentSummary {
     pub name: String,
-    pub direct_binding_count: usize,
-    pub slot_binding_count: usize,
+    pub assumption_count: usize,
+    pub learning_count: usize,
     pub observation_count: usize,
     pub planned_slot_steps: usize,
     pub planned_equation_steps: usize,
@@ -182,24 +180,7 @@ impl LoadedModel {
             .collect::<Vec<_>>();
         slot_names.sort();
 
-        let external_count = self
-            .equality
-            .quantities
-            .iter()
-            .filter(|quantity| matches!(quantity.kind, crate::syntax::QuantityKind::External))
-            .count();
-        let state_count = self
-            .equality
-            .quantities
-            .iter()
-            .filter(|quantity| matches!(quantity.kind, crate::syntax::QuantityKind::State))
-            .count();
-        let node_count = self
-            .equality
-            .quantities
-            .iter()
-            .filter(|quantity| matches!(quantity.kind, crate::syntax::QuantityKind::Node))
-            .count();
+        let persistent_quantity_count = self.equality.persistent_quantities.len();
         let temporal_count = self
             .equality
             .core
@@ -218,9 +199,7 @@ impl LoadedModel {
             quantity_count: self.equality.quantities.len(),
             relation_count: relation_names.len(),
             slot_count: self.equality.slots.len(),
-            external_count,
-            state_count,
-            node_count,
+            persistent_quantity_count,
             temporal_count,
             quantity_names,
             relation_names,
@@ -231,10 +210,31 @@ impl LoadedModel {
 
 impl PreparedExperiment {
     pub fn summary(&self) -> ExperimentSummary {
+        let learned_initial_count = self
+            .bound
+            .direct_bindings
+            .iter()
+            .filter(|binding| {
+                matches!(
+                    binding.kind,
+                    crate::compile::DirectBindingKind::InitialState {
+                        source: crate::compile::InitialStateSource::Learned,
+                    }
+                )
+            })
+            .count();
+        let learned_slot_count = self
+            .bound
+            .slot_bindings
+            .iter()
+            .filter(|slot| matches!(slot.kind, crate::compile::SlotBindingKind::Learned))
+            .count();
+        let learning_count = learned_initial_count + learned_slot_count;
+
         ExperimentSummary {
             name: self.model.syntax.name.clone(),
-            direct_binding_count: self.bound.direct_bindings.len(),
-            slot_binding_count: self.bound.slot_bindings.len(),
+            assumption_count: self.bound.direct_bindings.len() - learned_initial_count,
+            learning_count,
             observation_count: self.bound.observations.len(),
             planned_slot_steps: self.plan.slot_steps.len(),
             planned_equation_steps: self.plan.equation_steps.len(),
@@ -397,9 +397,7 @@ mod tests {
         assert_eq!(summary.quantity_count, 8);
         assert_eq!(summary.relation_count, 3);
         assert_eq!(summary.slot_count, 1);
-        assert_eq!(summary.external_count, 3);
-        assert_eq!(summary.state_count, 2);
-        assert_eq!(summary.node_count, 3);
+        assert_eq!(summary.persistent_quantity_count, 1);
         assert_eq!(summary.temporal_count, 1);
         assert!(summary.quantity_names.iter().any(|name| name == "stomata"));
     }
@@ -462,8 +460,8 @@ mod tests {
 
         let summary = experiment.summary();
         assert_eq!(summary.name, "TinyTree");
-        assert_eq!(summary.direct_binding_count, 6);
-        assert_eq!(summary.slot_binding_count, 1);
+        assert_eq!(summary.assumption_count, 6);
+        assert_eq!(summary.learning_count, 1);
         assert_eq!(summary.observation_count, 1);
         assert_eq!(summary.planned_slot_steps, 1);
         assert_eq!(summary.planned_equation_steps, 1);

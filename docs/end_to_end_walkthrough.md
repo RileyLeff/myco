@@ -30,8 +30,8 @@ The binding layer decides how to use that model in a particular workflow.
 
 The TinyTree model is intentionally small, but it already exercises the core ideas:
 
-- external forcing
-- internal state
+- workflow-neutral quantity declarations
+- inferred persistence from temporal structure
 - a learned slot
 - overdetermination
 - temporal update
@@ -42,20 +42,20 @@ The actual file is:
 ```myco
 model TinyTree
 
-external vpd_scale : potential
-external soil_water : potential
-external hydraulic_cond : conductance
+quantity vpd_scale : potential
+quantity soil_water : potential
+quantity hydraulic_cond : conductance
 
-state water : potential { self <= 0 }
-state carbon : carbon_mass { self >= 0 }
+quantity water : potential { self <= 0 }
+quantity carbon : carbon_mass { self >= 0 }
 
-node stomata : conductance {
+quantity stomata : conductance {
   self >= 0
   self <= g_max
 }
 
-node transpiration : water_flux { self >= 0 }
-node g_max : conductance { self >= 0 }
+quantity transpiration : water_flux { self >= 0 }
+quantity g_max : conductance { self >= 0 }
 
 relation demand_transpiration:
   transpiration = stomata * vpd_scale
@@ -118,8 +118,6 @@ vocabulary:
 - `observe_*` for measurements and evidence
 - `learn_*` for trainable components
 
-Older `bind_*` helpers still exist as compatibility aliases.
-
 ## What The User Sees In The Artifact
 
 The compiled JAX artifact is a real Python module. It includes:
@@ -157,7 +155,7 @@ The demo first uses a known controller to create synthetic trajectories:
 
 - forcing series are generated for `vpd_scale` and `soil_water`
 - constants are provided for `hydraulic_cond` and `g_max`
-- initial state is provided for `water` and `carbon`
+- workflow initial values are provided for `water` and `carbon`
 - a known controller produces `stomata`
 - the compiled artifact rolls the system forward
 
@@ -287,7 +285,7 @@ This is where Myco answers:
 
 - which quantities are dense forcing?
 - which are constants?
-- which are initial state?
+- which quantities need workflow initial values?
 - which slots are learned?
 - which quantities are observed?
 
@@ -295,14 +293,14 @@ For TinyTree training, the binding says:
 
 - `vpd_scale` and `soil_water` are dense per-step forcing
 - `hydraulic_cond` and `g_max` are constants
-- `water` and `carbon` are initial state
+- `water` and `carbon` are assumed initial values for this workflow
 - `controller` is learned
 - `transpiration` is densely observed
 - `water` is sparsely observed
 
 This step also performs structural validation such as:
 
-- every state needs an initial-state binding
+- every persistent quantity needs an initial-state binding
 - direct data-series bindings must cover the full horizon in `v1`
 - compile mode requirements must be satisfied
 

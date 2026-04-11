@@ -1,19 +1,19 @@
 model TinyTree
 
-external vpd_scale : potential
-external soil_water : potential
-external hydraulic_cond : conductance
+quantity vpd_scale : potential
+quantity soil_water : potential
+quantity hydraulic_cond : conductance
 
-state water : potential { self <= 0 }
-state carbon : carbon_mass { self >= 0 }
+quantity water : potential { self <= 0 }
+quantity carbon : carbon_mass { self >= 0 }
 
-node stomata : conductance {
+quantity stomata : conductance {
   self >= 0
   self <= g_max
 }
 
-node transpiration : water_flux { self >= 0 }
-node g_max : conductance { self >= 0 }
+quantity transpiration : water_flux { self >= 0 }
+quantity g_max : conductance { self >= 0 }
 
 relation demand_transpiration:
   transpiration = stomata * vpd_scale

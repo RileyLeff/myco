@@ -43,18 +43,20 @@ def test_write_demo_path_writes_artifact(tmp_path: Path):
 def test_experiment_builder_compiles_real_spec():
     model = myco.load(FIXTURE)
     experiment = model.experiment(mode="train", horizon_steps=24)
-    experiment.bind_data_series("vpd_scale", range(24))
-    experiment.bind_data_series("soil_water", range(24))
-    experiment.bind_constant("hydraulic_cond")
-    experiment.bind_constant("g_max")
-    experiment.bind_initial_state("water")
-    experiment.bind_initial_state("carbon")
-    experiment.bind_slot("controller", kind="learned")
+    experiment.assume_series("vpd_scale", range(24))
+    experiment.assume_series("soil_water", range(24))
+    experiment.assume_constant("hydraulic_cond")
+    experiment.assume_constant("g_max")
+    experiment.assume_initial("water")
+    experiment.assume_initial("carbon")
+    experiment.learn_slot("controller")
     experiment.observe_dense("transpiration")
 
     summary = experiment.summary()
     artifact = experiment.compile(backend="jax")
 
+    assert summary.assumption_count == 6
+    assert summary.learning_count == 1
     assert summary.planned_slot_steps == 1
     assert summary.planned_temporal_steps == 1
     assert artifact.backend == "jax"
@@ -81,25 +83,6 @@ def test_experiment_builder_compiles_real_spec():
     assert artifact.metadata.persistent_quantities == ("carbon", "water")
     assert "def total_loss(" in artifact.source
 
-
-def test_experiment_assume_aliases_compile_real_spec():
-    model = myco.load(FIXTURE)
-    experiment = model.experiment(mode="train", horizon_steps=24)
-    experiment.assume_series("vpd_scale", range(24))
-    experiment.assume_series("soil_water", range(24))
-    experiment.assume_constant("hydraulic_cond")
-    experiment.assume_constant("g_max")
-    experiment.assume_initial("water")
-    experiment.assume_initial("carbon")
-    experiment.bind_slot("controller", kind="learned")
-    experiment.observe_dense("transpiration")
-
-    artifact = experiment.compile(backend="jax")
-
-    assert artifact.metadata.persistent_quantities == ("carbon", "water")
-    assert "PERSISTENT_QUANTITY_NAMES = [\"carbon\", \"water\"]" in artifact.source
-
-
 def test_compile_spec_role_builders_compile_real_spec():
     model = myco.load(FIXTURE)
     spec = myco.CompileSpec(mode="train", horizon_steps=24)
@@ -121,13 +104,13 @@ def test_compile_spec_role_builders_compile_real_spec():
 def test_experiment_explain_plan_returns_typed_paths():
     model = myco.load(FIXTURE)
     experiment = model.experiment(mode="train", horizon_steps=24)
-    experiment.bind_data_series("vpd_scale", range(24))
-    experiment.bind_data_series("soil_water", range(24))
-    experiment.bind_constant("hydraulic_cond")
-    experiment.bind_constant("g_max")
-    experiment.bind_initial_state("water")
-    experiment.bind_initial_state("carbon")
-    experiment.bind_slot("controller", kind="learned")
+    experiment.assume_series("vpd_scale", range(24))
+    experiment.assume_series("soil_water", range(24))
+    experiment.assume_constant("hydraulic_cond")
+    experiment.assume_constant("g_max")
+    experiment.assume_initial("water")
+    experiment.assume_initial("carbon")
+    experiment.learn_slot("controller")
     experiment.observe_dense("transpiration")
 
     explanation = experiment.explain_plan()
@@ -147,13 +130,13 @@ def test_experiment_explain_quantity_surfaces_alternatives_and_unresolved():
     model = myco.load(FIXTURE)
 
     resolved = model.experiment(mode="train", horizon_steps=24)
-    resolved.bind_data_series("vpd_scale", range(24))
-    resolved.bind_data_series("soil_water", range(24))
-    resolved.bind_constant("hydraulic_cond")
-    resolved.bind_constant("g_max")
-    resolved.bind_initial_state("water")
-    resolved.bind_initial_state("carbon")
-    resolved.bind_slot("controller", kind="learned")
+    resolved.assume_series("vpd_scale", range(24))
+    resolved.assume_series("soil_water", range(24))
+    resolved.assume_constant("hydraulic_cond")
+    resolved.assume_constant("g_max")
+    resolved.assume_initial("water")
+    resolved.assume_initial("carbon")
+    resolved.learn_slot("controller")
     resolved.observe_dense("transpiration")
 
     transpiration = resolved.explain_quantity("transpiration")
@@ -170,12 +153,12 @@ def test_experiment_explain_quantity_surfaces_alternatives_and_unresolved():
     )
 
     unresolved = model.experiment(mode="train", horizon_steps=24)
-    unresolved.bind_data_series("vpd_scale", range(24))
-    unresolved.bind_data_series("soil_water", range(24))
-    unresolved.bind_constant("hydraulic_cond")
-    unresolved.bind_initial_state("water")
-    unresolved.bind_initial_state("carbon")
-    unresolved.bind_slot("controller", kind="learned")
+    unresolved.assume_series("vpd_scale", range(24))
+    unresolved.assume_series("soil_water", range(24))
+    unresolved.assume_constant("hydraulic_cond")
+    unresolved.assume_initial("water")
+    unresolved.assume_initial("carbon")
+    unresolved.learn_slot("controller")
     unresolved.observe_dense("transpiration")
 
     g_max = unresolved.explain_quantity("g_max")
@@ -187,11 +170,11 @@ def test_experiment_explain_quantity_surfaces_alternatives_and_unresolved():
 def test_structured_myco_error_exposes_diagnostics():
     model = myco.load(FIXTURE)
     experiment = model.experiment(mode="train", horizon_steps=24)
-    experiment.bind_data_series("vpd_scale", range(24))
-    experiment.bind_data_series("soil_water", range(24))
-    experiment.bind_constant("hydraulic_cond")
-    experiment.bind_constant("g_max")
-    experiment.bind_slot("controller", kind="learned")
+    experiment.assume_series("vpd_scale", range(24))
+    experiment.assume_series("soil_water", range(24))
+    experiment.assume_constant("hydraulic_cond")
+    experiment.assume_constant("g_max")
+    experiment.learn_slot("controller")
     experiment.observe_dense("transpiration")
 
     try:
@@ -210,21 +193,36 @@ def test_load_spec_and_compile_from_file():
     assert spec.mode == "train"
     assert spec.horizon_steps == 24
     assert spec.consistency_policy == "equation_only"
+    assert len(spec.assumptions) == 6
+    assert len(spec.learning) == 1
     assert artifact.backend == "jax"
     assert "import jax.numpy as jnp" in artifact.source
+
+
+def test_legacy_compile_spec_fields_are_rejected():
+    with pytest.raises(ValueError, match="legacy compile-spec fields"):
+        myco.CompileSpec.from_dict(
+            {
+                "mode": "train",
+                "horizon_steps": 24,
+                "direct_bindings": [],
+                "slot_bindings": [],
+                "observations": [],
+            }
+        )
 
 
 def test_experiment_can_set_consistency_policy():
     model = myco.load(FIXTURE)
     experiment = model.experiment(mode="train", horizon_steps=24)
     experiment.set_consistency_policy("off")
-    experiment.bind_data_series("vpd_scale", range(24))
-    experiment.bind_data_series("soil_water", range(24))
-    experiment.bind_constant("hydraulic_cond")
-    experiment.bind_constant("g_max")
-    experiment.bind_initial_state("water")
-    experiment.bind_initial_state("carbon")
-    experiment.bind_slot("controller", kind="learned")
+    experiment.assume_series("vpd_scale", range(24))
+    experiment.assume_series("soil_water", range(24))
+    experiment.assume_constant("hydraulic_cond")
+    experiment.assume_constant("g_max")
+    experiment.assume_initial("water")
+    experiment.assume_initial("carbon")
+    experiment.learn_slot("controller")
     experiment.observe_dense("transpiration")
 
     artifact = experiment.compile(backend="jax")
@@ -235,13 +233,13 @@ def test_experiment_can_set_consistency_policy():
 def test_simulate_mode_omits_loss_helpers():
     model = myco.load(FIXTURE)
     experiment = model.experiment(mode="simulate", horizon_steps=24)
-    experiment.bind_data_series("vpd_scale", range(24))
-    experiment.bind_data_series("soil_water", range(24))
-    experiment.bind_constant("hydraulic_cond")
-    experiment.bind_constant("g_max")
-    experiment.bind_initial_state("water")
-    experiment.bind_initial_state("carbon")
-    experiment.bind_slot("controller", kind="learned")
+    experiment.assume_series("vpd_scale", range(24))
+    experiment.assume_series("soil_water", range(24))
+    experiment.assume_constant("hydraulic_cond")
+    experiment.assume_constant("g_max")
+    experiment.assume_initial("water")
+    experiment.assume_initial("carbon")
+    experiment.learn_slot("controller")
 
     artifact = experiment.compile(backend="jax")
 
@@ -255,13 +253,13 @@ def test_simulate_mode_omits_loss_helpers():
 def test_generated_artifact_validates_runtime_inputs():
     model = myco.load(FIXTURE)
     experiment = model.experiment(mode="train", horizon_steps=24)
-    experiment.bind_data_series("vpd_scale", range(24))
-    experiment.bind_data_series("soil_water", range(24))
-    experiment.bind_constant("hydraulic_cond")
-    experiment.bind_constant("g_max")
-    experiment.bind_initial_state("water")
-    experiment.bind_initial_state("carbon")
-    experiment.bind_slot("controller", kind="learned")
+    experiment.assume_series("vpd_scale", range(24))
+    experiment.assume_series("soil_water", range(24))
+    experiment.assume_constant("hydraulic_cond")
+    experiment.assume_constant("g_max")
+    experiment.assume_initial("water")
+    experiment.assume_initial("carbon")
+    experiment.learn_slot("controller")
     experiment.observe_dense("transpiration")
 
     artifact = experiment.compile(backend="python")
