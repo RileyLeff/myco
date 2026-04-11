@@ -7,6 +7,7 @@ If you want the bigger-picture material, see:
 - [v2_do_this_first.md](./v2_do_this_first.md)
 - [charter.md](./charter.md)
 - [node_first_ownership_and_relationships.md](./node_first_ownership_and_relationships.md)
+- [node_first_syntax_sketch.md](./node_first_syntax_sketch.md)
 - [sparse_multi_context_training_notes.md](./sparse_multi_context_training_notes.md)
 - [../v_long_term/README.md](../v_long_term/README.md)
 
