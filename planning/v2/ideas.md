@@ -4,10 +4,12 @@ This note is intentionally about the next real compiler milestone, not the full 
 
 If you want the bigger-picture material, see:
 
+- [README.md](./README.md)
 - [v2_do_this_first.md](./v2_do_this_first.md)
 - [charter.md](./charter.md)
 - [node_first_ownership_and_relationships.md](./node_first_ownership_and_relationships.md)
 - [node_first_syntax_sketch.md](./node_first_syntax_sketch.md)
+- [units_and_dimensions_notes.md](./units_and_dimensions_notes.md)
 - [sparse_multi_context_training_notes.md](./sparse_multi_context_training_notes.md)
 - [../v_long_term/README.md](../v_long_term/README.md)
 
