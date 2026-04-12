@@ -1,0 +1,578 @@
+// ============================================================================
+// Sperry et al. (2017) Gain-Risk Hydraulic-Stomatal Model
+// Mock v2 Myco implementation — NOT executable, for spec stress-testing
+//
+// Design principles:
+// - Represent the actual physics, not the numerical algorithms
+// - Let the compiler discover algebraic loops and choose solvers
+// - Vulnerability curves are a trait (contract) — swappable
+// - Stomatal control is a slot — pluggable
+// - Sun/shade canopy decomposition via const generics
+// - Irreversible cavitation via temporal min accumulator
+// ============================================================================
+
+module plant::sperry
+
+use units::si::{
+    megapascal as MPa,
+    kilopascal as kPa,
+    celsius as degC,
+    pascal as Pa,
+    watt_per_square_meter as W_m2,
+    micromole_per_square_meter_second as umol_m2_s,
+    millimole_per_square_meter_second as mmol_m2_s,
+    millimole_per_square_meter_second_per_megapascal as mmol_m2_s_MPa,
+    joule_per_mole as J_mol,
+    meter as m,
+    meter_per_second as m_s,
+    ratio,
+}
+
+
+// ============================================================================
+// Types
+// ============================================================================
+
+type WaterPotential : Scalar<MPa>
+
+type Conductance : Scalar<mmol_m2_s> {
+    self >= 0
+}
+
+type HydraulicConductance : Scalar<mmol_m2_s_MPa> {
+    self >= 0
+}
+
+type CarbonFlux : Scalar<umol_m2_s> {
+    self >= 0
+}
+
+type TranspirationRate : Scalar<mmol_m2_s> {
+    self >= 0
+}
+
+type Temperature : Scalar<degC>
+
+type Pressure : Scalar<Pa> {
+    self >= 0
+}
+
+type Fraction : Scalar<ratio> {
+    0 <= self <= 1
+}
+
+type PositiveScalar : Scalar<ratio> {
+    self > 0
+}
+
+
+// ============================================================================
+// Contracts
+// ============================================================================
+
+// Vulnerability curve: any function mapping water potential to fractional
+// loss of hydraulic conductivity. The Weibull is one implementation.
+// A P50-slope sigmoid is another. Anything monotonic works.
+contract VulnerabilityCurve {
+    input pressure: WaterPotential
+    output plc: Fraction
+
+    constraint monotonic:
+        forall p1, p2 where p1 < p2:
+            plc(p1) <= plc(p2)
+}
+
+
+// ============================================================================
+// Vulnerability curve implementations
+// ============================================================================
+
+// Weibull VC (the standard Sperry parameterization)
+node WeibullVC : VulnerabilityCurve {
+    b: PositiveScalar       // Weibull scale (related to P50)
+    c: PositiveScalar       // Weibull shape (>1 sigmoidal, =1 exponential)
+
+    plc = 1.0 - exp(-(-pressure / b) ** c)
+}
+
+// P50-slope sigmoid VC (cleaner parameterization, trivially invertible)
+node SigmoidVC : VulnerabilityCurve {
+    p50: WaterPotential     // pressure at 50% loss of conductivity
+    slope: PositiveScalar   // steepness of the transition
+
+    plc = 1.0 / (1.0 + exp(slope * (pressure - p50)))
+}
+
+
+// ============================================================================
+// Registered functions
+// ============================================================================
+
+// Farquhar Rubisco-limited assimilation
+fn rubisco_limited(
+    v_max: CarbonFlux,
+    c_i: Pressure,
+    gamma_star: Pressure,
+    k_c: Pressure,
+    k_o: Pressure,
+    o_a: Pressure,
+) -> CarbonFlux {
+    invertibility: injective_restricted
+    differentiability: smooth
+    domain: c_i > gamma_star
+
+    v_max * (c_i - gamma_star) / (c_i + k_c * (1.0 + o_a / k_o))
+}
+
+// Farquhar electron-transport-limited assimilation
+fn electron_transport_limited(
+    j: CarbonFlux,
+    c_i: Pressure,
+    gamma_star: Pressure,
+) -> CarbonFlux {
+    invertibility: injective_restricted
+    differentiability: smooth
+    domain: c_i > gamma_star
+
+    0.25 * j * (c_i - gamma_star) / (c_i + 2.0 * gamma_star)
+}
+
+// Electron transport rate (hyperbolic response to PAR)
+fn electron_transport_rate(
+    j_max: CarbonFlux,
+    q: CarbonFlux,
+    alpha: Fraction,
+    curvature: Fraction,
+) -> CarbonFlux {
+    invertibility: lossy
+    differentiability: smooth
+
+    let x = alpha * q + j_max
+    (x - sqrt(x * x - 4.0 * curvature * alpha * q * j_max)) / (2.0 * curvature)
+}
+
+// Collatz smooth minimum of Rubisco and electron-transport limited rates
+fn collatz_smooth_min(
+    j_c: CarbonFlux,
+    j_e: CarbonFlux,
+    curvature: Fraction,
+) -> CarbonFlux {
+    invertibility: lossy
+    differentiability: smooth
+
+    let x = j_c + j_e
+    (x - sqrt(x * x - 4.0 * curvature * j_c * j_e)) / (2.0 * curvature)
+}
+
+// Arrhenius temperature response
+fn arrhenius(
+    value_25: PositiveScalar,
+    activation_energy: Scalar<J_mol>,
+    temperature: Temperature,
+) -> PositiveScalar {
+    invertibility: bijective
+    differentiability: smooth
+
+    let R = 8.314
+    let t_k = temperature + 273.15
+    value_25 * exp(activation_energy * (t_k - 298.15) / (298.15 * R * t_k))
+}
+
+// Peaked Arrhenius (Leuning 2002) for Vmax, Jmax
+fn peaked_arrhenius(
+    value_25: PositiveScalar,
+    ha: Scalar<J_mol>,
+    hd: Scalar<J_mol>,
+    sv: Scalar<J_mol>,
+    temperature: Temperature,
+) -> PositiveScalar {
+    invertibility: lossy    // peaked, so not injective over full range
+    differentiability: smooth
+
+    let R = 8.314
+    let t_k = temperature + 273.15
+    let numerator = (1.0 + exp((sv * 298.15 - hd) / (R * 298.15)))
+        * exp((ha / (R * 298.15)) * (1.0 - 298.15 / t_k))
+    let denominator = 1.0 + exp((sv * t_k - hd) / (R * t_k))
+    value_25 * numerator / denominator
+}
+
+
+// ============================================================================
+// Nodes: Atmosphere
+// ============================================================================
+
+node Atmosphere {
+    co2: Pressure                  // atmospheric CO2 (~40 Pa)
+    o2: Pressure                   // atmospheric O2 (~21000 Pa)
+    vpd: Scalar<kPa>              // vapour pressure deficit
+    temperature: Temperature       // air temperature
+    pressure: Scalar<kPa>         // atmospheric pressure (~101.3)
+    wind_speed: Scalar<m_s>       // wind speed
+    r_abs: Scalar<W_m2>          // absorbed radiation
+}
+
+
+// ============================================================================
+// Nodes: Canopy Radiation
+// ============================================================================
+
+// Each canopy layer (sun or shade) has its own light environment
+node CanopyLayer {
+    par: CarbonFlux                // PAR for this layer (umol m-2 s-1)
+    lai_fraction: Fraction         // fraction of total LAI in this layer
+}
+
+node CanopyRadiation<const L: usize> {
+    layers: [CanopyLayer; L]
+    total_lai: PositiveScalar
+
+    constraint lai_sums_to_one:
+        sum(layers[i].lai_fraction for i in 0..L) == 1
+}
+
+
+// ============================================================================
+// Nodes: Soil
+// ============================================================================
+
+node SoilLayer {
+    water_potential: WaterPotential
+    thickness: PositiveScalar      // layer depth (m)
+    root_fraction: Fraction        // fraction of root biomass in this layer
+    // Van Genuchten params for rhizosphere conductance
+    vg_alpha: PositiveScalar
+    vg_n: PositiveScalar
+    k_sat: HydraulicConductance    // saturated hydraulic conductivity
+}
+
+node Soil<const M: usize> {
+    layers: [SoilLayer; M]
+
+    constraint root_fractions_sum:
+        sum(layers[j].root_fraction for j in 0..M) == 1
+}
+
+
+// ============================================================================
+// Nodes: Plant Hydraulics
+// ============================================================================
+
+// A single xylem segment, generic over vulnerability curve type
+node XylemSegment<V: VulnerabilityCurve> {
+    k_max: HydraulicConductance
+    vc: V
+    water_potential: WaterPotential
+    conductance: HydraulicConductance
+
+    // Conductance is determined by vulnerability at current pressure
+    constraint conductance_from_vc:
+        conductance == k_max * (1.0 - vc.plc)
+
+    // For irreversible cavitation tracking
+    min_historical_pressure: WaterPotential
+    max_conductance: HydraulicConductance  // ceiling from cavitation history
+
+    constraint irreversible_cavitation:
+        conductance <= max_conductance
+
+    constraint max_conductance_from_history:
+        max_conductance == k_max * (1.0 - vc(min_historical_pressure).plc)
+}
+
+// The hydraulic pathway: root, stem, leaf segments in series
+// Per-soil-layer root segments are in parallel
+node HydraulicPathway<V: VulnerabilityCurve, const M: usize> {
+    root: [XylemSegment<V>; M]     // one root segment per soil layer
+    stem: XylemSegment<V>
+    leaf: XylemSegment<V>
+
+    // Internal junction pressures (solved by the planner's SCC detection)
+    rhizosphere_pressure: [WaterPotential; M]
+    root_junction_pressure: WaterPotential
+    stem_pressure: WaterPotential
+    gravity_drop: WaterPotential   // height * 0.01 MPa/m
+
+    // Flow through each segment
+    flow: TranspirationRate        // total E through the pathway
+    layer_flow: [TranspirationRate; M]  // per-layer root flow
+}
+
+
+// ============================================================================
+// Nodes: Leaf Gas Exchange (per canopy layer)
+// ============================================================================
+
+node LeafGasExchange {
+    leaf_temperature: Temperature
+    leaf_vpd: Scalar<kPa>
+    g_w: Conductance               // diffusive conductance to water vapour
+    g_c: Conductance               // diffusive conductance to CO2
+    g_w_max: Conductance           // maximum stomatal + boundary layer
+
+    // Farquhar state
+    c_i: Pressure                  // internal CO2
+    j_c: CarbonFlux               // Rubisco-limited rate
+    j_e: CarbonFlux               // electron-transport limited rate
+    assimilation: CarbonFlux       // gross assimilation
+
+    constraint co2_conductance:
+        g_c == g_w / 1.6
+
+    constraint within_capacity:
+        g_w <= g_w_max
+}
+
+
+// ============================================================================
+// Nodes: Photosynthetic Parameters
+// ============================================================================
+
+node FarquharParams {
+    // Base values at 25C
+    v_max_25: CarbonFlux
+    j_max_25: CarbonFlux
+
+    constraint coordinated_capacity:
+        j_max_25 == 1.67 * v_max_25
+
+    // Temperature-adjusted (computed from leaf temperature via relations)
+    v_max: CarbonFlux
+    j_max: CarbonFlux
+    k_c: Pressure
+    k_o: Pressure
+    gamma_star: Pressure
+
+    // Fixed parameters
+    alpha: Fraction                // quantum yield (~0.3)
+    curvature_light: Fraction      // light response curvature (~0.9)
+    curvature_collab: Fraction     // Jc/Je curvature (~0.98)
+}
+
+
+// ============================================================================
+// Top-level model
+// ============================================================================
+
+node SperryTree<
+    V: VulnerabilityCurve,
+    const N_SOIL: usize,
+    const N_CANOPY: usize,         // canopy layers (2 = sun/shade)
+> {
+    atm: Atmosphere
+    radiation: CanopyRadiation<N_CANOPY>
+    soil: Soil<N_SOIL>
+    pathway: HydraulicPathway<V, N_SOIL>
+    canopy_layers: [LeafGasExchange; N_CANOPY]
+    params: FarquharParams
+
+    // THE quantity that the controller determines
+    stomata: Conductance
+
+    // Aggregate quantities
+    total_transpiration: TranspirationRate
+    total_assimilation: CarbonFlux
+
+    constraint stomatal_bounds:
+        0 <= stomata <= canopy_layers[0].g_w_max
+
+    // Canopy-aggregate transpiration is LAI-weighted sum
+    constraint aggregate_transpiration:
+        total_transpiration == sum(
+            radiation.layers[i].lai_fraction * canopy_layers[i].g_w * canopy_layers[i].leaf_vpd
+            for i in 0..N_CANOPY
+        )
+
+    // Canopy-aggregate assimilation is LAI-weighted sum
+    constraint aggregate_assimilation:
+        total_assimilation == sum(
+            radiation.layers[i].lai_fraction * canopy_layers[i].assimilation
+            for i in 0..N_CANOPY
+        )
+}
+
+
+// ============================================================================
+// Relations: Hydraulics (flat, no solve block — the planner finds the SCCs)
+//
+// These equations form an implicit system. The planner will discover that
+// flow, pressures, and conductances are mutually dependent and emit a solver.
+// ============================================================================
+
+// Flow conservation: same flow through every series segment
+// Per-layer root flow: E_j = k_rhizo_j * (P_soil_j - P_rhizo_j)
+relation rhizosphere_flow[j in 0..N_SOIL]:
+    pathway.layer_flow[j] ==
+        pathway.root[j].conductance * (soil.layers[j].water_potential - pathway.rhizosphere_pressure[j])
+
+// Root flow: E_j = k_root_j * (P_rhizo_j - P_root_junction)
+relation root_flow[j in 0..N_SOIL]:
+    pathway.layer_flow[j] ==
+        pathway.root[j].conductance * (pathway.rhizosphere_pressure[j] - pathway.root_junction_pressure)
+
+// Total flow is sum of per-layer root flows
+relation total_root_flow:
+    pathway.flow == sum(pathway.layer_flow[j] for j in 0..N_SOIL)
+
+// Stem flow: E = k_stem * (P_root_junction - P_stem - gravity)
+relation stem_flow:
+    pathway.flow ==
+        pathway.stem.conductance * (pathway.root_junction_pressure - pathway.stem_pressure - pathway.gravity_drop)
+
+// Leaf flow: E = k_leaf * (P_stem - P_leaf)
+relation leaf_flow:
+    pathway.flow ==
+        pathway.leaf.conductance * (pathway.stem_pressure - pathway.leaf.water_potential)
+
+// Transpiration from demand (per canopy layer): E_i = G_w_i * D_leaf_i
+relation demand_transpiration[i in 0..N_CANOPY]:
+    canopy_layers[i].g_w * canopy_layers[i].leaf_vpd ==
+        radiation.layers[i].lai_fraction * pathway.flow
+
+// Supply and demand transpiration are overdetermined — the core Myco pattern.
+
+
+// ============================================================================
+// Relations: Stomatal conductance
+// ============================================================================
+
+// Stomata determine G_w for each canopy layer
+// (in full model, add boundary layer conductance)
+relation stomatal_to_conductance[i in 0..N_CANOPY]:
+    canopy_layers[i].g_w == stomata
+
+
+// ============================================================================
+// Relations: Gas Exchange (per canopy layer)
+//
+// CO2 flux balance and Farquhar form an implicit 2-equation system:
+//   A = G_c * (C_a - C_i) / P_atm       (diffusion)
+//   A = f(V_max, J_max, C_i, ...)        (biochemistry)
+// The planner discovers this loop and solves for A and C_i jointly.
+// ============================================================================
+
+// CO2 diffusion: A = G_c * (C_a - C_i) / P_atm
+relation co2_flux[i in 0..N_CANOPY]:
+    canopy_layers[i].assimilation ==
+        canopy_layers[i].g_c * (atm.co2 - canopy_layers[i].c_i) / atm.pressure
+
+// Rubisco-limited rate
+relation compute_jc[i in 0..N_CANOPY]:
+    canopy_layers[i].j_c == rubisco_limited(
+        params.v_max, canopy_layers[i].c_i, params.gamma_star,
+        params.k_c, params.k_o, atm.o2,
+    )
+
+// Electron-transport-limited rate (uses per-layer PAR)
+relation compute_je[i in 0..N_CANOPY]:
+    canopy_layers[i].j_e == electron_transport_limited(
+        electron_transport_rate(
+            params.j_max, radiation.layers[i].par,
+            params.alpha, params.curvature_light,
+        ),
+        canopy_layers[i].c_i,
+        params.gamma_star,
+    )
+
+// Gross assimilation: smooth minimum of Jc, Je
+relation compute_assimilation[i in 0..N_CANOPY]:
+    canopy_layers[i].assimilation == collatz_smooth_min(
+        canopy_layers[i].j_c, canopy_layers[i].j_e, params.curvature_collab,
+    )
+
+
+// ============================================================================
+// Relations: Temperature adjustment
+// ============================================================================
+
+// Temperature-adjusted Farquhar parameters
+// Uses the first canopy layer's leaf temperature (could average across layers)
+relation adjust_vmax:
+    params.v_max == peaked_arrhenius(
+        params.v_max_25, 65330.0, 200000.0, 650.0, canopy_layers[0].leaf_temperature,
+    )
+
+relation adjust_jmax:
+    params.j_max == peaked_arrhenius(
+        params.j_max_25, 43540.0, 200000.0, 650.0, canopy_layers[0].leaf_temperature,
+    )
+
+relation adjust_kc:
+    params.k_c == arrhenius(41.0, 79430.0, canopy_layers[0].leaf_temperature)
+
+relation adjust_ko:
+    params.k_o == arrhenius(28202.0, 36380.0, canopy_layers[0].leaf_temperature)
+
+relation adjust_gamma:
+    params.gamma_star == arrhenius(4.36, 37830.0, canopy_layers[0].leaf_temperature)
+
+
+// ============================================================================
+// Relations: Leaf Energy Balance (per canopy layer)
+//
+// T_leaf depends on E, but E depends on D_leaf, which depends on T_leaf.
+// This is another algebraic loop. The planner discovers and handles it.
+// ============================================================================
+
+relation energy_balance[i in 0..N_CANOPY]:
+    let sigma = 5.67e-8
+    let c_p = 29.3
+    let emissivity = 0.97
+    let latent_heat = 44100.0
+    let g_ha = 1.4 * 0.135 * sqrt(atm.wind_speed / 0.0072)
+    let g_r = 0.1579 + 0.0017 * atm.temperature + 7.17e-6 * atm.temperature ** 2
+    let t_a_k = atm.temperature + 273.15
+    let e_layer = radiation.layers[i].lai_fraction * pathway.flow
+    canopy_layers[i].leaf_temperature ==
+        atm.temperature
+        + (atm.r_abs - emissivity * sigma * t_a_k ** 4 - latent_heat * e_layer)
+          / (c_p * (g_r + g_ha))
+
+relation leaf_vpd[i in 0..N_CANOPY]:
+    // Simplified: VPD increases with leaf temperature above air temperature
+    canopy_layers[i].leaf_vpd ==
+        atm.vpd + 0.0511 * (canopy_layers[i].leaf_temperature - atm.temperature)
+
+
+// ============================================================================
+// Slot: Stomatal Controller
+//
+// The world model declares WHAT stomata depend on. The HOW is pluggable:
+// - Sperry gain-risk optimization (import from controllers package)
+// - Ball-Berry / Medlyn empirical model
+// - Neural network (learned from data)
+// - Raw observed data
+//
+// inputs = [*] means "all quantities available at this point in the plan".
+// The Python API can enumerate what this resolves to.
+// ============================================================================
+
+slot stomatal_control provides [stomata]:
+    inputs = [*]
+
+
+// ============================================================================
+// Temporal: State Evolution
+// ============================================================================
+
+// Soil moisture depletion by transpiration (per-layer extraction weighted by root fraction)
+temporal soil_water_step[j in 0..N_SOIL]:
+    soil.layers[j].water_potential[t+1] =
+        soil.layers[j].water_potential[t]
+        - dt * pathway.layer_flow[j] / soil.layers[j].thickness
+
+// Irreversible cavitation: track the worst pressure ever experienced
+temporal cavitation_root[j in 0..N_SOIL]:
+    pathway.root[j].min_historical_pressure[t+1] =
+        min(pathway.root[j].min_historical_pressure[t],
+            pathway.root[j].water_potential[t])
+
+temporal cavitation_stem:
+    pathway.stem.min_historical_pressure[t+1] =
+        min(pathway.stem.min_historical_pressure[t],
+            pathway.stem.water_potential[t])
+
+temporal cavitation_leaf:
+    pathway.leaf.min_historical_pressure[t+1] =
+        min(pathway.leaf.min_historical_pressure[t],
+            pathway.leaf.water_potential[t])
