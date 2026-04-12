@@ -1865,31 +1865,70 @@ Documentation should include:
 - Constraint listings
 - Cross-references between related items
 
-### C.5 Plan visualization
+### C.5 Graph rendering architecture
 
-After compilation, render the execution plan as a visual graph:
+Both plan visualization and model graph visualization share a common rendering
+architecture. The compiler emits a **backend-agnostic graph intermediate
+representation** — a JSON format with nodes, edges, clusters, and metadata
+(SCC membership, solver strategy, path selection, constraint type, etc.). Thin
+adapters render this IR to different targets:
 
-- Nodes are quantities; edges are computational dependencies
-- SCCs are highlighted as clusters with labeled solver strategy
-- Overdetermined quantities show canonical vs alternative paths
-- Slot boundaries are visible
-- Temporal equations are shown as a separate layer
+```python
+plan = experiment.explain_plan()
 
-This can be a `myco plan --visualize` CLI command that emits SVG or opens an
-interactive viewer. Essential for debugging "why did the compiler choose this
-path?" and for understanding complex models.
+# Static output
+plan.graph.to_dot("plan.dot")          # Graphviz (.dot)
+plan.graph.to_d2("plan.d2")            # D2 diagramming language
+plan.graph.to_mermaid()                # Mermaid string (for markdown/GitHub)
 
-### C.6 Model graph visualization
+# Interactive
+plan.graph.serve()                      # Cytoscape.js in browser
+```
+
+**Rendering targets:**
+
+- **Graphviz**: battle-tested DAG layout. SCC clusters map to
+  `subgraph cluster_*`. Best for static plan diagrams. CLI:
+  `myco plan --dot | dot -Tsvg > plan.svg`
+- **D2**: modern text-to-diagram with better default styling. Good for
+  documentation and presentations
+- **Mermaid**: renders in GitHub markdown, VSCode preview, Jupyter notebooks.
+  Best for inline documentation
+- **Cytoscape.js**: JavaScript graph library with pan/zoom, filtering, and
+  multiple layout algorithms (hierarchical for containment, force-directed for
+  constraints). Best for interactive exploration of large models
+
+The JSON IR means any new renderer (vis.js, Excalidraw, custom WebGL, etc.)
+can be added without changing the compiler.
+
+### C.6 Plan visualization
+
+After compilation, render the execution plan:
+
+- Quantities are nodes; computational dependencies are edges
+- SCCs are highlighted as clusters with labeled solver strategy (linear,
+  polynomial, Newton-Raphson)
+- Overdetermined quantities show canonical vs alternative paths (with path
+  costs from the operation algebra)
+- Slot boundaries are visible, with SCC membership indicated
+- Temporal equations shown as a separate layer
+
+Essential for debugging "why did the compiler choose this path?" and for
+understanding how complex models decompose into solver blocks.
+
+### C.7 Model graph visualization
 
 Render the structural containment tree and constraint graph:
 
-- Containment tree shows parent-child relationships
+- Containment tree shows parent-child relationships (collapsible tree view
+  in VSCode sidebar via LSP extension)
 - Constraint graph shows cross-node couplings as edges
 - Color-code by node type, contract implementation, or constraint kind
 - Filterable — show only hydraulic quantities, only constraints, etc.
+- Interactive Cytoscape.js view for large models (50+ quantities)
 
-For a model like Sperry with 50+ quantities, visual structure is the fastest
-way to understand the model.
+For a model like Sperry, visual structure is the fastest way to understand
+the model.
 
 ### C.7 Interactive exploration (REPL)
 
