@@ -9,10 +9,8 @@ For earlier design exploration that led to this spec, see `v2_prep/`.
 For the Sperry model mock implementation that stress-tested this spec, see
 `mock_sperry.myco`.
 
-## Status
-
-This document is a draft. Sections marked *deferred* describe features that
-should be designed for but not implemented until a concrete model forces them.
+For the invariant design principles that guide all decisions, see
+`../soul.md`.
 
 ## Design Philosophy
 
@@ -24,6 +22,10 @@ in the model.
 The model describes what is true about the world. The compiler figures out how
 to compute it. The user never annotates solution strategies, solver choices, or
 execution order — those are compiler concerns.
+
+The compiler never silently trusts claims it cannot verify. If the compiler
+cannot prove a property, it errors with an actionable diagnostic. The user may
+explicitly acknowledge unverifiable properties, but silence is never consent.
 
 ---
 
@@ -48,19 +50,50 @@ use plant::sperry::{Leaf, Environment}
 use units::si::{megapascal as MPa, mole_per_second as mol_s}
 ```
 
-Modules may re-export items from other modules. The exact visibility rules
-(public by default vs explicit `pub`) are deferred until the package registry
-design is needed.
+Modules may re-export items from other modules.
 
-#### Open questions
+#### 1.1 Library vs model modules
 
-- Should there be a distinction between library modules (reusable components)
-  and model modules (top-level entry points for compilation)?
-- How should circular imports be handled? Likely: disallow them.
+A **library module** defines reusable components — types, nodes, contracts,
+functions, macros. It may contain unresolved generics and `dyn` contract
+references (see section 2.5). Library modules are imported by other modules but
+are not directly compilable.
+
+A **model module** is a top-level entry point for compilation. All generics must
+be resolved to concrete types, all `dyn` references must be specialized, and all
+const generics must have values. A model module is what the compiler accepts as
+input.
+
+The distinction is analogous to Rust's lib vs bin crates. A library defines
+`Ecosystem<const N: usize>` with `pfts: [PFT<dyn Photosynthesis>; N]`. A model
+module writes `MySite` with `eco: Ecosystem<3>` and specifies concrete types for
+each element.
+
+#### 1.2 Visibility
+
+Items are private by default. The `pub` keyword makes an item visible to
+importing modules:
+
+```myco
+pub type WaterPotential : Scalar<MPa>
+pub node XylemSegment<V: VulnerabilityCurve> { ... }
+pub contract VulnerabilityCurve { ... }
+pub fn arrhenius(...) -> ... { ... }
+```
+
+Fields within a node follow the same rule: private by default, `pub` to expose.
+A library author controls exactly what surface area is importable.
+
+#### 1.3 Circular imports
+
+Circular imports are disallowed. The module dependency graph must be a DAG. The
+compiler reports a cycle with the full import chain if one is detected.
 
 ### 2. Nodes
 
-A node is the single structural primitive of the world model.
+A node is the single structural primitive of the world model. A node is an
+instance of a type — it occupies a specific position in the containment tree
+and represents a concrete thing in the world.
 
 #### 2.1 Atomic nodes
 
@@ -76,12 +109,12 @@ A composite node owns other nodes and may own atomic values:
 
 ```myco
 node Leaf {
-  water: Potential { self <= 0 MPa }
-  stomata: Conductance
-  g_max: Conductance
-  area: Area
-  nsc: NscComposition
-  transpiration: WaterFlux
+    water: Potential { self <= 0 MPa }
+    stomata: Conductance
+    g_max: Conductance
+    area: Area
+    nsc: NscComposition
+    transpiration: WaterFlux
 }
 ```
 
@@ -104,14 +137,98 @@ Nodes may be parameterized by types and const values:
 
 ```myco
 node Canopy<const N: usize, P: Photosynthesis> {
-  leaves: [Leaf<P>; N]
+    leaves: [Leaf<P>; N]
 }
 ```
 
 Type parameters must satisfy a declared contract (see section 3.3). Const
 parameters must be compile-time-known positive integers.
 
-#### 2.5 Repeated structure
+Nodes may be generic over multiple contracts:
+
+```myco
+node ConductingElement<V: VulnerabilityCurve, PV: PressureVolumeCurve> {
+    k_max: HydraulicConductance
+    vc: V
+    pv: PV
+    water_potential: WaterPotential
+    conductance: HydraulicConductance
+
+    conductance = k_max * (1.0 - vc(water_potential).plc)
+}
+```
+
+This enables composable subsystem design: roots, stems, and leaves can all be
+`ConductingElement<WeibullVC, StandardPV>` with different parameter values.
+A storage-capable element might be
+`StorageConductingElement<WeibullVC, CapacitivePV>` — same vulnerability curve,
+different pressure-volume behavior.
+
+#### 2.5 Heterogeneous collections with `dyn`
+
+Arrays of nodes are normally homogeneous:
+
+```myco
+leaves: [Leaf<FarquharC3>; N]      // all leaves use C3 photosynthesis
+```
+
+When a collection must contain elements with different contract implementations,
+use `dyn`:
+
+```myco
+// Library module — ships generic
+node Ecosystem<const N: usize> {
+    pfts: [PFT<dyn Photosynthesis, dyn VulnerabilityCurve>; N]
+
+    total_lai: PositiveScalar
+
+    constraint total_lai_sum:
+        total_lai = sum(pfts[i].lai for i in 0..N)
+}
+```
+
+`dyn Photosynthesis` means "some type satisfying the `Photosynthesis` contract,
+determined later." Library code may only access fields declared in the contract
+on `dyn` elements.
+
+The user's model module specializes each element to a concrete type:
+
+```myco
+// Model module — fully concrete
+node MySite {
+    eco: Ecosystem<3> {
+        pfts[0]: PFT<FarquharC3, WeibullVC>     // oak tree
+        pfts[1]: PFT<C4Photo, SigmoidVC>         // C4 grass
+        pfts[2]: PFT<FarquharC3, SigmoidVC>      // shrub
+    }
+    atmosphere: Atmosphere
+    soil: Soil<4>
+}
+```
+
+After specialization, the compiler monomorphizes each element independently.
+`pfts[0]` and `pfts[2]` share the same Photosynthesis type but different VC
+types. The flat graph has different quantities for each element, but aggregation
+constraints from the library (which only reference contract-declared fields)
+remain valid.
+
+**Per-element relations**: In the model module, where concrete types are known,
+the user may write relations that use implementation-specific fields:
+
+```myco
+// Valid because pfts[0] is known to be FarquharC3
+relation oak_rubisco:
+    eco.pfts[0].canopy.photo.rubisco_specificity = some_value
+```
+
+Accessing `pfts[1].canopy.photo.rubisco_specificity` would be a compile error
+because `C4Photo` does not have that field.
+
+**`dyn` is a pre-monomorphization concept.** It exists in the source language
+for library authoring. After the user specifies concrete types, `dyn` is
+resolved. The flattener never sees it. No runtime dispatch is emitted.
+
+#### 2.6 Repeated structure
 
 Arrays of nodes use fixed-size syntax:
 
@@ -125,7 +242,10 @@ of scope.
 
 ### 3. Types
 
-A type declares what must be true about what a node owns.
+A type declares what must be true about a structural pattern. Types are
+reusable definitions; nodes are instances. This is analogous to the
+struct/instance distinction. If you imagine 100 trees, they all share the type
+`Tree<V, P>`; each tree is a node.
 
 #### 3.1 Scalar types
 
@@ -138,62 +258,116 @@ type Conductance : Scalar<mol_m2_s> { self >= 0 }
 
 Constraints on a scalar type are predicates over `self` (see section 5).
 
-#### 3.2 User-defined types
+#### 3.2 Generic types
+
+Types may be parameterized, just like nodes:
+
+```myco
+type BoundedScalar<U: Unit> : Scalar<U> {
+    self >= 0
+}
+
+type ConstrainedPair<U: Unit> {
+    lower: Scalar<U>
+    upper: Scalar<U>
+
+    constraint ordered:
+        lower <= upper
+}
+```
+
+This allows reusable type patterns without repeating constraint definitions.
+
+#### 3.3 User-defined types
 
 Users may define composite types that carry constraints over their internal
 structure:
 
 ```myco
 type Fraction : Scalar<ratio> {
-  0 <= self <= 1
+    0 <= self <= 1
 }
 
 type NscComposition {
-  sugar: Fraction
-  starch: Fraction
+    sugar: Fraction
+    starch: Fraction
 
-  constraint normalized:
-    sugar + starch = 1
+    constraint normalized:
+        sugar + starch = 1
 }
 ```
 
-The distinction between a "type" and a "node" is: a type is a reusable
-structural pattern. A node is an instance of a type (or an anonymous structure)
-in the world model. This is analogous to the struct/instance distinction.
+Types may impose constraints on their own fields (intra-type constraints).
+Types may not impose constraints on their parent's fields or on nodes they do
+not contain — cross-node constraints belong at the containing scope.
 
-#### 3.3 Contracts
+#### 3.4 Contracts
 
 A contract is a trait-like interface. It declares required inputs, outputs, and
 constraints without providing an implementation:
 
 ```myco
 contract Photosynthesis {
-  input ci: Potential
-  input par: Scalar<ratio>
-  input temperature: Scalar<ratio>
-  input jmax: Conductance
-  input vmax: Conductance
+    input ci: Potential
+    input par: Scalar<ratio>
+    input temperature: Scalar<ratio>
+    input jmax: Conductance
+    input vmax: Conductance
 
-  output assimilation: CarbonMass
+    output assimilation: CarbonMass
 }
 ```
 
 A node satisfies a contract if it provides all required fields with compatible
 types and satisfies all declared constraints.
 
+**Contract invocation is function-like.** A contract implementation maps inputs
+to outputs. Invocation always passes arguments explicitly:
+
+```myco
+vc(current_pressure).plc            // evaluate at current_pressure
+vc(historical_pressure).plc         // evaluate at a different pressure
+```
+
+There is no implicit "current context" binding. This keeps the semantics
+mathematical and predictable — a contract implementation is a function with
+named outputs, not a stateful object.
+
 Contracts enable generic subsystem swapping:
 
 ```myco
 node Leaf<P: Photosynthesis> {
-  photo: P
-  // ...
+    photo: P
+    // ...
 }
 ```
 
 Different photosynthesis implementations (C3, C4, CAM) can be plugged in
 without changing the containing structure.
 
-#### 3.3.1 Worked example: Vulnerability curves
+#### 3.4.1 Contract default implementations
+
+Contracts may provide default relations for outputs that most implementations
+share:
+
+```myco
+contract VulnerabilityCurve {
+    input pressure: WaterPotential
+    output plc: Fraction
+    output conductance_fraction: Fraction
+
+    property monotone: increasing(pressure -> plc)
+
+    // Default: most VCs compute conductance_fraction this way
+    default conductance_fraction = 1.0 - plc
+}
+```
+
+An implementation may override any default. If it doesn't, the default relation
+is included automatically. This avoids repeating `conductance_fraction = 1.0 -
+plc` in every VC implementation.
+
+#### 3.4.2 Worked example: Vulnerability curves
 
 A vulnerability curve maps water potential to fractional loss of hydraulic
 conductivity. The scientific community uses multiple parameterizations. This is
@@ -201,12 +375,10 @@ a natural contract:
 
 ```myco
 contract VulnerabilityCurve {
-  input pressure: WaterPotential
-  output plc: Fraction
+    input pressure: WaterPotential
+    output plc: Fraction
 
-  constraint monotonic:
-    forall p1, p2 where p1 < p2:
-      plc(p1) <= plc(p2)
+    property monotone: increasing(pressure -> plc)
 }
 ```
 
@@ -215,18 +387,18 @@ Implementations:
 ```myco
 // Weibull (the standard Sperry parameterization)
 node WeibullVC : VulnerabilityCurve {
-  b: PositiveScalar
-  c: PositiveScalar
+    b: PositiveScalar
+    c: PositiveScalar
 
-  plc = 1.0 - exp(-(-pressure / b) ** c)
+    plc = 1.0 - exp(-(-pressure / b) ** c)
 }
 
 // P50-slope sigmoid (cleaner parameterization, trivially invertible)
 node SigmoidVC : VulnerabilityCurve {
-  p50: WaterPotential
-  slope: PositiveScalar
+    p50: WaterPotential
+    slope: PositiveScalar
 
-  plc = 1.0 / (1.0 + exp(slope * (pressure - p50)))
+    plc = 1.0 / (1.0 + exp(slope * (pressure - p50)))
 }
 ```
 
@@ -234,26 +406,18 @@ A plant hydraulics node is generic over the VC type:
 
 ```myco
 node XylemSegment<V: VulnerabilityCurve> {
-  k_max: HydraulicConductance
-  vc: V
-  water_potential: WaterPotential
-  conductance: HydraulicConductance
+    k_max: HydraulicConductance
+    vc: V
+    water_potential: WaterPotential
+    conductance: HydraulicConductance
 
-  constraint conductance_from_vc:
-    conductance == k_max * (1.0 - vc.plc)
+    constraint conductance_from_vc:
+        conductance = k_max * (1.0 - vc(water_potential).plc)
 }
 ```
 
 This allows users to swap vulnerability curve implementations without changing
 the plant model.
-
-#### 3.4 Open questions
-
-- Can types own constraints over nodes they don't directly contain? Likely: no.
-  Cross-node constraints belong at the containing scope.
-- Should contracts support default implementations for some fields? Deferred.
-- Should types themselves be generic? Likely: yes, `type BoundedScalar<U: Unit>
-  : Scalar<U> { self >= 0 }`.
 
 ### 4. Units and Dimensions
 
@@ -276,9 +440,9 @@ Standard unit systems are importable:
 
 ```myco
 use units::si::{
-  megapascal as MPa,
-  mole_per_square_meter_second as mol_m2_s,
-  ratio,
+    megapascal as MPa,
+    mole_per_square_meter_second as mol_m2_s,
+    ratio,
 }
 ```
 
@@ -288,7 +452,26 @@ Derived units can be defined locally:
 unit mmol_m2_s = 1e-3 * mol_m2_s
 ```
 
-#### 4.3 Compile-time checking
+#### 4.3 Affine unit transforms
+
+Some unit conversions are affine (offset + scale) rather than purely
+multiplicative. The canonical example: Celsius to Kelvin.
+
+```myco
+unit kelvin
+unit celsius : affine(kelvin, offset=-273.15)
+```
+
+The compiler handles affine conversions automatically. When a relation mixes
+Celsius and Kelvin quantities, the compiler inserts the correct conversion. This
+eliminates manual `+ 273.15` scattered through model code — the Arrhenius
+functions in the Sperry mock, for example, should accept a `Temperature` type
+and the compiler handles the conversion to absolute temperature internally.
+
+Affine transforms also cover other offset-based systems (Fahrenheit, gauge
+pressure vs absolute pressure).
+
+#### 4.4 Compile-time checking
 
 The compiler checks dimensional consistency in relations:
 
@@ -298,9 +481,8 @@ The compiler checks dimensional consistency in relations:
 - Type annotations on nodes provide the expected unit
 - Binding-time validation checks that supplied data matches expected units
 
-#### 4.4 What is deferred
+#### 4.5 What is out of scope
 
-- Nonlinear unit systems (temperature offsets, decibels)
 - Arbitrary symbolic unit algebra in the source language
 - Full theorem-prover-level unit reasoning
 
@@ -314,16 +496,16 @@ Constraints are named, first-class members of a node or type:
 
 ```myco
 node Leaf {
-  stomata: Conductance
-  g_max: Conductance
-  water: Potential
-  turgor_loss_point: Potential
+    stomata: Conductance
+    g_max: Conductance
+    water: Potential
+    turgor_loss_point: Potential
 
-  constraint stomatal_bounds:
-    0 <= stomata <= g_max
+    constraint stomatal_bounds:
+        0 <= stomata <= g_max
 
-  constraint wilting:
-    water < turgor_loss_point implies stomata == 0
+    constraint wilting:
+        water < turgor_loss_point implies stomata = 0
 }
 ```
 
@@ -332,7 +514,7 @@ node Leaf {
 The predicate language supports:
 
 - **Arithmetic**: `+`, `-`, `*`, `/`, `**`
-- **Comparison**: `<`, `<=`, `==`, `>=`, `>`
+- **Comparison**: `<`, `<=`, `=`, `>=`, `>`
 - **Logical connectives**: `and`, `or`, `not`, `implies`
 - **Quantifiers**: `forall`, `exists` over index ranges
 - **Comprehensions**: `sum`, `count`, `mean`, `min`, `max` with `where`
@@ -340,60 +522,121 @@ The predicate language supports:
 - **Let bindings**: for readability, not mutation
 - **Function calls**: any function from the registry (section 9)
 
+Note: `=` in constraints means equality (the same as in relations). There is no
+assignment operator in Myco. The compiler may solve in either direction.
+
 #### 5.3 Examples
 
 Universal quantification:
 
 ```myco
 constraint all_stomata_positive:
-  forall i in 0..N: canopy.leaves[i].stomata >= 0
+    forall i in 0..N: canopy.leaves[i].stomata >= 0
 ```
 
 Filtered aggregation:
 
 ```myco
 constraint positive_total_area:
-  sum(canopy.leaves[i].area for i in 0..N) > 0 m2
+    sum(canopy.leaves[i].area for i in 0..N) > 0 m2
 ```
 
 Conditional:
 
 ```myco
 constraint active_conductance:
-  let active = [i for i in 0..N
-    where canopy.leaves[i].water > canopy.leaves[i].turgor_loss_point]
-  count(active) == 0 or
-    mean(canopy.leaves[i].stomata for i in active) >= 0.1 *
-    mean(canopy.leaves[i].g_max for i in active)
+    let active = [i for i in 0..N
+        where canopy.leaves[i].water > canopy.leaves[i].turgor_loss_point]
+    count(active) = 0 or
+        mean(canopy.leaves[i].stomata for i in active) >= 0.1 *
+        mean(canopy.leaves[i].g_max for i in active)
 ```
 
 Pairwise:
 
 ```myco
 constraint max_gradient:
-  forall i in 0..(M-1):
-    abs(soil.layers[i].water - soil.layers[i+1].water) <=
-      MAX_PRESSURE_GRADIENT * soil.layers[i].thickness
+    forall i in 0..(M-1):
+        abs(soil.layers[i].water - soil.layers[i+1].water) <=
+            MAX_PRESSURE_GRADIENT * soil.layers[i].thickness
 ```
 
-#### 5.4 Composition
+#### 5.4 Type-aware where clauses
+
+When iterating over heterogeneous collections (those using `dyn` contracts,
+see section 2.5), `where` clauses can filter by concrete type:
+
+```myco
+// Applies only to PFTs whose photosynthesis is FarquharC3
+relation c3_nitrogen_scaling[i in 0..N where pfts[i].photo is FarquharC3]:
+    eco.pfts[i].canopy.photo.v_max_25 = nitrogen_to_vmax(eco.pfts[i].nitrogen)
+```
+
+The `is` predicate tests the concrete type of a `dyn` element. After
+monomorphization, this resolves to a compile-time-known subset of indices. No
+runtime branching is emitted.
+
+A `has` predicate tests for the presence of a field:
+
+```myco
+constraint rubisco_positive[i in 0..N where pfts[i].photo has rubisco_specificity]:
+    eco.pfts[i].canopy.photo.rubisco_specificity > 0
+```
+
+Both `is` and `has` are compile-time predicates. They are only valid in model
+modules where concrete types are known.
+
+#### 5.5 Structural introspection
+
+Constraints may quantify over the fields of a node:
+
+```myco
+constraint all_finite:
+    forall field in self.fields where field.type <: Scalar:
+        is_finite(field)
+```
+
+This requires the set of fields a node owns to be well-defined at compile time,
+which the containment model guarantees. After monomorphization, `self.fields`
+is a concrete list. The `forall` expands to one constraint per matching field.
+
+Structural introspection is also available in derive macros (see section 18).
+
+#### 5.6 Properties (continuous invariants)
+
+Some invariants cannot be verified by expansion over discrete indices. These are
+declared with the `property` keyword:
+
+```myco
+contract VulnerabilityCurve {
+    input pressure: WaterPotential
+    output plc: Fraction
+
+    property monotone: increasing(pressure -> plc)
+}
+```
+
+Properties are verified by the compiler where possible:
+
+- For simple expressions (polynomial, exponential, sigmoid), the compiler
+  performs symbolic analysis to verify the property
+- For complex expressions where symbolic verification fails, the compiler
+  **errors** with a diagnostic explaining what it could not prove
+
+The user may explicitly acknowledge an unverifiable property:
+
+```myco
+property monotone: increasing(pressure -> plc) #[verified_externally]
+```
+
+The `#[verified_externally]` annotation suppresses the error and records the
+assumption in the compilation report. The compiler never silently trusts.
+
+#### 5.7 Composition
 
 Constraints compose conjunctively. All constraints from a node, its type, and
 all containing scopes must hold simultaneously. There is no override or
 relaxation mechanism.
-
-#### 5.5 Deferred: structural introspection
-
-A future extension may allow quantification over the fields of a node:
-
-```myco
-constraint all_finite:
-  forall field in self.fields where field.type <: Scalar:
-    is_finite(field)
-```
-
-This requires the set of fields a node owns to be well-defined at compile time,
-which the current design supports. The feature itself is deferred past v2.
 
 ### 6. Relations
 
@@ -403,11 +646,14 @@ All relations must hold simultaneously. The user does not annotate which
 equations form coupled systems — the compiler discovers this automatically (see
 section 12.5).
 
+The `=` in a relation means equality. Both sides are symmetric and the compiler
+may solve in either direction. There is no assignment operator in Myco.
+
 #### 6.1 Named relations
 
 ```myco
 relation demand_transpiration:
-  leaf.transpiration = leaf.stomata * env.vpd_scale
+    leaf.transpiration = leaf.stomata * env.vpd_scale
 ```
 
 #### 6.2 Indexed relations
@@ -416,8 +662,8 @@ Over repeated structure:
 
 ```myco
 relation demand_transpiration[i in 0..N]:
-  canopy.leaves[i].transpiration =
-    canopy.leaves[i].stomata * env.vpd_scale
+    canopy.leaves[i].transpiration =
+        canopy.leaves[i].stomata * env.vpd_scale
 ```
 
 #### 6.3 Temporal relations
@@ -426,22 +672,43 @@ Temporal relations describe how state evolves:
 
 ```myco
 temporal water_step[i in 0..N]:
-  canopy.leaves[i].water[t+1] =
-    canopy.leaves[i].water[t] - dt * canopy.leaves[i].transpiration[t]
+    canopy.leaves[i].water[t+1] =
+        canopy.leaves[i].water[t] - config.dt * canopy.leaves[i].transpiration[t]
 ```
 
 A quantity that appears on the left-hand side of a temporal relation is
 automatically inferred as persistent (requires initial state in the workflow
 binding).
 
+**`dt` is a normal quantity.** The timestep is not a magic name or built-in.
+It is a node in the world model, assumed or learned through the normal binding
+vocabulary:
+
+```myco
+node SimulationConfig {
+    dt: Scalar<seconds>
+}
+```
+
+```python
+experiment.assume_constant("config.dt", value=1800.0)
+```
+
+This means `dt` participates in dimensional analysis, can have constraints
+(`dt > 0`, `dt <= max_safe_timestep`), and is visible in the model structure.
+The compiler recognizes the `[t+1]` / `[t]` pattern as temporal and handles
+rollout generation, but the timestep scalar itself is just a quantity.
+
+Any quantity name may serve as the timestep — there is no reserved name.
+
 Temporal relations may use any function from the registry. In particular,
 accumulator patterns with `min` and `max` are supported:
 
 ```myco
 temporal cavitation_tracking[i in 0..N]:
-  pathway.segments[i].min_historical_pressure[t+1] =
-    min(pathway.segments[i].min_historical_pressure[t],
-        pathway.segments[i].water_potential[t])
+    pathway.segments[i].min_historical_pressure[t+1] =
+        min(pathway.segments[i].min_historical_pressure[t],
+            pathway.segments[i].water_potential[t])
 ```
 
 This pattern enables irreversible cavitation tracking: the worst pressure ever
@@ -450,8 +717,8 @@ a constraint:
 
 ```myco
 constraint irreversible_cavitation[i in 0..N]:
-  pathway.segments[i].conductance <=
-    k_max * (1.0 - vc(pathway.segments[i].min_historical_pressure).plc)
+    pathway.segments[i].conductance <=
+        k_max * (1.0 - vc(pathway.segments[i].min_historical_pressure).plc)
 ```
 
 #### 6.4 Overdetermined quantities
@@ -476,7 +743,7 @@ time.
 
 ```myco
 slot stomatal_control provides [stomata]:
-  inputs = [*]
+    inputs = [*]
 ```
 
 The slot declares what it provides and what it needs. The `[*]` wildcard means
@@ -488,12 +755,12 @@ clarity:
 
 ```myco
 slot controller provides [canopy.leaves[*].stomata]:
-  inputs = [
-    canopy.leaves[*].water,
-    canopy.leaves[*].nsc.sugar,
-    env.vpd_scale,
-    env.soil_water,
-  ]
+    inputs = [
+        canopy.leaves[*].water,
+        canopy.leaves[*].nsc.sugar,
+        env.vpd_scale,
+        env.soil_water,
+    ]
 ```
 
 Path wildcards (`[*]`) indicate that the slot operates over all instances of a
@@ -506,22 +773,29 @@ binding time via one of three modes:
 
 - **Learned**: a trainable function (neural network, linear model, etc.) whose
   parameters are optimized during training.
-- **Bound**: an imported controller implementation from a package or module.
+- **Bound**: an imported controller from a `.myco` module. Controllers are
+  normal Myco components — they define relations for the quantities the slot
+  provides. When imported, their relations merge into the model graph and are
+  planned like any other relations.
 - **Assumed**: raw data supplied directly for the slot's output quantities.
 
-This means a model package can ship with the base mechanics and multiple
-optional controllers:
+Controllers are not a special file format. A controller is just a `.myco` module
+that provides relations for the right quantities. When the compiler merges a
+controller's relations into the host model's graph, it may introduce new
+algebraic loops — the SCC detection (section 12.5) handles this naturally.
+
+Example package layout:
 
 ```
 sperry/
-  mechanics.myco              # hydraulics, photosynthesis, carbon balance
-  controllers/
-    gain_risk.myco            # Sperry gain-risk optimization
-    ball_berry.myco           # Ball-Berry empirical model
-    medlyn.myco               # Medlyn optimality model
+    mechanics.myco              # hydraulics, photosynthesis, carbon balance
+    controllers/
+        gain_risk.myco          # Sperry gain-risk optimization
+        ball_berry.myco         # Ball-Berry empirical model
+        medlyn.myco             # Medlyn optimality model
 ```
 
-And the user's workflow becomes:
+And the user's workflow:
 
 ```python
 model = myco.load("sperry/mechanics.myco")
@@ -536,7 +810,23 @@ experiment.learn_slot("stomatal_control")
 experiment.assume_series("stomata", observed_stomata_data)
 ```
 
-#### 7.3 Input introspection
+#### 7.3 Slot interaction with algebraic loops
+
+If a slot's output is needed inside an algebraic loop (SCC), the slot becomes
+part of that SCC. The user does not need to think about this — the compiler
+discovers and handles it.
+
+In the Sperry model, the stomatal controller produces `stomata`, which feeds
+into demand transpiration, which is part of the hydraulic SCC. The slot is
+therefore part of the SCC. When the slot is a learned function, the compiler
+differentiates through the solver (implicit function theorem) to get gradients
+to the learned function's parameters.
+
+This is consistent with the soul: "the compiler does the work." The user
+declares what the slot provides; the compiler figures out where it sits in the
+execution plan.
+
+#### 7.4 Input introspection
 
 The Python API supports enumerating the resolved inputs of a slot:
 
@@ -621,20 +911,29 @@ The planner uses this metadata to:
 
 For overdetermined quantities where multiple paths exist, the emitter may
 generate conditioning-aware code that dynamically weights paths based on
-numerical stability:
+numerical stability.
+
+The default algorithm uses condition-number-based weighting: each path is
+evaluated, and paths whose intermediate quantities are better-conditioned
+receive higher weight. The blend is smooth (differentiable) so gradients flow
+through both paths.
+
+Configuration via compiler config (section 14):
 
 ```python
-# Compiler-emitted, not user-written
-w = conditioning_weight(vpd_scale, soil_water - water)
-transpiration = (
-    w * (stomata * vpd_scale) +
-    (1 - w) * (hydraulic_cond * (soil_water - water))
+artifact = experiment.compile(
+    backend="jax",
+    path_blending={
+        "enabled": True,                  # default: True
+        "sharpness": 10.0,                # higher = sharper selection
+        "method": "condition_number",      # default method
+    },
 )
 ```
 
-This is a smooth blend that automatically uses the better-conditioned path more
-heavily. It provides both numerical stability in the forward pass and
-well-behaved gradients in the backward pass.
+When `sharpness` is very high, this approximates hard path selection. When low,
+it's a soft blend. The default provides both numerical stability in the forward
+pass and well-behaved gradients in the backward pass.
 
 ### 9. Function Registry
 
@@ -661,17 +960,17 @@ Users may register domain-specific functions:
 fn vulnerability_curve(pressure: Potential, p50: Potential, slope: Scalar<ratio>)
     -> Fraction
 {
-  invertibility: injective_restricted
-  differentiability: smooth
-  domain: slope > 0
+    invertibility: injective_restricted
+    differentiability: smooth
+    domain: slope > 0
 
-  1.0 - exp(-((pressure / p50) ** slope))
+    1.0 - exp(-((pressure / p50) ** slope))
 }
 
 fn inverse vulnerability_curve(
     plc: Fraction, p50: Potential, slope: Scalar<ratio>
 ) -> Potential {
-  p50 * (-log(1.0 - plc)) ** (1.0 / slope)
+    p50 * (-log(1.0 - plc)) ** (1.0 / slope)
 }
 ```
 
@@ -682,33 +981,41 @@ A registered function declares:
 - The function body (an expression, not imperative code)
 - Optionally: an explicit inverse function
 
+#### 9.3 Inverse verification
+
+If a user declares an explicit inverse, the compiler verifies it via round-trip
+testing at compile time: for a set of sample inputs in the declared domain, the
+compiler checks that `inverse(f(x)) ≈ x` within numerical tolerance. If
+verification fails, the compiler errors with the failing test cases.
+
 If no explicit inverse is provided and the invertibility class is `bijective` or
 `injective_restricted`, the compiler may attempt symbolic inversion for simple
-expression bodies. If it cannot, the function is treated as `opaque` for
-inversion purposes regardless of the declared class.
+expression bodies. If it cannot derive an inverse, the function is treated as
+`opaque` for inversion purposes — and the compiler emits a warning if the
+declared invertibility class was higher than `opaque`, since the declaration
+cannot be honored.
 
-#### 9.3 Deferred: integration primitive
+#### 9.4 Importable function packages
 
-Some models may require definite integration as a primitive operation:
+Functions ship with library modules. A library that defines a contract (e.g.,
+`VulnerabilityCurve`) can also ship helper functions (e.g., `peaked_arrhenius`,
+`collatz_smooth_min`) that models using that contract will need:
 
 ```myco
-fn integral(f: fn(Scalar) -> Scalar, lower: Scalar, upper: Scalar) -> Scalar {
-  invertibility: opaque
-  differentiability: smooth  // Leibniz rule
-}
+// In physiology/temperature.myco
+pub fn peaked_arrhenius(
+    value_25: PositiveScalar,
+    ha: Scalar<J_mol>,
+    hd: Scalar<J_mol>,
+    sv: Scalar<J_mol>,
+    temperature: Temperature,
+) -> PositiveScalar { ... }
 ```
 
-This is deferred unless a concrete model forces it. The explicit physics
-approach (declaring the conservation equations directly rather than
-pre-integrating curves) may eliminate the need.
-
-#### 9.4 Open questions
-
-- Should the first registry be entirely project-local, or should importable
-  function packages be supported immediately?
-- How should the compiler verify that a user-declared inverse is actually
-  correct? Likely: trust-but-verify at test time, with an optional consistency
-  check mode.
+```myco
+// In a user's model
+use physiology::temperature::peaked_arrhenius
+```
 
 ---
 
@@ -725,15 +1032,18 @@ quantity/relation/constraint graph that the planner can consume.
 
 #### 10.1 Monomorphization
 
-All generic type parameters and const generic parameters are resolved to
-concrete types and values:
+All generic type parameters, const generic parameters, and `dyn` references are
+resolved to concrete types and values:
 
 ```
 Canopy<3, FarquharC3> --> a concrete Canopy with 3 leaves, each using FarquharC3
+Ecosystem<3> with pfts[0]: PFT<C3, Weibull>, pfts[1]: PFT<C4, Sigmoid>, ...
+    --> three differently-typed PFT instances
 ```
 
-This is analogous to Rust monomorphization. No generic code survives past this
-phase.
+This is analogous to Rust monomorphization. No generic or `dyn` code survives
+past this phase. Heterogeneous collections are expanded into per-element
+concrete types.
 
 #### 10.2 Structural expansion
 
@@ -754,12 +1064,16 @@ Indexed relations are expanded similarly:
 
 ```
 relation demand[i in 0..3]:
-  canopy.leaves[i].transpiration = canopy.leaves[i].stomata * env.vpd_scale
+    canopy.leaves[i].transpiration = canopy.leaves[i].stomata * env.vpd_scale
 -->
 demand_0: canopy.leaves[0].transpiration = canopy.leaves[0].stomata * env.vpd_scale
 demand_1: canopy.leaves[1].transpiration = canopy.leaves[1].stomata * env.vpd_scale
 demand_2: canopy.leaves[2].transpiration = canopy.leaves[2].stomata * env.vpd_scale
 ```
+
+Type-aware `where` clauses are resolved during expansion. A clause like
+`[i in 0..3 where pfts[i].photo is FarquharC3]` produces relations for only
+the matching indices.
 
 #### 10.3 Constraint lowering
 
@@ -781,7 +1095,17 @@ sum(canopy.leaves[i].area for i in 0..3) > 0
 canopy.leaves[0].area + canopy.leaves[1].area + canopy.leaves[2].area > 0
 ```
 
-#### 10.4 Output
+Structural introspection (`forall field in self.fields`) is resolved during
+this phase. The set of fields is known after monomorphization, so the `forall`
+expands to concrete constraints.
+
+#### 10.4 Macro expansion
+
+Declarative macros and derive macros (section 18) are expanded before
+flattening. Macro expansion occurs after parsing but before type-checking,
+producing standard Myco AST nodes. No macro survives past this phase.
+
+#### 10.5 Output
 
 The output is a flat graph of:
 
@@ -791,14 +1115,7 @@ The output is a flat graph of:
 - Concrete slot interfaces with resolved paths
 
 This graph is the input to the planner. The planner does not need to understand
-generics, recursion, or repeated structure.
-
-#### 10.5 Future: vectorization recognition
-
-After flattening, the emitter may recognize that expanded structure came from
-repeated nodes and emit vectorized backend code (e.g., `jax.vmap`) instead of
-unrolled scalar operations. This is an optimization, not a correctness
-requirement. Deferred.
+generics, recursion, `dyn`, macros, or repeated structure.
 
 ### 11. Constraint Analysis
 
@@ -807,16 +1124,23 @@ to inform runtime code generation.
 
 #### 11.1 What the compiler proves
 
-The compiler should attempt to prove:
+The compiler attempts to prove:
 
-- **Dimensional consistency** of all relations (should always succeed or
-  produce a compile error)
+- **Dimensional consistency** of all relations (always succeeds or produces a
+  compile error)
 - **Domain satisfaction** for operations with restricted domains (e.g., that the
   argument to `log` is provably positive)
 - **Bound satisfaction** where type constraints and relation structure are
   sufficient (e.g., if `x >= 0` and `y >= 0`, then `x + y >= 0`)
 - **Constraint compatibility** when multiple constraints apply to the same
   quantity (detect provably impossible combinations)
+- **Properties** declared on contracts (monotonicity, etc.) via symbolic
+  analysis where possible
+
+If the compiler cannot prove a property or domain restriction, it **errors**
+with an actionable diagnostic. The user may suppress the error with an explicit
+acknowledgment annotation (`#[verified_externally]`), which is recorded in the
+compilation report.
 
 #### 11.2 Internal strategy
 
@@ -829,22 +1153,19 @@ graph. This is:
 - Cheap enough to run on every compilation
 
 For constraints involving logical connectives (`implies`, `or`) or nonlinear
-operations, the compiler may fall back to conservative approximation or defer to
-runtime.
-
-The internal strategy is not user-facing. Users write predicates; the compiler
-reasons about them as best it can.
+operations, the compiler may fall back to conservative approximation. If
+conservative approximation is insufficient, the compiler errors (it does not
+silently assume the constraint holds).
 
 #### 11.3 Runtime interaction
 
-Where static proof is not possible, the compiler emits runtime checks or
-penalties:
+Where static proof succeeds, the compiler may elide runtime checks. Where
+explicit acknowledgment is given (`#[verified_externally]`), runtime behavior
+depends on mode:
 
 - In `simulate` mode: runtime assertions that raise on violation
 - In `train` mode: differentiable penalty losses (soft constraint enforcement)
 - In both modes: diagnostic reporting for constraint violations
-
-The compiler may elide runtime checks where static proof succeeds.
 
 #### 11.4 Interaction with algebraic loops
 
@@ -935,6 +1256,8 @@ other.
 
 - Quantities not in any SCC are ordered topologically as usual.
 - Each SCC is treated as an implicit system that must be solved simultaneously.
+- If a slot's output feeds into an SCC, the slot is part of that SCC (see
+  section 7.3).
 
 **Classification**: The planner classifies each SCC by examining the structure
 of its equations:
@@ -997,19 +1320,22 @@ The emitter uses differentiability metadata from the operation algebra to:
 - Warn about fragile gradient paths
 - Reject `train`-mode plans with non-differentiable canonical paths
 
-#### 13.3 Future backends
+#### 13.3 Backend interface
 
-**PyTorch**: structurally similar to JAX. `torch.Tensor` operations,
-`torch.autograd` for differentiation. Straightforward to add.
+The compiler defines a backend interface that any emitter must implement. This
+allows future backends (PyTorch, Rust, Rust+PyO3 hybrid) to be added without
+modifying the planner or flattener.
 
-**Rust (simulate/inference)**: no autodiff needed. Emits a Rust module with
-`step()` and `rollout()`. Fast, deployable, embeddable (WASM, embedded systems,
-web services). Well-scoped project.
+The interface requires:
 
-**Rust + PyO3 hybrid (train)**: Rust for the forward pass, exposed via PyO3,
-with a `jax.custom_vjp` wrapper for backprop. Provides Rust-speed forward
-passes with JAX-native gradient computation. The compiler emits both the Rust
-code and the JAX VJP wrapper.
+- Emit scalar computation steps
+- Emit solver blocks for SCCs (with backend-appropriate solver)
+- Emit rollout/scan structure for temporal equations
+- Emit loss functions for `train` mode
+- Emit parameter initialization
+
+The JAX backend is the primary implementation for v2. Other backends are
+specified here for interface design but implemented post-v2.
 
 ### 14. Compiler Configuration
 
@@ -1034,7 +1360,7 @@ artifact = experiment.compile(
 Available strategies:
 
 - **`auto`** (default): compiler classifies the SCC and chooses appropriately.
-  Linear → direct solve. Small polynomial → symbolic if possible. General →
+  Linear -> direct solve. Small polynomial -> symbolic if possible. General ->
   numerical.
 - **`newton`**: force Newton-Raphson for a specific SCC.
 - **`fixed_point`**: force fixed-point iteration (may be more autodiff-friendly
@@ -1042,13 +1368,16 @@ Available strategies:
 - **`analytical`**: force analytical solution (fails if the compiler cannot
   derive one).
 
-#### 14.2 Other configuration
+#### 14.2 Path blending configuration
 
-Other backend-specific options:
+See section 8.5 for the path blending algorithm and configuration options.
 
-- Conditioning-aware path blending (on/off, blend sharpness)
+#### 14.3 Other configuration
+
 - Constraint enforcement mode (project vs penalize)
 - Debug mode (extra runtime checks and diagnostics)
+- Property verification strictness (how many sample points for round-trip
+  inverse testing, symbolic analysis depth)
 
 These are analogous to optimization levels in a C compiler: they affect how the
 code runs, not what it computes.
@@ -1085,6 +1414,29 @@ experiment.observe_sparse("tree.growth", measured_steps)
 ```
 
 Observations take a loss function (default `mse`, also `huber`) and a schedule.
+
+**On measurement uncertainty:** The workflow API intentionally does not include
+uncertainty parameters on observations. Measurement error is part of the world
+— a sap flow sensor is a physical object with properties. The relationship
+between true flux and measured flux is a relation:
+
+```myco
+node SapFlowSensor {
+    true_flux: TranspirationRate
+    measured_flux: TranspirationRate
+    measurement_noise: TranspirationRate
+
+    measured_flux = true_flux + measurement_noise
+}
+```
+
+The workflow binds `measurement_noise` (assumed from calibration, learned, etc.)
+and observes `measured_flux`. This keeps the language purely descriptive — the
+model describes the world including imperfect sensors, and the workflow decides
+what to do about it.
+
+Probabilistic backends (e.g., NumPyro emission) are a natural future extension
+that would enable full Bayesian inference over this same model structure.
 
 #### 15.3 Learning modes
 
@@ -1189,7 +1541,7 @@ for dataset in datasets:
     exp.learn_trajectory("soil_water", parameterization="spline", knots=12)
     exp.observe_sparse("canopy_health", dataset.health_steps)
     # ... per-experiment bindings
-    
+
 study.learn_slot("controller")  # shared across all experiments
 ```
 
@@ -1236,6 +1588,98 @@ the pattern is validated.
 
 ---
 
+## Part V: Macros
+
+These sections define the compile-time code generation facilities.
+
+### 18. Macros
+
+Macros generate Myco AST at compile time. They are expanded before
+type-checking and flattening. No macro survives past expansion.
+
+#### 18.1 Declarative macros
+
+Declarative macros are pattern-matching template expanders:
+
+```myco
+macro temperature_adjust!(param, ha, hd, sv, temp):
+    relation adjust_${param}:
+        params.${param} = peaked_arrhenius(params.${param}_25, $ha, $hd, $sv, $temp)
+```
+
+Usage:
+
+```myco
+temperature_adjust!(v_max, 65330.0, 200000.0, 650.0, leaf_temperature)
+temperature_adjust!(j_max, 43540.0, 200000.0, 650.0, leaf_temperature)
+```
+
+Expands to:
+
+```myco
+relation adjust_v_max:
+    params.v_max = peaked_arrhenius(params.v_max_25, 65330.0, 200000.0, 650.0, leaf_temperature)
+
+relation adjust_j_max:
+    params.j_max = peaked_arrhenius(params.j_max_25, 43540.0, 200000.0, 650.0, leaf_temperature)
+```
+
+Declarative macros:
+- Accept literal values, identifiers, and paths as arguments
+- Produce relations, constraints, fields, or other Myco constructs
+- Are hygienic (generated names don't collide with user names)
+- Are expanded in declaration order
+
+#### 18.2 Derive macros
+
+Derive macros introspect a node's structure and generate code based on field
+annotations:
+
+```myco
+#[derive(TemperatureAdjusted)]
+node FarquharParams {
+    #[arrhenius(ha=arrhenius_ha_vmax)]
+    v_max_25: CarbonFlux
+
+    #[arrhenius(ha=arrhenius_ha_jmax)]
+    j_max_25: CarbonFlux
+
+    // Arrhenius energy parameters — nodes, so they can be assumed or learned
+    arrhenius_ha_vmax: Scalar<J_mol>
+    arrhenius_ha_jmax: Scalar<J_mol>
+}
+```
+
+The `TemperatureAdjusted` derive macro inspects each annotated field and
+generates:
+
+- A temperature-adjusted output field (`v_max`, `j_max`)
+- A relation linking the base value to the adjusted value via the specified
+  function
+- A temperature input that all adjustments share
+
+Derive macro annotations may reference:
+- **Literal values**: `#[arrhenius(ha=65330.0)]` — hardcoded constant
+- **Sibling node fields**: `#[arrhenius(ha=arrhenius_ha_vmax)]` — the parameter
+  is itself a node, bindable via the workflow (assumable, learnable)
+
+This distinction is critical: when annotation parameters reference nodes rather
+than literals, the derived relations connect to quantities that participate in
+the full model graph. The activation energy becomes something you can
+`assume_constant()` or `learn_constant()`, not a magic number.
+
+#### 18.3 Macro expansion order
+
+1. Declarative macros expand first (textual substitution)
+2. Derive macros expand second (require parsed node structure)
+3. Type-checking runs on the fully expanded AST
+4. Flattening proceeds as normal
+
+Macros may not invoke other macros (no recursive expansion). This keeps
+expansion predictable and debuggable.
+
+---
+
 ## Appendix A: Worked Example — TinyTree
 
 This appendix shows what the TinyTree model looks like in v2 syntax to provide
@@ -1247,11 +1691,12 @@ a concrete bridge from v1.
 module plant::tiny_tree
 
 use units::si::{
-  megapascal as MPa,
-  mole_per_square_meter_second as mol_m2_s,
-  mole_per_second as mol_s,
-  gram_carbon as gC,
-  ratio,
+    megapascal as MPa,
+    mole_per_square_meter_second as mol_m2_s,
+    mole_per_second as mol_s,
+    gram_carbon as gC,
+    ratio,
+    seconds,
 }
 
 type Potential : Scalar<MPa>
@@ -1260,29 +1705,31 @@ type WaterFlux : Scalar<mol_s> { self >= 0 }
 type CarbonMass : Scalar<gC> { self >= 0 }
 
 node TinyTree {
-  vpd_scale: Potential
-  soil_water: Potential
-  hydraulic_cond: Conductance
+    vpd_scale: Potential
+    soil_water: Potential
+    hydraulic_cond: Conductance
 
-  water: Potential { self <= 0 MPa }
-  carbon: CarbonMass
+    water: Potential { self <= 0 MPa }
+    carbon: CarbonMass
 
-  stomata: Conductance { self <= g_max }
-  transpiration: WaterFlux
-  g_max: Conductance
+    stomata: Conductance { self <= g_max }
+    transpiration: WaterFlux
+    g_max: Conductance
+
+    dt: Scalar<seconds>
 }
 
 relation demand_transpiration:
-  transpiration = stomata * vpd_scale
+    transpiration = stomata * vpd_scale
 
 relation supply_transpiration:
-  transpiration = hydraulic_cond * (soil_water - water)
+    transpiration = hydraulic_cond * (soil_water - water)
 
 slot controller provides [stomata]:
-  inputs = [water, carbon, vpd_scale, soil_water, hydraulic_cond, g_max]
+    inputs = [water, carbon, vpd_scale, soil_water, hydraulic_cond, g_max]
 
 temporal water_step:
-  water[t+1] = water[t] - dt * transpiration[t]
+    water[t+1] = water[t] - dt * transpiration[t]
 ```
 
 ### A.2 Training workflow
@@ -1297,6 +1744,7 @@ experiment.assume_series("vpd_scale", range(64))
 experiment.assume_series("soil_water", range(64))
 experiment.assume_constant("hydraulic_cond")
 experiment.assume_constant("g_max")
+experiment.assume_constant("dt", value=1800.0)
 experiment.assume_initial("water")
 experiment.assume_initial("carbon")
 experiment.learn_slot("controller")
@@ -1317,9 +1765,10 @@ experiment.assume_series("vpd_scale", range(64))
 experiment.assume_series("soil_water", range(64))
 experiment.assume_constant("hydraulic_cond")
 experiment.assume_constant("g_max")
+experiment.assume_constant("dt", value=1800.0)
 experiment.assume_initial("water")
 experiment.assume_initial("carbon")
-experiment.learn_slot("controller")  # provide a known controller
+experiment.bind_slot("controller", "path/to/trained_controller")
 
 artifact = experiment.compile(backend="jax")
 ```
@@ -1334,7 +1783,7 @@ compiled artifact because the binding changed.
 See `mock_sperry.myco` for the full mock implementation. Key features exercised:
 
 - **Contracts**: `VulnerabilityCurve` with `WeibullVC` and `SigmoidVC`
-  implementations
+  implementations; function-like invocation with explicit arguments
 - **Generics**: `XylemSegment<V: VulnerabilityCurve>`,
   `SperryTree<V, N_SOIL, N_CANOPY>`
 - **Const generics**: parameterized soil layers and canopy layers (sun/shade)
@@ -1343,9 +1792,11 @@ See `mock_sperry.myco` for the full mock implementation. Key features exercised:
   the planner
 - **Temporal accumulators**: `min` for irreversible cavitation tracking
 - **Overdetermined quantities**: supply vs demand transpiration
-- **Full-graph slot inputs**: `inputs = [*]` for the stomatal controller
+- **Full-graph slot inputs**: `inputs = [*]` for the stomatal controller, with
+  the slot joining the hydraulic SCC when its output feeds the loop
 - **Pluggable controllers**: slot can be filled by gain-risk optimization,
   Ball-Berry model, or learned neural network
+- **Normal `dt`**: timestep is a declared quantity, not a magic name
 
 ---
 
@@ -1355,18 +1806,29 @@ The following is a suggested implementation order based on dependency structure.
 Items earlier in the list are prerequisites for items later.
 
 1. **Nodes and types** (sections 2, 3) — the structural core
-2. **Units and dimensions** (section 4) — needed by types
+2. **Units and dimensions** (section 4) — needed by types, including affine
+   transforms
 3. **Constraint language** (section 5) — needed by types and nodes
 4. **Relations and temporal** (section 6) — the equation layer
-5. **Slots** (section 7) — declared interfaces
-6. **Operation algebra** (section 8) — metadata for all operations
-7. **Function registry** (section 9) — user-defined operations
-8. **Flattening pass** (section 10) — bridge to the planner
-9. **Planning with SCC detection** (section 12) — causal ordering + loop discovery
-10. **JAX emitter with solver emission** (section 13) — code generation
-11. **Compiler configuration** (section 14) — solver strategy selection
-12. **Constraint analysis** (section 11) — static reasoning (can lag)
-13. **Binding vocabulary** (section 15) — path-based workflow binding
-14. **Modules** (section 1) — namespacing and imports
-15. **Learned trajectories** (section 16) — structured latent variables
-16. **Study-level training** (section 17) — multi-experiment joint learning
+5. **Contracts with function-like invocation** (section 3.4) — trait system
+6. **Generics and `dyn`** (sections 2.4, 2.5) — parameterized structure
+7. **Slots** (section 7) — declared interfaces with SCC participation
+8. **Operation algebra** (section 8) — metadata for all operations
+9. **Function registry** (section 9) — user-defined operations with inverse
+   verification
+10. **Declarative macros** (section 18.1) — template expansion
+11. **Flattening pass** (section 10) — bridge to the planner, including macro
+    expansion and `dyn` monomorphization
+12. **Planning with SCC detection** (section 12) — causal ordering + loop
+    discovery
+13. **JAX emitter with solver emission** (section 13) — code generation
+14. **Compiler configuration** (section 14) — solver strategy, path blending
+15. **Constraint analysis** (section 11) — static reasoning, property
+    verification, no-trust enforcement
+16. **Binding vocabulary** (section 15) — path-based workflow binding
+17. **Modules and visibility** (section 1) — namespacing, `pub`, lib vs model
+18. **Structural introspection and type-aware `where`** (sections 5.4, 5.5) —
+    compile-time meta-programming
+19. **Derive macros** (section 18.2) — annotation-driven code generation
+20. **Learned trajectories** (section 16) — structured latent variables
+21. **Study-level training** (section 17) — multi-experiment joint learning
