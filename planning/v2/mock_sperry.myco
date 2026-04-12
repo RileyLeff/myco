@@ -157,6 +157,9 @@ pub node FarquharC3 : Photosynthesis {
     v_max_25: CarbonFlux
     j_max_25: CarbonFlux
     r_day_25: CarbonFlux
+    k_c_25: Pressure               // Michaelis-Menten for CO2 (~41 Pa)
+    k_o_25: Pressure               // Michaelis-Menten for O2 (~28202 Pa)
+    gamma_star_25: Pressure        // CO2 compensation point (~4.36 Pa)
 
     constraint coordinated_capacity:
         j_max_25 = 1.67 * v_max_25
@@ -188,9 +191,9 @@ pub node FarquharC3 : Photosynthesis {
 
     v_max = peaked_arrhenius(v_max_25, ha_vmax, hd_vmax, sv_vmax, temperature)
     j_max = peaked_arrhenius(j_max_25, ha_jmax, hd_jmax, sv_jmax, temperature)
-    k_c = arrhenius(41.0 Pa, ha_kc, temperature)
-    k_o = arrhenius(28202.0 Pa, ha_ko, temperature)
-    gamma_star = arrhenius(4.36 Pa, ha_gamma, temperature)
+    k_c = arrhenius(k_c_25, ha_kc, temperature)
+    k_o = arrhenius(k_o_25, ha_ko, temperature)
+    gamma_star = arrhenius(gamma_star_25, ha_gamma, temperature)
     r_day = arrhenius(r_day_25, ha_rday, temperature)
 
     // Intermediate photosynthesis quantities
