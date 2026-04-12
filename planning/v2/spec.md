@@ -84,6 +84,13 @@ pub fn arrhenius(...) -> ... { ... }
 Fields within a node follow the same rule: private by default, `pub` to expose.
 A library author controls exactly what surface area is importable.
 
+**`pub` controls inter-module visibility only.** The workflow layer (Python API)
+can bind any path in the model regardless of visibility. `pub` is about library
+encapsulation — "don't let other module authors depend on my internals" — not
+about hiding quantities from the scientist running the experiment. A field
+marked private is invisible to other `.myco` modules but fully accessible to
+`assume_constant()`, `learn_constant()`, `observe_dense()`, etc.
+
 #### 1.3 Circular imports
 
 Circular imports are disallowed. The module dependency graph must be a DAG. The
@@ -91,9 +98,29 @@ compiler reports a cycle with the full import chain if one is detected.
 
 ### 2. Nodes
 
-A node is the single structural primitive of the world model. A node is an
-instance of a type — it occupies a specific position in the containment tree
-and represents a concrete thing in the world.
+A **node declaration** (`node Foo { ... }`) defines a reusable structural
+schema — analogous to a struct definition. A node becomes an **instance** when
+it is declared as a field inside another node or as a module's root node.
+
+The distinction between `type` and `node` is semantic:
+
+- **`type`**: value-level schemas. Scalars, simple composites, anything that is
+  pure data without relations or slots. Types may carry constraints over their
+  fields.
+- **`node`**: entity-level schemas. Nodes can own children (including other
+  nodes), define relations, contain slots, and participate in the containment
+  tree. A node implementing a contract must be declared with `node`, not `type`.
+
+This is analogous to the struct/instance distinction: if you imagine 100 trees,
+they all share the node definition `Tree<V, P>`; each tree is an instance
+occupying a unique position in the containment tree.
+
+**Module-scope relations** (relations, temporals, slots declared outside any
+node body) are implicitly scoped to the module's root node. A model module must
+have exactly one root node. Paths in module-scope relations refer to fields
+of that root. For example, if the root is `SperryTree`, a module-scope relation
+can reference `soil.layers[j].element.water_potential` without a `SperryTree.`
+prefix.
 
 #### 2.1 Atomic nodes
 
@@ -117,6 +144,12 @@ node Leaf {
     transpiration: WaterFlux
 }
 ```
+
+Inline `{ ... }` blocks on field declarations are syntactic sugar for a named
+constraint at the containing node's scope. In this sugar, `self` refers to the
+declared field, and sibling field names are in scope. For example,
+`stomata: Conductance { self <= g_max }` is equivalent to writing a separate
+`constraint stomatal_cap: stomata <= g_max` in the containing node.
 
 #### 2.3 Containment model
 
@@ -237,15 +270,24 @@ leaves: [Leaf<P>; N]
 layers: [SoilLayer; M]
 ```
 
-The count is a const generic or a literal. Variable-length collections are out
-of scope.
+The count is a const generic, a literal, or a const generic expression using
+`+`, `-`, `*`:
+
+```myco
+interlayer_flow: [TranspirationRate; M-1]    // M soil layers → M-1 interfaces
+```
+
+The compiler must be able to prove the result is a positive integer. For
+example, `M-1` requires `M >= 2`, which may be inferred from constraints on `M`
+or required as an explicit constraint. If positivity cannot be proven, the
+compiler errors.
+
+Variable-length collections are out of scope.
 
 ### 3. Types
 
-A type declares what must be true about a structural pattern. Types are
-reusable definitions; nodes are instances. This is analogous to the
-struct/instance distinction. If you imagine 100 trees, they all share the type
-`Tree<V, P>`; each tree is a node.
+A type declares what must be true about a structural pattern. See section 2 for
+the distinction between `type` (value-level) and `node` (entity-level).
 
 #### 3.1 Scalar types
 
@@ -257,6 +299,12 @@ type Conductance : Scalar<mol_m2_s> { self >= 0 }
 ```
 
 Constraints on a scalar type are predicates over `self` (see section 5).
+
+The `:` in a type declaration establishes a **subtype relationship**. Writing
+`type A : B` means `A <: B` — every value of type `A` is also a valid `B`.
+Similarly, `node X : Contract` means `X <: Contract`. The subtype operator
+`<:` is used in structural introspection (section 5.5) to filter by type:
+`field.type <: Scalar` matches any field whose type is a subtype of `Scalar`.
 
 #### 3.2 Generic types
 
@@ -321,17 +369,47 @@ contract Photosynthesis {
 A node satisfies a contract if it provides all required fields with compatible
 types and satisfies all declared constraints.
 
-**Contract invocation is function-like.** A contract implementation maps inputs
-to outputs. Invocation always passes arguments explicitly:
+**Contract invocation is purely functional.** A contract implementation is a
+hybrid: its **non-input fields** (parameters like `b`, `c` for WeibullVC) are
+real nodes in the containment tree, bindable via the workflow. Its **input
+fields** are formal parameters — they do not exist as quantities in the model
+graph. Invocation evaluates the contract's output relations as a function of
+the given arguments, without creating persistent bindings:
 
 ```myco
 vc(current_pressure).plc            // evaluate at current_pressure
 vc(historical_pressure).plc         // evaluate at a different pressure
 ```
 
-There is no implicit "current context" binding. This keeps the semantics
-mathematical and predictable — a contract implementation is a function with
-named outputs, not a stateful object.
+The same contract instance can be invoked at different argument values because
+inputs are formal parameters, not graph quantities. There is no implicit
+"current context" binding.
+
+**Named arguments.** For single-input contracts, positional invocation is
+natural: `vc(pressure).plc`. For multi-input contracts, named arguments are
+supported:
+
+```myco
+photo(temperature=leaf_temp, par=layer_par, g_c=g_w/1.6,
+      co2=atm.co2, o2=atm.o2, atm_pressure=atm.pressure).assimilation
+```
+
+**Wiring pattern.** As sugar for multi-input contracts, inputs may be wired via
+individual relations:
+
+```myco
+relation photo_temp[i in 0..N]:
+    canopy[i].photo.temperature = canopy[i].leaf_temperature
+
+relation photo_par[i in 0..N]:
+    canopy[i].photo.par = radiation.layers[i].par
+```
+
+When all inputs of a contract instance are wired via relations, the compiler
+collects these bindings into a single implicit call site. The contract's outputs
+(e.g., `photo.assimilation`) are then accessible as fields. If not all inputs
+are wired, the compiler errors. Wiring and explicit call syntax are equivalent
+and may not be mixed for the same contract instance.
 
 Contracts enable generic subsystem swapping:
 
@@ -363,9 +441,19 @@ contract VulnerabilityCurve {
 }
 ```
 
-An implementation may override any default. If it doesn't, the default relation
-is included automatically. This avoids repeating `conductance_fraction = 1.0 -
-plc` in every VC implementation.
+A default relation is included if and only if the implementation does not
+provide its own relation for that output. This is simple fallback, not conflict
+resolution — there is no ambiguity about which relation wins. If the
+implementation provides `conductance_fraction = some_other_expression`, the
+default is silently excluded. This avoids repeating `conductance_fraction =
+1.0 - plc` in every VC implementation.
+
+**Constraint and property inheritance.** A node implementing a contract inherits
+all constraints and properties declared in the contract. These compose
+conjunctively with the node's own constraints (see section 5.7). For example,
+if `VulnerabilityCurve` declares `property monotone: increasing(pressure ->
+plc)`, every implementation inherits this property without redeclaring it. The
+compiler verifies it against the implementation's actual relations.
 
 #### 3.4.2 Worked example: Vulnerability curves
 
@@ -511,7 +599,7 @@ node Leaf {
 
 #### 5.2 Available operations
 
-The predicate language supports:
+The predicate/expression language supports:
 
 - **Arithmetic**: `+`, `-`, `*`, `/`, `**`
 - **Comparison**: `<`, `<=`, `=`, `>=`, `>`
@@ -519,11 +607,25 @@ The predicate language supports:
 - **Quantifiers**: `forall`, `exists` over index ranges
 - **Comprehensions**: `sum`, `count`, `mean`, `min`, `max` with `where`
   filtering
-- **Let bindings**: for readability, not mutation
+- **Conditional expressions**: `if cond then expr else expr` — a value-level
+  conditional. During flattening, conditionals over compile-time-known
+  predicates (index comparisons, type tests) expand to the appropriate branch.
+  Conditionals over runtime values produce piecewise expressions in the emitted
+  code, with smooth approximation if needed for differentiability.
+- **Let bindings**: named subexpressions for readability, not mutation (see
+  below)
 - **Function calls**: any function from the registry (section 9)
 
 Note: `=` in constraints means equality (the same as in relations). There is no
 assignment operator in Myco. The compiler may solve in either direction.
+
+**`let` binding semantics.** A `let` binding introduces a named subexpression
+within the enclosing body (node, relation, constraint, temporal, or function).
+`let` has lexical scope — all names visible at the binding site are in scope,
+including the enclosing node's fields, contract inputs (if inside a contract
+implementation), and earlier `let` bindings. A `let` binding does **not**
+introduce a new quantity in the model graph; it is purely a readability
+mechanism that the compiler inlines during flattening.
 
 #### 5.3 Examples
 
@@ -583,12 +685,18 @@ constraint rubisco_positive[i in 0..N where pfts[i].photo has rubisco_specificit
     eco.pfts[i].canopy.photo.rubisco_specificity > 0
 ```
 
-Both `is` and `has` are compile-time predicates. They are only valid in model
-modules where concrete types are known.
+Both `is` and `has` are compile-time predicates resolved after monomorphization.
+They may appear in both library and model modules. In library modules, `is` and
+`has` predicates on `dyn` elements remain unresolved until the model module
+specializes the concrete types. The flattener resolves them in the same pass
+that monomorphizes `dyn` — no additional mechanism is needed.
 
 #### 5.5 Structural introspection
 
-Constraints may quantify over the fields of a node:
+Constraints, relations, and temporal blocks may quantify over the structure of
+a node using type-filtered iteration.
+
+**Field-level introspection** iterates over the direct fields of a node:
 
 ```myco
 constraint all_finite:
@@ -596,11 +704,26 @@ constraint all_finite:
         is_finite(field)
 ```
 
-This requires the set of fields a node owns to be well-defined at compile time,
-which the containment model guarantees. After monomorphization, `self.fields`
-is a concrete list. The `forall` expands to one constraint per matching field.
+**Subtree introspection** iterates recursively over all descendants of a node,
+filtered by type:
 
-Structural introspection is also available in derive macros (see section 18).
+```myco
+temporal cavitation[seg in pathway where seg is XylemSegment]:
+    seg.min_historical_pressure[t+1] =
+        min(seg.min_historical_pressure[t], seg.core.water_potential[t])
+```
+
+Here `seg in pathway` walks the entire containment subtree rooted at `pathway`,
+and `where seg is XylemSegment` filters to only those descendants whose type
+matches. Array elements are expanded individually — if `pathway.root` is
+`[XylemSegment<V>; M]`, each `root[j]` matches independently.
+
+Both forms require the set of fields to be well-defined at compile time, which
+the containment model guarantees. After monomorphization, the iteration expands
+to one instance per matching element.
+
+Structural introspection is available in constraints, relations, temporal
+blocks, and derive macros (see section 18).
 
 #### 5.6 Properties (continuous invariants)
 
@@ -615,6 +738,13 @@ contract VulnerabilityCurve {
     property monotone: increasing(pressure -> plc)
 }
 ```
+
+**Quantification scope.** A property is an obligation over the full admissible
+domain induced by the node's declared fields and constraints. For example,
+`increasing(pressure -> plc)` on `VulnerabilityCurve` means "for all values of
+`pressure` and for all parameter values satisfying the node's own constraints,
+`plc` is increasing in `pressure`." Property satisfaction must not depend on
+workflow bindings — it is a structural guarantee of the implementation.
 
 Properties are verified by the compiler where possible:
 
@@ -634,9 +764,10 @@ assumption in the compilation report. The compiler never silently trusts.
 
 #### 5.7 Composition
 
-Constraints compose conjunctively. All constraints from a node, its type, and
-all containing scopes must hold simultaneously. There is no override or
-relaxation mechanism.
+Constraints compose conjunctively. All constraints from a node, its type, its
+implemented contracts, and all containing scopes must hold simultaneously. There
+is no override or relaxation mechanism. Contract constraints and properties are
+inherited by implementations (see section 3.4.1).
 
 ### 6. Relations
 
@@ -648,6 +779,23 @@ section 12.5).
 
 The `=` in a relation means equality. Both sides are symmetric and the compiler
 may solve in either direction. There is no assignment operator in Myco.
+
+**`constraint` vs `relation` keywords.** Both keywords can contain equalities,
+and `=` has the same meaning in both: equality that the compiler may use for
+computation in either direction. The `constraint` keyword is a naming/grouping
+mechanism, not a semantic distinction. The rule is:
+
+- **Equalities** (`=`) are always solver-eligible, regardless of whether they
+  appear in a `relation` block, a `constraint` block, or bare inside a node
+  body. The planner may use any equality as a computational path.
+- **Inequalities and logical predicates** (`>=`, `<=`, `implies`, `and`, `or`,
+  etc.) are enforcement-only. They constrain the solution space but do not
+  provide computational paths.
+
+In practice, `relation` is conventional for cross-node equations, and
+`constraint` is conventional for invariants that live inside a node definition.
+Both are valid anywhere. The compiler treats them identically — what matters is
+the form of the expression, not the keyword.
 
 #### 6.1 Named relations
 
@@ -701,6 +849,11 @@ rollout generation, but the timestep scalar itself is just a quantity.
 
 Any quantity name may serve as the timestep — there is no reserved name.
 
+`dt` may be rollout-stable (constant via `assume_constant`) or may vary per
+timestep (via `assume_series`). The planner handles both — a per-step `dt` is
+treated identically to any other per-step forcing. This enables variable
+time-stepping driven by external schedules.
+
 Temporal relations may use any function from the registry. In particular,
 accumulator patterns with `min` and `max` are supported:
 
@@ -747,8 +900,12 @@ slot stomatal_control provides [stomata]:
 ```
 
 The slot declares what it provides and what it needs. The `[*]` wildcard means
-"all quantities available at this point in the plan." The compiler resolves this
-to a concrete list during planning.
+"all quantities computable without this slot." The compiler resolves this via
+two-phase planning: first, determine what is computable from assumptions,
+relations, and other slots *excluding* this slot's outputs. Those quantities
+become the slot's inputs. The slot's outputs then extend the computable set and
+planning continues. This is order-dependent (the slot sees everything computed
+before it), but the planner's topological ordering makes this deterministic.
 
 Alternatively, inputs may be listed explicitly for documentation and interface
 clarity:
@@ -981,12 +1138,48 @@ A registered function declares:
 - The function body (an expression, not imperative code)
 - Optionally: an explicit inverse function
 
+**Function-level generics.** Functions may be generic over unit types, enabling
+unit-polymorphic helpers:
+
+```myco
+fn arrhenius<U: Unit>(
+    value_25: Scalar<U>,
+    activation_energy: Scalar<J_mol>,
+    temperature: Temperature,
+) -> Scalar<U> {
+    invertibility: bijective
+    differentiability: smooth
+
+    let R = 8.314 J_mol_K
+    value_25 * exp(activation_energy * (temperature - 298.15 K) / (298.15 K * R * temperature))
+}
+```
+
+This allows `arrhenius` to accept `CarbonFlux`, `Pressure`, `Conductance`, or
+any other unit type for `value_25` and return the same unit. The compiler
+monomorphizes each call site to the concrete unit type, the same way it
+monomorphizes generic nodes. Function-level generics use the same `<T: Bound>`
+syntax as node generics.
+
 #### 9.3 Inverse verification
 
-If a user declares an explicit inverse, the compiler verifies it via round-trip
-testing at compile time: for a set of sample inputs in the declared domain, the
-compiler checks that `inverse(f(x)) ≈ x` within numerical tolerance. If
-verification fails, the compiler errors with the failing test cases.
+If a user declares an explicit inverse, the compiler performs two levels of
+checking:
+
+1. **Symbolic verification** (where possible): for restricted function families
+   (monotone bijections, polynomial inverses, compositions of known-invertible
+   operations), the compiler attempts to prove correctness symbolically.
+
+2. **Round-trip sanity check** (always): for a set of sample inputs in the
+   declared domain, the compiler checks that `inverse(f(x)) ≈ x` within
+   numerical tolerance. If the sanity check fails, the compiler errors with the
+   failing test cases.
+
+If symbolic verification succeeds, the inverse is fully trusted. If only the
+sanity check passes, the inverse is treated as `#[verified_externally]` — the
+compiler records the assumption in the compilation report and generates runtime
+monitoring. Finite samples are not verification; they silently trust unsampled
+regions. The no-trust principle requires this distinction.
 
 If no explicit inverse is provided and the invertibility class is `bijective` or
 `injective_restricted`, the compiler may attempt symbolic inversion for simple
@@ -1003,13 +1196,13 @@ Functions ship with library modules. A library that defines a contract (e.g.,
 
 ```myco
 // In physiology/temperature.myco
-pub fn peaked_arrhenius(
-    value_25: PositiveScalar,
+pub fn peaked_arrhenius<U: Unit>(
+    value_25: Scalar<U>,
     ha: Scalar<J_mol>,
     hd: Scalar<J_mol>,
     sv: Scalar<J_mol>,
     temperature: Temperature,
-) -> PositiveScalar { ... }
+) -> Scalar<U> { ... }
 ```
 
 ```myco
@@ -1160,12 +1353,17 @@ silently assume the constraint holds).
 #### 11.3 Runtime interaction
 
 Where static proof succeeds, the compiler may elide runtime checks. Where
-explicit acknowledgment is given (`#[verified_externally]`), runtime behavior
+explicit acknowledgment is given (`#[verified_externally]`) — including inverse
+declarations verified only by sanity check (section 9.3) — runtime behavior
 depends on mode:
 
 - In `simulate` mode: runtime assertions that raise on violation
 - In `train` mode: differentiable penalty losses (soft constraint enforcement)
 - In both modes: diagnostic reporting for constraint violations
+
+This ensures that `#[verified_externally]` properties are never silently
+trusted at runtime — the user discovers violations even though the compiler
+could not prove them statically.
 
 #### 11.4 Interaction with algebraic loops
 
@@ -1782,21 +1980,45 @@ compiled artifact because the binding changed.
 
 See `mock_sperry.myco` for the full mock implementation. Key features exercised:
 
-- **Contracts**: `VulnerabilityCurve` with `WeibullVC` and `SigmoidVC`
-  implementations; function-like invocation with explicit arguments
+- **Contracts**: `VulnerabilityCurve` with `WeibullVC`, `SigmoidVC`, and
+  `VanGenuchtenVC` implementations; function-like invocation with explicit
+  arguments; wiring pattern for multi-input `Photosynthesis` contract
 - **Generics**: `XylemSegment<V: VulnerabilityCurve>`,
-  `SperryTree<V, N_SOIL, N_CANOPY>`
-- **Const generics**: parameterized soil layers and canopy layers (sun/shade)
+  `SperryTree<V, P, N_SOIL, N_CANOPY>`, `LeafGasExchange<P: Photosynthesis>`
+- **Generic functions**: `arrhenius<U: Unit>`, `peaked_arrhenius<U: Unit>` —
+  unit-polymorphic temperature response functions
+- **Const generics**: parameterized soil layers and canopy layers (sun/shade),
+  const arithmetic in array sizes (`[T; M-1]`)
 - **Algebraic loops**: hydraulic flow-pressure coupling, Farquhar A-C_i
   coupling, energy balance T_leaf-E coupling — all discovered automatically by
   the planner
 - **Temporal accumulators**: `min` for irreversible cavitation tracking
+- **Structural introspection**: `temporal cavitation[seg in pathway where seg is
+  XylemSegment]` — type-filtered subtree iteration
+- **Conditional expressions**: `if j > 0 then ... else 0` in soil water step
 - **Overdetermined quantities**: supply vs demand transpiration
 - **Full-graph slot inputs**: `inputs = [*]` for the stomatal controller, with
   the slot joining the hydraulic SCC when its output feeds the loop
 - **Pluggable controllers**: slot can be filled by gain-risk optimization,
   Ball-Berry model, or learned neural network
+- **Affine unit transforms**: Temperature declared in degC, compiler handles
+  Kelvin conversion in Arrhenius functions and Stefan-Boltzmann term
 - **Normal `dt`**: timestep is a declared quantity, not a magic name
+
+**Abstraction boundaries worth noting:**
+
+- `VulnerabilityCurve` is a **single-input contract** (pressure → PLC). This
+  covers the dominant paradigm in plant hydraulics (Sperry, Tyree). Multi-driver
+  hydraulics (e.g., freeze-thaw embolism depending on both pressure and
+  temperature, or ABA-regulated aquaporin conductance) would use a richer
+  contract with additional inputs — the same generic mechanism, just a different
+  contract. This is extension, not redesign.
+
+- **Multi-output relations** are not supported as a general mechanism. A
+  relation defines a single equality. Coupled multi-output computations are
+  expressed via contracts (which have multiple named outputs) or via multiple
+  relations that the planner couples into an SCC. This is a deliberate design
+  choice — contracts handle the common case cleanly.
 
 ---
 

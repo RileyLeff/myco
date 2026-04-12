@@ -162,7 +162,6 @@ pub node FarquharC3 : Photosynthesis {
         j_max_25 = 1.67 * v_max_25
 
     // Arrhenius activation energies — nodes, so they can be assumed or learned
-    #[derive(TemperatureAdjusted)]
     ha_vmax: Scalar<J_mol>
     hd_vmax: Scalar<J_mol>
     sv_vmax: Scalar<J_mol>
@@ -189,9 +188,9 @@ pub node FarquharC3 : Photosynthesis {
 
     v_max = peaked_arrhenius(v_max_25, ha_vmax, hd_vmax, sv_vmax, temperature)
     j_max = peaked_arrhenius(j_max_25, ha_jmax, hd_jmax, sv_jmax, temperature)
-    k_c = arrhenius(41.0, ha_kc, temperature)
-    k_o = arrhenius(28202.0, ha_ko, temperature)
-    gamma_star = arrhenius(4.36, ha_gamma, temperature)
+    k_c = arrhenius(41.0 Pa, ha_kc, temperature)
+    k_o = arrhenius(28202.0 Pa, ha_ko, temperature)
+    gamma_star = arrhenius(4.36 Pa, ha_gamma, temperature)
     r_day = arrhenius(r_day_25, ha_rday, temperature)
 
     // Intermediate photosynthesis quantities
@@ -274,36 +273,36 @@ pub fn collatz_smooth_min(
     (x - sqrt(x * x - 4.0 * curvature * j_c * j_e)) / (2.0 * curvature)
 }
 
-// Arrhenius temperature response
-pub fn arrhenius(
-    value_25: PositiveScalar,
+// Arrhenius temperature response (generic over unit of value_25)
+pub fn arrhenius<U: Unit>(
+    value_25: Scalar<U>,
     activation_energy: Scalar<J_mol>,
     temperature: Temperature,
-) -> PositiveScalar {
+) -> Scalar<U> {
     invertibility: bijective
     differentiability: smooth
 
-    let R = 8.314
-    let t_k = temperature + 273.15    // TODO: affine unit conversion
-    value_25 * exp(activation_energy * (t_k - 298.15) / (298.15 * R * t_k))
+    let R = 8.314 J_mol_K
+    // Compiler handles degC → K conversion automatically (affine unit transform)
+    value_25 * exp(activation_energy * (temperature - 298.15 K) / (298.15 K * R * temperature))
 }
 
-// Peaked Arrhenius (Leuning 2002) for Vmax, Jmax
-pub fn peaked_arrhenius(
-    value_25: PositiveScalar,
+// Peaked Arrhenius (Leuning 2002) for Vmax, Jmax (generic over unit)
+pub fn peaked_arrhenius<U: Unit>(
+    value_25: Scalar<U>,
     ha: Scalar<J_mol>,
     hd: Scalar<J_mol>,
     sv: Scalar<J_mol>,
     temperature: Temperature,
-) -> PositiveScalar {
+) -> Scalar<U> {
     invertibility: lossy    // peaked, so not injective over full range
     differentiability: smooth
 
-    let R = 8.314
-    let t_k = temperature + 273.15    // TODO: affine unit conversion
-    let numerator = (1.0 + exp((sv * 298.15 - hd) / (R * 298.15)))
-        * exp((ha / (R * 298.15)) * (1.0 - 298.15 / t_k))
-    let denominator = 1.0 + exp((sv * t_k - hd) / (R * t_k))
+    let R = 8.314 J_mol_K
+    // Compiler handles degC → K conversion automatically (affine unit transform)
+    let numerator = (1.0 + exp((sv * 298.15 K - hd) / (R * 298.15 K)))
+        * exp((ha / (R * 298.15 K)) * (1.0 - 298.15 K / temperature))
+    let denominator = 1.0 + exp((sv * temperature - hd) / (R * temperature))
     value_25 * numerator / denominator
 }
 
@@ -622,12 +621,12 @@ relation photo_pressure[i in 0..N_CANOPY]:
 relation energy_balance[i in 0..N_CANOPY]:
     let g_ha = 1.4 * 0.135 * sqrt(atm.wind_speed / (leaf_props.width * 0.72))
     let g_r = 0.1579 + 0.0017 * atm.temperature + 7.17e-6 * atm.temperature ** 2
-    let t_a_k = atm.temperature + 273.15    // TODO: affine unit conversion
     let e_layer = radiation.layers[i].lai_fraction * pathway.flow
+    // Compiler handles degC → K for Stefan-Boltzmann term (affine unit transform)
     canopy_layers[i].leaf_temperature =
         atm.temperature
         + (atm.r_abs
-           - leaf_props.emissivity * stefan_boltzmann * t_a_k ** 4
+           - leaf_props.emissivity * stefan_boltzmann * atm.temperature ** 4
            - leaf_props.latent_heat * e_layer)
           / (specific_heat_air * (g_r + g_ha))
 
