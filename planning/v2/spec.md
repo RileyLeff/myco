@@ -1800,10 +1800,162 @@ See `mock_sperry.myco` for the full mock implementation. Key features exercised:
 
 ---
 
-## Appendix C: Implementation Priority
+## Appendix C: Developer Experience
+
+These are not core language features but are essential for making Myco pleasant
+and productive to use.
+
+### C.1 VSCode syntax highlighting
+
+A TextMate grammar for `.myco` files providing syntax highlighting in VSCode
+(and other editors that support TextMate grammars). This is low effort and
+high impact — colored keywords, strings, numbers, comments, and type
+annotations make `.myco` files immediately more readable.
+
+### C.2 Language Server Protocol (LSP)
+
+An LSP server for `.myco` files enabling:
+
+- **Go-to-definition**: click on a type, contract, node, or function name to
+  jump to its declaration
+- **Hover information**: hover over a quantity to see its type, unit, and
+  constraints; hover over a relation to see which quantities it connects
+- **Autocomplete**: path completion (`pathway.stem.` suggests `core`,
+  `min_historical_pressure`, etc.), contract field completion, import
+  suggestions
+- **Inline diagnostics**: type errors, unit mismatches, and constraint
+  violations shown as you type
+- **Rename symbol**: rename a node, type, or quantity across all files
+
+This is the single most impactful developer experience feature. Syntax
+highlighting makes files readable; LSP makes them navigable.
+
+### C.3 Formatter
+
+A canonical formatter for `.myco` files (like `rustfmt` or `gofmt`). Enforces
+consistent indentation, line width, spacing, and ordering of node members.
+Run as `myco fmt` or on save in the editor.
+
+Opinionated formatting removes style debates and makes diffs cleaner.
+
+### C.4 Doc comments and documentation generation
+
+Support `///` doc comments on nodes, types, contracts, functions, and fields:
+
+```myco
+/// Weibull vulnerability curve.
+///
+/// Maps water potential to fractional loss of hydraulic conductivity
+/// using the standard Sperry parameterization.
+pub node WeibullVC : VulnerabilityCurve {
+    /// Weibull scale parameter (related to P50)
+    b: PositiveScalar
+    /// Weibull shape parameter (>1 sigmoidal, =1 exponential)
+    c: PositiveScalar
+
+    plc = 1.0 - exp(-(-pressure / b) ** c)
+}
+```
+
+Generate browsable HTML documentation for library packages (like `rustdoc`).
+Documentation should include:
+
+- Type signatures with units
+- Contract interfaces and their implementations
+- Constraint listings
+- Cross-references between related items
+
+### C.5 Plan visualization
+
+After compilation, render the execution plan as a visual graph:
+
+- Nodes are quantities; edges are computational dependencies
+- SCCs are highlighted as clusters with labeled solver strategy
+- Overdetermined quantities show canonical vs alternative paths
+- Slot boundaries are visible
+- Temporal equations are shown as a separate layer
+
+This can be a `myco plan --visualize` CLI command that emits SVG or opens an
+interactive viewer. Essential for debugging "why did the compiler choose this
+path?" and for understanding complex models.
+
+### C.6 Model graph visualization
+
+Render the structural containment tree and constraint graph:
+
+- Containment tree shows parent-child relationships
+- Constraint graph shows cross-node couplings as edges
+- Color-code by node type, contract implementation, or constraint kind
+- Filterable — show only hydraulic quantities, only constraints, etc.
+
+For a model like Sperry with 50+ quantities, visual structure is the fastest
+way to understand the model.
+
+### C.7 Interactive exploration (REPL)
+
+An interactive mode for incremental model exploration:
+
+```
+$ myco repl sperry/mechanics.myco
+myco> :bindings
+  [nothing bound yet]
+myco> :assume atm.co2 = 40 Pa
+myco> :assume atm.temperature = 25 degC
+myco> :computable
+  [lists quantities computable from current bindings]
+myco> :unresolved
+  [lists quantities that still need bindings]
+myco> :plan stomata
+  [shows the dependency chain for computing stomata]
+```
+
+This supports iterative workflow development — the user progressively adds
+bindings and sees what becomes computable. Faster than edit-compile-run cycles
+for understanding model structure.
+
+### C.8 Package registry
+
+A registry for sharing and discovering Myco library packages:
+
+- Publish packages with contracts, implementations, and helper functions
+- Semantic versioning for compatibility
+- Dependency resolution
+- Searchable by domain (hydraulics, photosynthesis, soil physics, etc.)
+
+This is what turns Myco from a single-user tool into an ecosystem. A plant
+physiologist publishes a Farquhar implementation; a hydrologist publishes soil
+models; a modeler composes both without reimplementing either.
+
+The registry should support:
+
+- `myco add sperry-hydraulics` — add a dependency
+- `myco publish` — publish a package
+- `myco search "vulnerability curve"` — find packages
+
+### C.9 Compilation diagnostics
+
+Error messages should be clear, specific, and actionable:
+
+- **Source spans**: point to the exact `.myco` line and column
+- **Causal chains**: "quantity X is underdetermined because relation Y requires
+  Z, which is not provided by any binding or relation"
+- **Suggestions**: "did you mean to assume `soil.layers[0].water_potential`?"
+- **Unit mismatch details**: "left side has dimension [pressure], right side
+  has dimension [conductance * pressure] — did you forget to divide by
+  conductance?"
+- **SCC diagnostics**: "relations R1, R2, R3 form an algebraic loop involving
+  quantities Q1, Q2 — the compiler will emit a Newton-Raphson solver"
+
+The Rust compiler's error messages are the gold standard here.
+
+---
+
+## Appendix D: Implementation Priority
 
 The following is a suggested implementation order based on dependency structure.
 Items earlier in the list are prerequisites for items later.
+
+**Core language:**
 
 1. **Nodes and types** (sections 2, 3) — the structural core
 2. **Units and dimensions** (section 4) — needed by types, including affine
@@ -1813,22 +1965,48 @@ Items earlier in the list are prerequisites for items later.
 5. **Contracts with function-like invocation** (section 3.4) — trait system
 6. **Generics and `dyn`** (sections 2.4, 2.5) — parameterized structure
 7. **Slots** (section 7) — declared interfaces with SCC participation
+
+**Math substrate:**
+
 8. **Operation algebra** (section 8) — metadata for all operations
 9. **Function registry** (section 9) — user-defined operations with inverse
    verification
+
+**Metaprogramming:**
+
 10. **Declarative macros** (section 18.1) — template expansion
-11. **Flattening pass** (section 10) — bridge to the planner, including macro
-    expansion and `dyn` monomorphization
-12. **Planning with SCC detection** (section 12) — causal ordering + loop
-    discovery
-13. **JAX emitter with solver emission** (section 13) — code generation
-14. **Compiler configuration** (section 14) — solver strategy, path blending
-15. **Constraint analysis** (section 11) — static reasoning, property
-    verification, no-trust enforcement
-16. **Binding vocabulary** (section 15) — path-based workflow binding
-17. **Modules and visibility** (section 1) — namespacing, `pub`, lib vs model
-18. **Structural introspection and type-aware `where`** (sections 5.4, 5.5) —
+11. **Structural introspection and type-aware `where`** (sections 5.4, 5.5) —
     compile-time meta-programming
-19. **Derive macros** (section 18.2) — annotation-driven code generation
+12. **Derive macros** (section 18.2) — annotation-driven code generation
+
+**Compiler pipeline:**
+
+13. **Flattening pass** (section 10) — macro expansion, `dyn` monomorphization,
+    structural expansion
+14. **Planning with SCC detection** (section 12) — causal ordering + loop
+    discovery
+15. **JAX emitter with solver emission** (section 13) — code generation
+16. **Compiler configuration** (section 14) — solver strategy, path blending
+17. **Constraint analysis** (section 11) — static reasoning, property
+    verification, no-trust enforcement
+
+**Workflow layer:**
+
+18. **Binding vocabulary** (section 15) — path-based workflow binding
+19. **Modules and visibility** (section 1) — namespacing, `pub`, lib vs model
 20. **Learned trajectories** (section 16) — structured latent variables
 21. **Study-level training** (section 17) — multi-experiment joint learning
+
+**Developer experience** (can be developed in parallel with the above):
+
+22. **VSCode syntax highlighting** (appendix C.1) — TextMate grammar, low
+    effort / high impact
+23. **Compilation diagnostics** (appendix C.9) — clear errors with source spans
+24. **Formatter** (appendix C.3) — `myco fmt`
+25. **LSP server** (appendix C.2) — go-to-definition, hover, autocomplete
+26. **Plan visualization** (appendix C.5) — dependency graph rendering
+27. **Model graph visualization** (appendix C.6) — containment + constraint
+    graph
+28. **Interactive REPL** (appendix C.7) — incremental exploration
+29. **Doc comments and generation** (appendix C.4) — `///` comments, HTML docs
+30. **Package registry** (appendix C.8) — publish, discover, depend on packages
