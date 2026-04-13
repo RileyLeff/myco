@@ -926,6 +926,13 @@ Annotated literals are converted to base units at compile time. `0 degC`,
 `273.15 K`, and `32 F` are all compile-time equivalent — they all resolve to
 `273.15` in the base unit (kelvin).
 
+**Expression unit annotations.** Units may also be applied to parenthesized
+dimensionless expressions: `(0.1579 + 0.0017 * T_c) mol_m2_s`. This is
+syntactic sugar for multiplication by the unit's scale factor —
+`(expr) unit` is equivalent to `(expr) * 1.0 unit`. The expression inside the
+parentheses must be dimensionless; if it already carries a dimension, the
+compiler errors.
+
 #### 4.7 Type-level semantic distinction
 
 The dimension system catches physics errors (pressure + length). The **type
@@ -985,6 +992,14 @@ mismatch.
 produces `CarbonPool`, not an anonymous type. Similarly, `CarbonPool -
 CarbonPool` produces `CarbonPool`. This is consistent with the physical
 intuition: adding two carbon pools yields a carbon pool.
+
+**Affine exception.** Subtraction of affine named types strips the named type
+and returns an anonymous scalar in the base multiplicative unit. For example,
+`Temperature - Temperature` where `Temperature` is defined as `degC` produces
+an anonymous `Scalar<K>`, not `Temperature`. This follows from section 4.4:
+affine subtraction cancels the offset and yields a *difference* in the base
+multiplicative unit, which is semantically distinct from an absolute value in
+the original affine type.
 
 **Same-type division strips the named type.** `CarbonPool / CarbonPool`
 produces an anonymous `Scalar<ratio>` (dimensionless), not `CarbonPool`. The
@@ -1641,6 +1656,20 @@ interface manifest (section 7.5).
 When `inputs` are listed explicitly, the same partition applies: paths
 containing `[*]` are element-local, paths without are global.
 
+**Wildcard slots over `dyn` arrays.** When `[*]` ranges over a `dyn` array
+(heterogeneous element types behind a shared contract), `D_local` may differ
+per element because each concrete type may expose different fields beyond the
+contract. The compiler restricts wildcard slots over `dyn` arrays: the
+element-local inputs are limited to fields declared in the contract itself.
+Fields specific to a concrete element type are not reachable through `[*]`.
+For `[*]` with auto-resolved inputs (no explicit `inputs` list), the equality
+graph walk stops at the contract boundary — only contract-declared quantities
+are included. For explicit `inputs`, the compiler rejects any element-local
+path that names a field not present in the contract. This ensures `D_local` is
+uniform across elements and `vmap` is well-defined. Wildcard slots over
+homogeneous generic arrays (all elements the same concrete type) have no such
+restriction.
+
 #### 7.2 Slot binding modes
 
 A slot does not declare an implementation. The implementation is supplied at
@@ -2290,6 +2319,16 @@ depends on mode:
 This ensures that `#[verified_externally]` properties are never silently
 trusted at runtime — the user discovers violations even though the compiler
 could not prove them statically.
+
+**Trajectory-local enforcement.** Runtime enforcement (both assertions and
+penalty losses) applies only to states actually visited during a rollout. A
+`#[verified_externally]` property like `decreasing(pressure -> plc)` is
+checked at the pressure values the simulation encounters, not over the full
+domain. This means the property is a trajectory-local guarantee, not a global
+one — regions of the input space not visited during training or simulation are
+not checked. Users who need stronger global guarantees should enforce them
+architecturally (e.g., monotone network layers) rather than relying solely on
+runtime penalties.
 
 **Admissibility projections.** Constraints that guard the definedness of
 downstream operations require stronger enforcement than soft penalties. If a
@@ -3659,14 +3698,23 @@ needed.
 (Eqn 8) requires the marginal carbon cost of water: chi_w = dG/dE. In the mock,
 this is handled by the slot mechanism (the slot is trained to maximize growth,
 and the optimality condition emerges from training). For models that use
-analytical optimality rules (e.g., Potkay et al. 2021, THORP), `deriv` would
-express the marginal gain directly:
+analytical optimality rules outside the SCC (e.g., a transparent controller
+bound to a slot), the controller could compute the marginal gain using `deriv`
+on an acyclic sub-path:
 
 ```myco
-let dA_dgs = deriv(gas.photo.assimilation, gas.g_s)
-let dE_dgs = deriv(hydraulics.transpiration, gas.g_s)
+// Inside a transparent controller module (not in the SCC itself):
+let dA_dgs = deriv(photo.assimilation, g_s)   // acyclic: A = f(g_s, ...)
+let dE_dgs = deriv(transpiration, g_s)         // acyclic: E = f(g_s, ...)
 marginal_carbon_cost_of_water = dA_dgs / dE_dgs
 ```
+
+Note that this is valid only because the controller sits outside the SCC — it
+receives `g_s` as its own output and the derivatives are over the forward
+(acyclic) paths from `g_s` to `A` and `E`. Using `deriv` to close the loop
+(i.e., having the result feed back into determining `g_s` within the same
+residual system) would violate the section 9.5 restriction and is rejected by
+the compiler.
 
 ---
 
