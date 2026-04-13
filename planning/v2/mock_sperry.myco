@@ -495,7 +495,7 @@ node HydraulicPathway<V: VulnerabilityCurve, const M: usize> {
 // Top-level model
 // ============================================================================
 
-pub node SperryTree<
+pub root node SperryTree<
     V: VulnerabilityCurve,
     P: Photosynthesis,
     const N_SOIL: usize,
@@ -698,6 +698,9 @@ temporal soil_water_step[j in 0..N_SOIL]:
 // Irreversible cavitation: track the worst pressure ever experienced.
 // Uses structural introspection to generate one temporal block per XylemSegment
 // in the pathway, rather than writing them out individually.
+initial cavitation_init[seg in pathway where seg is XylemSegment]:
+    seg.min_historical_pressure = seg.core.water_potential
+
 temporal cavitation[seg in pathway where seg is XylemSegment]:
     seg.min_historical_pressure[t+1] =
         min(seg.min_historical_pressure[t], seg.core.water_potential[t])

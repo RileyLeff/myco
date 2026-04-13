@@ -73,7 +73,7 @@ use units::si::{
     seconds as s,
     ratio,
     inverse_kelvin as K_inv,
-    megapascal_per_second_inverse as MPa_s_inv,
+    inverse_megapascal_per_second as inv_MPa_s,
     mole_per_joule as mol_J,
     mole_per_kilogram as mol_kg,
     kilogram_per_mole as kg_mol,
@@ -115,7 +115,7 @@ pub type Height : Scalar<m> {
     self > 0
 }
 
-pub type Extensibility : Scalar<MPa_s_inv> {
+pub type Extensibility : Scalar<inv_MPa_s> {
     self >= 0
 }
 
@@ -141,7 +141,8 @@ pub fn substrate_limitation(
 
 // Q10 temperature response for maintenance respiration
 // Simpler than Arrhenius — appropriate when empirical Q10 is available.
-// Empirical equation calibrated to Celsius differences — uses value_in.
+// Temperature difference is purely multiplicative (affine offsets cancel),
+// so dividing by 10 K produces a dimensionless exponent natively.
 pub fn q10_response<U: Unit>(
     value_ref: Scalar<U>,
     q10: PositiveScalar,
@@ -151,8 +152,7 @@ pub fn q10_response<U: Unit>(
     invertibility: bijective
     differentiability: smooth
 
-    let dT = (temperature - T_ref).value_in(degC)
-    value_ref * q10 ** (dT / 10)
+    value_ref * q10 ** ((temperature - T_ref) / 10 K)
 }
 
 // Temperature-dependent cell wall extensibility (Table 3, φ̄)
@@ -448,7 +448,7 @@ node TurgorGrowth {
 // Top-level model
 // ============================================================================
 
-pub node PotkayTree<P: Photosynthesis> {
+pub root node PotkayTree<P: Photosynthesis> {
     atm: Atmosphere
     structure: TreeStructure
     leaf_props: LeafProperties
@@ -641,6 +641,12 @@ temporal nsc_dynamics:
                 - carbon.growth[t])
 
 // Irreversible cavitation: track worst pressure for stem and leaf
+initial stem_cavitation_init:
+    hydraulics.stem.min_historical_pressure = hydraulics.stem.core.water_potential
+
+initial leaf_cavitation_init:
+    hydraulics.leaf.min_historical_pressure = hydraulics.leaf.core.water_potential
+
 temporal stem_cavitation:
     hydraulics.stem.min_historical_pressure[t+1] =
         min(hydraulics.stem.min_historical_pressure[t],
@@ -653,6 +659,9 @@ temporal leaf_cavitation:
 
 // Track minimum soil water potential for root-soil conductance hysteresis
 // (the paper uses this for drought legacy effects, Fig 5)
+initial soil_drought_init:
+    atm.min_psi_soil = atm.psi_soil
+
 temporal soil_drought_memory:
     atm.min_psi_soil[t+1] =
         min(atm.min_psi_soil[t], atm.psi_soil[t])
