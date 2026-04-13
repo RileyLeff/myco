@@ -168,9 +168,18 @@ root node SperryTree<V: VulnerabilityCurve, P: Photosynthesis,
 ```
 
 A module may contain multiple `pub node` definitions (for reuse by other
-modules), but exactly one must be marked `root`. If no node is marked `root`,
-the compiler errors. If multiple nodes are marked `root`, the compiler errors.
-Library modules may omit `root` — they are not directly compilable.
+modules), but exactly one must be marked `root`. If multiple nodes are marked
+`root`, the compiler errors.
+
+Library modules that contain **only** type, node, contract, and function
+definitions may omit `root` — they are pure definition libraries. However,
+library modules that contain **module-scope relations, temporal equations, or
+slots** must designate a root, even if the root node has open generics. These
+module-scope items are scoped to the root node, so the compiler needs to know
+which node they belong to. The root of a library module may have unresolved
+type parameters — the module is still not directly compilable, but the
+compiler can validate that module-scope relations reference valid paths
+relative to the root's structure.
 
 Paths in module-scope relations refer to fields of the root. For example, if
 the root is `SperryTree`, a module-scope relation can reference
@@ -470,8 +479,18 @@ relation photo_par[i in 0..N]:
 When all inputs of a contract instance are wired via relations, the compiler
 collects these bindings into a single implicit call site. The contract's outputs
 (e.g., `photo.assimilation`) are then accessible as fields. If not all inputs
-are wired, the compiler errors. Wiring and explicit call syntax are equivalent
-and may not be mixed for the same contract instance.
+are wired, the compiler errors. Wiring and explicit call syntax may not be
+mixed for the same contract instance.
+
+**Wired vs. invoked semantics for intermediates.** When a contract is wired,
+its internal intermediate variables (e.g., FarquharC3's `j_c`, `j_e`,
+`a_gross`) become persistent quantities in the model graph. They are
+addressable by path (`canopy_layers[0].photo.j_c`), observable
+(`observe_sparse("canopy_layers[0].photo.j_c", ...)`), and participate in
+the flat graph like any other quantity. When a contract is invoked functionally
+(`vc(p).plc`), intermediates are anonymous subexpressions — they have no
+persistent path and cannot be observed or bound. This is the key semantic
+difference between the two modes.
 
 Contracts enable generic subsystem swapping:
 
@@ -936,6 +955,11 @@ dimension `Amount·Time⁻¹`, which matches `GrowthRate`'s dimension. If the
 dimensions don't match, the compiler errors with the concrete dimension
 mismatch.
 
+**Same-type arithmetic preserves the named type.** `CarbonPool + CarbonPool`
+produces `CarbonPool`, not an anonymous type. Similarly, `CarbonPool -
+CarbonPool` produces `CarbonPool`. This is consistent with the physical
+intuition: adding two carbon pools yields a carbon pool.
+
 This rule prevents accidental mixing (CarbonPool + WaterPool) while allowing
 natural expressions where different named quantities combine through physics
 (area × flux = total flux). The key insight: addition requires matching types
@@ -1356,6 +1380,26 @@ constraint irreversible_cavitation[i in 0..N]:
         k_max * (1.0 - vc(pathway.segments[i].min_historical_pressure).plc)
 ```
 
+**Future direction: first-class ODE declaration.** The current temporal syntax
+(`[t+1] = [t] + dt * rate`) hardcodes the forward Euler integration scheme
+into the world model. This is a mild violation of the soul principle "the
+compiler does the work" — the integration scheme is a numerical concern, not
+a scientific one. A future version could introduce a `rate()` operator:
+
+```myco
+temporal nsc_dynamics:
+    rate(carbon.C) = carbon.assimilation - carbon.R_M - carbon.R_G
+```
+
+This would let the compiler own the integration scheme (Euler, RK4, implicit)
+via compiler configuration, keeping the `.myco` file purely scientific. The
+current explicit syntax is retained for v2 because: (1) not all temporal
+updates are ODEs — discrete accumulators like `min(...)` are genuinely
+discrete; (2) the explicit form is simple and familiar; (3) for training via
+BPTT, the integration scheme matters less since gradients flow through whatever
+scheme is used. The `rate()` form is a natural upgrade path for stiff systems
+or when the compiler gains adaptive time-stepping capabilities.
+
 #### 6.4 Multiple relations for the same quantity
 
 A quantity may participate in more than one relation. This is intentional and
@@ -1419,6 +1463,18 @@ other latent owners — the slot always receives the same named inputs.
 The slot's outputs then extend the computable set and planning continues. This
 is order-dependent (the slot sees everything computed before it), but the
 planner's topological ordering makes this deterministic.
+
+**Multiple slots.** When a model has multiple slots (e.g., stomatal control and
+carbon allocation), the planner resolves their ordering via topological
+analysis of the dependency graph. If slot A's output feeds into slot B's
+input, A is planned first and B sees A's output. If the two slots are
+independent (neither's output feeds the other's input), their ordering is
+arbitrary and both see the same pre-slot computable set. If two slots are
+mutually dependent, they form an SCC together and are handled by the solver
+(section 7.3). With `inputs = [*]`, each slot's structural interface is
+computed independently from its own `provides` set — slot A does not
+automatically receive slot B's outputs unless they are structurally reachable
+from A's provides set.
 
 Alternatively, inputs may be listed explicitly for documentation and interface
 clarity:
@@ -1767,6 +1823,13 @@ G_0 = phi * (C_wood / u_s)
     * integrate(max(P_0(z) - turgor_threshold, 0), z, 0, 1)
 ```
 
+The second argument (`var`) introduces a **bound variable** scoped to the
+integrand expression, analogous to a lambda parameter. It does not need to be
+declared elsewhere. Its type is inferred from the integration bounds: if the
+bounds are dimensionless literals (`0, 1`), `var` is `Scalar<ratio>`. If the
+bounds are typed quantities (`0 m, stem_height`), `var` has that dimension.
+The integrand expression is type-checked with `var` in scope.
+
 Unlike `deriv`, symbolic integration is not always possible. The compiler
 attempts symbolic resolution for known integrand forms (polynomials,
 piecewise-linear, compositions of elementary functions). If symbolic resolution
@@ -1804,6 +1867,15 @@ world model's expression graph.
   expressions were resolved symbolically and which require runtime AD.
 - `deriv` **cannot** differentiate through slots (slots are opaque) or through
   underdetermined residual blocks (where the system is not closed).
+- **`deriv` output must not feed back into the SCC it differentiates through.**
+  If `deriv(A, g_s)` is used inside the same SCC that determines A and g_s,
+  the solver would need to compute the Hessian of the SCC at every Newton
+  step — this is computationally ruinous and numerically unstable. The compiler
+  detects this cycle and errors with a diagnostic suggesting the user either
+  (a) move the `deriv` expression outside the SCC (e.g., use the previous
+  timestep's derivative as an approximation) or (b) restructure the model so
+  that the derivative consumer and the differentiated quantities are in
+  separate components.
 - `integrate` cannot integrate over model structure (e.g., "integrate over all
   soil layers") — use indexed comprehensions for that.
 - `deriv` cannot differentiate across timesteps (e.g., d/dt) — use temporal
@@ -2221,6 +2293,26 @@ they merge into a single SCC. The planner does not assume SCCs are independently
 solvable — SCC detection operates on the full dependency graph, and mutual
 dependencies are discovered automatically by the standard Tarjan/Kosaraju
 algorithm. The merged SCC is classified and solved as a single unit.
+
+**Solver convergence failure.** At runtime, a Newton-Raphson solver may fail to
+converge — especially early in training when the controller outputs
+unrealistic values.
+
+In `simulate` mode, non-convergence after `max_iterations` is a runtime error
+with the final residual and iterate values reported.
+
+In `train` mode, non-convergence must not crash the training loop. The emitter
+generates a fallback: if the solver exceeds `max_iterations`, it returns the
+last iterate and adds a **convergence penalty** to the loss (proportional to
+the final residual norm). This ensures gradient signal flows even when the
+solver doesn't fully converge, while the penalty steers the controller toward
+regions where the physics is solvable. The convergence penalty weight is
+configurable in the solver configuration (section 14.1).
+
+As training progresses and the controller learns to produce physically
+reasonable values, convergence failures should become rare. The compilation
+plan reports which SCCs are most likely to face convergence issues based on
+their conditioning and the slot's output constraints.
 
 **Binding-dependent loops**: Different bindings may produce different SCCs from
 the same model. If a quantity in a loop is assumed as a constant, the loop may
@@ -2806,11 +2898,22 @@ identifier for FiLM conditioning, a site index, or a categorical treatment
 label.
 
 ```python
+# Single-instance slot
 experiment.bind_slot_metadata("stomatal_control", {
     "taxon_id": 4,              # integer index for FiLM embedding
     "site_elevation": 1200.0,   # auxiliary float not in the model graph
 })
+
+# Wildcard slot over N elements — metadata must match cardinality
+experiment.bind_slot_metadata("stomatal_control", {
+    "taxon_id": [4, 4, 7, 2],  # one per PFT in eco.pfts[*]
+})
 ```
+
+When a slot operates over a wildcard expansion (`provides [eco.pfts[*].g_w]`),
+metadata values must be arrays matching the expansion cardinality. The compiler
+validates the lengths at bind time. Scalar metadata values are broadcast to
+all elements.
 
 Slot metadata is passed to the controller as a **separate dictionary argument**,
 not concatenated into the structural input vector. This separation is critical
