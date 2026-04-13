@@ -464,7 +464,8 @@ node Ecosystem<const N: usize> {
 determined later." Library code may only access fields declared in the contract
 on `dyn` elements.
 
-The user's model module specializes each element to a concrete type:
+The user's model module specializes each element to a concrete type using
+**per-element type ascription** syntax:
 
 ```myco
 // Model module — fully concrete
@@ -478,6 +479,31 @@ pub root node MySite {
     soil: Soil<4>
 }
 ```
+
+**Per-element type ascription** (`array[i]: ConcreteType`) is valid only inside
+the body of a node that instantiates the array. It must appear inside an inline
+refinement block (`{ ... }`) for the containing node. The syntax rules:
+
+- Each index `i` must be a literal integer in `0..N`.
+- The ascribed type must satisfy the `dyn` contract at that position.
+- Every element with a `dyn` parameter must be ascribed — partial specialization
+  (leaving some elements unresolved) is a compile error.
+- Ascriptions are scoped to the containing node declaration. They do not
+  propagate to other modules or experiments — each model module that
+  instantiates the array must provide its own ascriptions.
+
+The compiler verifies completeness: after processing the model module, every
+`dyn` reference in the root's transitive containment tree must be resolved to a
+concrete type. If any `dyn` slot remains unresolved, the compiler errors with
+the path to the unresolved element.
+
+**Slot sharing and `dyn` resolution.** All experiments sharing a slot controller
+must use the same concrete `dyn` resolution map — not just the same root type
+and const generics, but the same per-element type ascriptions for every `dyn`
+array reachable from the slot's inputs or outputs. If experiment A ascribes
+`pfts[0]: PFT<FarquharC3, WeibullVC>` and experiment B ascribes
+`pfts[0]: PFT<C4Photo, SigmoidVC>`, the slot's structural interface differs and
+the compiler rejects sharing the controller across these experiments.
 
 After specialization, the compiler monomorphizes each element independently.
 `pfts[0]` and `pfts[2]` share the same Photosynthesis type but different VC
@@ -518,9 +544,22 @@ interlayer_flow: [TranspirationRate; M-1]    // M soil layers → M-1 interfaces
 ```
 
 The compiler must be able to prove the result is a positive integer. For
-example, `M-1` requires `M >= 2`, which may be inferred from constraints on `M`
-or required as an explicit constraint. If positivity cannot be proven, the
-compiler errors.
+example, `M-1` requires `M >= 2`. Const generic bounds are declared with
+`where` clauses on the containing node:
+
+```myco
+node Soil<const M: usize> where M >= 2 {
+    layers: [SoilLayer; M]
+    interlayer_flow: [TranspirationRate; M-1]
+}
+```
+
+The `where` clause may contain one or more comma-separated bounds on const
+generics using `>=`, `<=`, `>`, `<`, `=`. The compiler uses these bounds to
+verify that all const generic expressions produce valid (positive integer)
+results. If positivity cannot be proven from the declared bounds, the compiler
+errors. Callers of the generic node must provide const generic values satisfying
+all `where` clauses — e.g., `Soil<1>` would be a compile error.
 
 Variable-length collections are out of scope.
 
@@ -595,6 +634,9 @@ A contract is a trait-like interface. It declares required inputs, outputs, and
 constraints without providing an implementation:
 
 ```myco
+// Illustrative — simplified to show the contract mechanism.
+// The full Photosynthesis contract used in the mocks has a
+// different input set (g_c, co2, o2, atm_pressure, etc.).
 contract Photosynthesis {
     input ci: Potential
     input par: Scalar<ratio>
@@ -606,15 +648,24 @@ contract Photosynthesis {
 }
 ```
 
-A node satisfies a contract if it provides all required fields with compatible
-types and satisfies all declared constraints.
+**Contract satisfaction** has two parts:
+
+1. **Output obligation**: the node must provide a relation for each `output`
+   declared in the contract, with a compatible type.
+2. **Input signature**: the node must accept the contract's `input` fields as
+   formal parameters in its invocation signature. Inputs are *not* stored
+   fields — they define a function signature, not structural members.
+
+A node that provides the required outputs with compatible types and accepts
+the required inputs as parameters satisfies the contract. The contract's
+declared constraints and properties are inherited conjunctively (section 5.7).
 
 **Contract invocation is purely functional.** A contract implementation is a
-hybrid: its **non-input fields** (parameters like `b`, `c` for WeibullVC) are
-real nodes in the containment tree, bindable via the workflow. Its **input
-fields** are formal parameters — they do not exist as quantities in the model
-graph. Invocation evaluates the contract's output relations as a function of
-the given arguments, without creating persistent bindings:
+hybrid: its **non-input members** (parameters like `b`, `c` for WeibullVC) are
+real nodes in the containment tree, bindable via the workflow. Its **inputs**
+are formal parameters — they define the invocation signature, not quantities in
+the model graph. Invocation evaluates the contract's output relations as a
+function of the given arguments, without creating persistent bindings:
 
 ```myco
 vc(current_pressure).plc            // evaluate at current_pressure
@@ -732,7 +783,7 @@ default is silently excluded. This avoids repeating `conductance_fraction =
 **Constraint and property inheritance.** A node implementing a contract inherits
 all constraints and properties declared in the contract. These compose
 conjunctively with the node's own constraints (see section 5.7). For example,
-if `VulnerabilityCurve` declares `property monotone: increasing(pressure ->
+if `VulnerabilityCurve` declares `property monotone: decreasing(pressure ->
 plc)`, every implementation inherits this property without redeclaring it. The
 compiler verifies it against the implementation's actual relations.
 
@@ -1071,8 +1122,20 @@ that power.
 atm.temperature ** 4   // dimension: Θ⁴
 ```
 
-Exponentiation by a non-integer or by a quantity with non-zero dimension is a
-compile error.
+Exponentiation by a quantity with non-zero dimension is a compile error.
+
+**Dimensionless exponentiation.** A dimensionless base may be raised to a
+dimensionless exponent, even if the exponent is a variable (not a literal or
+const generic). The result is dimensionless. This is necessary for empirical
+physics formulas where exponents are fitted parameters:
+
+```myco
+let h = abs(pressure) / vg_alpha    // dimensionless
+let se = (1.0 + h ** vg_n) ** (-m)  // dimensionless ** dimensionless — OK
+```
+
+Only *dimensioned* bases require literal integer or const generic exponents
+(because the result dimension must be statically known).
 
 **Transcendental functions** (`exp`, `log`, `sin`, `cos`, `sqrt`, etc.): the
 argument must be **dimensionless**. The result is dimensionless (except `sqrt`,
@@ -1177,6 +1240,12 @@ an anonymous `Scalar<K>`, not `Temperature`. This follows from section 4.4:
 affine subtraction cancels the offset and yields a *difference* in the base
 multiplicative unit, which is semantically distinct from an absolute value in
 the original affine type.
+
+**Mixed named/anonymous arithmetic preserves the named type.** When one operand
+has a named type and the other is an anonymous scalar with matching dimensions,
+addition and subtraction preserve the named type: `CarbonPool + anonymous_mol_C`
+produces `CarbonPool`. This mirrors the rule for same-type arithmetic — the
+named type is preserved when dimensions match and the operation is additive.
 
 **Same-type division strips the named type.** `CarbonPool / CarbonPool`
 produces an anonymous `Scalar<ratio>` (dimensionless), not `CarbonPool`. The
@@ -1751,12 +1820,19 @@ other latent owners — the slot always receives the same named inputs.
 
 **Constraint: shared controllers require structurally identical models.** All
 experiments sharing a controller must use the same model instantiation (same
-concrete types, same const generics). If experiment A uses
-`SperryTree<WeibullVC, FarquharC3, 4, 2>` and experiment B uses
+concrete types, same const generics, same `dyn` resolution map). If experiment
+A uses `SperryTree<WeibullVC, FarquharC3, 4, 2>` and experiment B uses
 `SperryTree<WeibullVC, FarquharC3, 6, 2>`, their structural interfaces differ
 (different `[*]` resolution due to different N_SOIL) and the controller cannot
 be shared. The compiler detects interface mismatches across experiments in a
 study and errors with the differing input sets.
+
+**Soul alignment note:** this constraint is an intentional abstraction leak. It
+requires the model author to reason about input vector layout across
+experiments — a structural concern that ideally would be invisible. The
+tradeoff is accepted because the alternative (allowing structurally different
+models to share a controller) would produce silently wrong predictions when
+the controller receives inputs in an unexpected order or dimension.
 
 **Slot runtime contract.** A slot has a fixed, ordered structural interface
 determined at model load time. At each evaluation, the runtime supplies a value
@@ -1825,9 +1901,10 @@ effectively `(element_local_vector, global_vector) → element_output`, vmapped
 over elements to produce `[N, D_out]`. The total input dimensionality
 `D_in = D_local + D_global` is fixed for a given model structure.
 
-This partition is determined structurally: a quantity is element-local if and
-only if its path contains the wildcard index (after flattening). Everything
-else is global. The partition is reported in the plan metadata and the slot
+This partition is determined structurally, before flattening: the compiler maps
+each resolved input path back to the array dimensions of the unflattened AST.
+A quantity is element-local if and only if its path varies along the same array
+dimension as the `provides` wildcard. Everything else is global. The partition is reported in the plan metadata and the slot
 interface manifest (section 7.5).
 
 When `inputs` are listed explicitly, the same partition applies: paths
@@ -1846,6 +1923,15 @@ path that names a field not present in the contract. This ensures `D_local` is
 uniform across elements and `vmap` is well-defined. Wildcard slots over
 homogeneous generic arrays (all elements the same concrete type) have no such
 restriction.
+
+**Wildcard stability warning.** When `inputs = [*]` reaches quantities inside
+a const-generic-sized array (e.g., `soil.layers[j]` where `M` is a const
+generic), the input vector size varies by model instantiation. The compiler
+emits a warning in this case, recommending explicit `inputs` lists for
+controllers that will be serialized or shared across instantiations with
+different const generic values. This is not an error — the structural identity
+check (above) already prevents sharing — but it makes the portability
+limitation visible at definition time.
 
 #### 7.2 Slot binding modes
 
@@ -2296,6 +2382,11 @@ world model's expression graph.
   timestep's derivative as an approximation) or (b) restructure the model so
   that the derivative consumer and the differentiated quantities are in
   separate components.
+  **Soul alignment note:** this restriction is an intentional abstraction leak.
+  It requires the model author to know whether a `deriv` expression participates
+  in the same SCC as the quantities it differentiates — a solver-level concern.
+  The tradeoff is accepted because the alternative (silent Hessian computation
+  inside Newton loops) would produce silently wrong or divergent results.
 - `integrate` cannot integrate over model structure (e.g., "integrate over all
   soil layers") — use indexed comprehensions for that.
 - `deriv` cannot differentiate across timesteps (e.g., d/dt) — use temporal
@@ -3706,6 +3797,7 @@ node TinyTree {
     stomata: Conductance { self <= g_max }
     transpiration: WaterFlux
     g_max: Conductance
+    water_capacity: PositiveScalar   // dψ/dV — converts flux to potential change
 
     dt: Scalar<seconds>
 }
@@ -3720,7 +3812,7 @@ slot controller provides [stomata]:
     inputs = [water, carbon, vpd_scale, soil_water, hydraulic_cond, g_max]
 
 temporal water_step:
-    water[t+1] = water[t] - dt * transpiration[t]
+    water[t+1] = water[t] - dt * transpiration[t] / water_capacity
 ```
 
 ### A.2 Training workflow
@@ -3871,27 +3963,15 @@ The compiler would attempt symbolic resolution (the integrand is piecewise-
 linear, so a closed form exists) and fall back to numerical quadrature if
 needed.
 
-**Candidate use of `deriv` (section 9.5):** The paper's optimality condition
-(Eqn 8) requires the marginal carbon cost of water: chi_w = dG/dE. In the mock,
-this is handled by the slot mechanism (the slot is trained to maximize growth,
-and the optimality condition emerges from training). For models that use
-analytical optimality rules outside the SCC (e.g., a transparent controller
-bound to a slot), the controller could compute the marginal gain using `deriv`
-on an acyclic sub-path:
-
-```myco
-// Inside a transparent controller module (not in the SCC itself):
-let dA_dgs = deriv(photo.assimilation, g_s)   // acyclic: A = f(g_s, ...)
-let dE_dgs = deriv(transpiration, g_s)         // acyclic: E = f(g_s, ...)
-marginal_carbon_cost_of_water = dA_dgs / dE_dgs
-```
-
-Note that this is valid only because the controller sits outside the SCC — it
-receives `g_s` as its own output and the derivatives are over the forward
-(acyclic) paths from `g_s` to `A` and `E`. Using `deriv` to close the loop
-(i.e., having the result feed back into determining `g_s` within the same
-residual system) would violate the section 9.5 restriction and is rejected by
-the compiler.
+**Optimality conditions and `deriv`.** The paper's optimality condition
+(Eqn 8) requires the marginal carbon cost of water: chi_w = dG/dE. This
+cannot be expressed as a native `.myco` `deriv` expression that feeds back
+into `g_s`, because doing so would create a `deriv`-containing SCC cycle
+(section 9.5). In the mock, the slot mechanism handles this: the slot is
+trained to maximize growth, and the optimality condition emerges from training.
+For analytical optimality models, the optimality rule belongs in the Python
+workflow (computing the derivative externally and supplying it as data) or in
+a neural slot that learns the optimal response surface.
 
 ---
 
@@ -5573,4 +5653,4 @@ temporal soil_drought_memory:
 
 ## 6. Project Context Note
 
-This spec has been through multiple rounds of review by Claude, Gemini, and GPT 5.4 Pro. Previous rounds addressed: ConductingElement split (vc_conductance vs conductance), slot runtime contract unification, wildcard input partition, temporal first-order restriction, deriv two-tier lowering, failed SCC gradient semantics, trained slot serialization, runtime where-clause lowering, affine unit subtraction semantics, VC monotonicity direction, overconstrained canopy demand, soil water dimensional consistency, expression unit syntax, wildcard slots over dyn arrays, affine exception to named type subtraction, trajectory-local property enforcement, and deriv appendix SCC contradiction. If you find issues that have already been addressed, note them as resolved. Focus on NEW findings.
+This spec has been through multiple rounds of review by Claude, Gemini, GPT 5.4 Pro, and Meta Muse Spark. Previous rounds addressed: ConductingElement split, slot runtime contract unification, wildcard input partition, temporal first-order restriction, deriv two-tier lowering, failed SCC gradient semantics, trained slot serialization, runtime where-clause lowering, affine unit subtraction semantics, VC monotonicity direction, overconstrained canopy demand, soil water dimensional consistency, expression unit syntax, wildcard slots over dyn arrays, affine exception to named type subtraction, trajectory-local property enforcement, deriv appendix SCC contradiction (example removed), dimensionless exponentiation rule, TinyTree dimensional fix, contract satisfaction rewrite (input signature vs output obligation), dyn per-element type ascription formalization, const generic where-clause bounds, wildcard stability warning for const-generic arrays, intentional soul alignment leaks documented, and named-type minus anonymous preservation rule. If you find issues that have already been addressed, note them as resolved. Focus on NEW findings.
