@@ -476,11 +476,14 @@ relation photo_par[i in 0..N]:
     canopy[i].photo.par = radiation.layers[i].par
 ```
 
-When all inputs of a contract instance are wired via relations, the compiler
-collects these bindings into a single implicit call site. The contract's outputs
-(e.g., `photo.assimilation`) are then accessible as fields. If not all inputs
-are wired, the compiler errors. Wiring and explicit call syntax may not be
-mixed for the same contract instance.
+When all inputs of a contract instance are wired via equalities, the compiler
+collects these bindings into a single implicit call site. The wiring collection
+pass scans **all equalities** that reference contract inputs, regardless of
+whether they use the `relation` or `constraint` keyword — both keywords produce
+equalities that the compiler treats identically (section 6). The contract's
+outputs (e.g., `photo.assimilation`) are then accessible as fields. If not all
+inputs are wired, the compiler errors. Wiring and explicit call syntax may not
+be mixed for the same contract instance.
 
 **Wired vs. invoked semantics for intermediates.** When a contract is wired,
 its internal intermediate variables (e.g., FarquharC3's `j_c`, `j_e`,
@@ -960,6 +963,15 @@ produces `CarbonPool`, not an anonymous type. Similarly, `CarbonPool -
 CarbonPool` produces `CarbonPool`. This is consistent with the physical
 intuition: adding two carbon pools yields a carbon pool.
 
+**Named + anonymous addition.** Adding a named type to an anonymous type with
+matching dimensions succeeds — the result has the named type. For example,
+`CarbonPool + anonymous_mol_C` produces `CarbonPool`, because the anonymous
+operand's dimension matches and it carries no conflicting name. This arises
+naturally in temporal equations: `carbon.C[t] + dt * (flux_expression)` where
+the `dt * flux` product is anonymous with dimension `mol_C`. The result is
+`CarbonPool` as expected. If the anonymous operand's dimension does not match
+the named type's dimension, the compiler errors.
+
 This rule prevents accidental mixing (CarbonPool + WaterPool) while allowing
 natural expressions where different named quantities combine through physics
 (area × flux = total flux). The key insight: addition requires matching types
@@ -1356,10 +1368,15 @@ initial cavitation[seg in pathway where seg is XylemSegment]:
     seg.min_historical_pressure = seg.core.water_potential
 ```
 
-The `initial` block establishes an equality at t=0 only. The compiler uses it
-to derive the initial state from the first-timestep solution rather than
-requiring external data. If the referenced quantity is itself part of an SCC,
-the initial condition is resolved after the first-timestep solver runs.
+The `initial` block establishes an equality at t=0 only. The compiler adds
+initial equations to the dependency graph for the first timestep, and SCC
+detection handles them naturally. If the initialized quantity participates in
+an SCC (e.g., `min_historical_pressure` affects `conductance` which is part of
+the hydraulic SCC), the initial equation becomes part of that SCC at t=0 —
+adding one equation and one unknown, keeping the system square. The solver
+resolves all SCC quantities simultaneously, including the initial value. For
+subsequent timesteps (t > 0), the temporal accumulator's value is known from
+the previous step and is no longer an SCC unknown.
 
 `initial` blocks complement the workflow-layer `assume_initial` and
 `learn_initial` verbs. The three mechanisms are mutually exclusive for a given
@@ -1459,6 +1476,15 @@ different experiments provide different subsets of the inputs as concrete
 values. In experiments where some structural inputs are not concretely
 available, they are backed by learned trajectories, learned constants, or
 other latent owners — the slot always receives the same named inputs.
+
+**Constraint: shared controllers require structurally identical models.** All
+experiments sharing a controller must use the same model instantiation (same
+concrete types, same const generics). If experiment A uses
+`SperryTree<WeibullVC, FarquharC3, 4, 2>` and experiment B uses
+`SperryTree<WeibullVC, FarquharC3, 6, 2>`, their structural interfaces differ
+(different `[*]` resolution due to different N_SOIL) and the controller cannot
+be shared. The compiler detects interface mismatches across experiments in a
+study and errors with the differing input sets.
 
 The slot's outputs then extend the computable set and planning continues. This
 is order-dependent (the slot sees everything computed before it), but the
@@ -2823,6 +2849,23 @@ experiment.assume_constant("env.hydraulic_cond")        # rollout-stable scalar
 experiment.assume_initial("canopy.leaves[*].water")     # initial state value
 ```
 
+**Data provision.** All assumption verbs accept an optional `value=` parameter
+for inline data. When `value` is omitted, the assumption declares the
+quantity's role (constant, series, initial) without supplying data. The actual
+values are provided at runtime via the compiled artifact's input dictionary:
+
+```python
+# At binding time: declare roles
+experiment.assume_constant("hydraulic_cond")        # no value yet
+experiment.assume_constant("dt", value=1800.0)      # value inline
+
+# At runtime: supply missing values
+artifact.run({"hydraulic_cond": 0.5, ...})
+```
+
+The compiler validates that every assumed quantity without an inline value has
+an entry in the runtime input dictionary. Missing entries are a runtime error.
+
 `assume_initial` applies only to temporal quantities — those that appear on the
 left-hand side of a temporal relation or have an `initial` block. Calling
 `assume_initial` on a non-temporal quantity is a compile error: "quantity has no
@@ -3324,7 +3367,12 @@ See `mock_sperry.myco` for the full mock implementation. Key features exercised:
 - **Structural introspection**: `temporal cavitation[seg in pathway where seg is
   XylemSegment]` — type-filtered subtree iteration
 - **Conditional expressions**: `if j > 0 then ... else 0` in soil water step
-- **Overconstrained quantities**: supply vs demand transpiration — handled by closure policies (section 14.6)
+- **Coupled supply-demand transpiration**: with the stomatal slot in the SCC,
+  supply and demand transpiration form a square implicit system (2 equations,
+  2 unknowns: transpiration and water potential). The system becomes
+  overconstrained only if both transpiration and water potential are externally
+  assumed, leaving two equations for zero unknowns. Closure policies (section
+  14.6) apply only in the overconstrained case.
 - **Full-graph slot inputs**: `inputs = [*]` for the stomatal controller, with
   the slot joining the hydraulic SCC when its output feeds the loop
 - **Pluggable controllers**: slot can be filled by gain-risk optimization,
