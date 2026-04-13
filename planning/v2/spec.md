@@ -1227,34 +1227,35 @@ constraint irreversible_cavitation[i in 0..N]:
         k_max * (1.0 - vc(pathway.segments[i].min_historical_pressure).plc)
 ```
 
-#### 6.4 Overdetermined quantities
+#### 6.4 Multiple relations for the same quantity
 
-A quantity may be computable by more than one relation. This is intentional and
+A quantity may participate in more than one relation. This is intentional and
 is one of the core reasons Myco exists — the same physical quantity (e.g.,
 transpiration) can be derived from demand-side logic, supply-side logic, or
-energy balance, and the model should express all of these paths.
+energy balance, and the model should express all of these.
 
-**Overdetermination is context-dependent.** A quantity that has multiple
-derivation paths in the abstract graph may not be overdetermined in a specific
-run. After the user applies bindings (assumptions, slot bindings, learned
-quantities), some paths may become non-buildable because their upstream
-dependencies are not provided. The planner detects overdetermination at plan
-time, after bindings are applied — not at load time.
+Multiple relations for the same quantity do NOT necessarily mean
+"overdetermination." The planner classifies coupled components by their
+equation/unknown structure (section 12.3). The four possibilities are:
 
-When a quantity is overdetermined in context:
+- **Computational redundancy**: algebraically equivalent evaluators of the
+  same solved component. The compiler picks a canonical evaluator. No user
+  action needed.
+- **Square implicit** (n_eq = n_unknown): mutual dependencies like Farquhar
+  A-Ci (two equations, two unknowns: assimilation and c_i). These are
+  solver blocks (SCCs), not overdetermination.
+- **Underdetermined residual** (n_eq < n_unknown): more unknowns than
+  equations. Requires additional bindings or latent owners (section 12.4).
+- **Overconstrained residual** (n_eq > n_unknown): more equations than
+  unknowns — simultaneous world-claims that may disagree. Requires an
+  explicit **closure policy** if the user wants a single forward value
+  (section 12.3, 14.6).
 
-- The planner identifies all buildable paths for the quantity
-- If exactly one path is buildable: no overdetermination, proceed normally
-- If multiple paths are buildable: the quantity is overdetermined and requires
-  a **resolution strategy**
-- If no resolution strategy is specified for an overdetermined quantity, the
-  planner errors with an actionable diagnostic listing the competing paths and
-  available strategies
-
-**Resolution strategies** define how competing paths are reconciled. They are
-ordinary `.myco` relations imported from a standard library package
-(`myco::resolution`) or written by the user. See section 12.3 for detection
-semantics and section 14.6 for configuration.
+This classification is **context-dependent** — it depends on which bindings
+are applied. The same component may be square in one experiment (where enough
+quantities are assumed) and underdetermined in another (where fewer
+observations are available). The planner performs this classification at plan
+time, after bindings.
 
 ### 7. Slots
 
@@ -1269,12 +1270,22 @@ slot stomatal_control provides [stomata]:
 ```
 
 The slot declares what it provides and what it needs. The `[*]` wildcard means
-"all quantities computable without this slot." The compiler resolves this via
-two-phase planning: first, determine what is computable from assumptions,
-relations, and other slots *excluding* this slot's outputs. Those quantities
-become the slot's inputs. The slot's outputs then extend the computable set and
-planning continues. This is order-dependent (the slot sees everything computed
-before it), but the planner's topological ordering makes this deterministic.
+"all quantities reachable from the slot's outputs via backward traversal of
+the model's relation graph, excluding the slot's own outputs." This is the
+slot's **structural interface** — it is determined from the model structure
+alone and is invariant across experiments.
+
+The structural interface is resolved once at model load time, not per-experiment.
+This is critical for shared controllers in multi-experiment training (section
+17): the controller architecture must be fixed across experiments even when
+different experiments provide different subsets of the inputs as concrete
+values. In experiments where some structural inputs are not concretely
+available, they are backed by learned trajectories, learned constants, or
+other latent owners — the slot always receives the same named inputs.
+
+The slot's outputs then extend the computable set and planning continues. This
+is order-dependent (the slot sees everything computed before it), but the
+planner's topological ordering makes this deterministic.
 
 Alternatively, inputs may be listed explicitly for documentation and interface
 clarity:
@@ -1429,26 +1440,26 @@ The planner uses this metadata to:
 - Decide which inversions are valid (only `bijective` and
   `injective_restricted`, and only when domain restrictions are satisfiable)
 - Assign path costs (ill-conditioned paths cost more)
-- Choose canonical paths for overdetermined quantities
+- Choose canonical evaluators for computationally redundant paths
+- Inform closure policies for overconstrained components (section 12.3)
 - Reject plans that route a `train`-mode compilation through a
   `non_differentiable` operation
 
-#### 8.5 Conditioning-aware path selection
+#### 8.5 Operation algebra and coupled components
 
-When a quantity is overdetermined and a resolution strategy is applied (section
-6.4, 12.3), the operation algebra informs how the strategy evaluates each path.
+The operation algebra's invertibility and differentiability metadata informs
+the planner's treatment of all coupled components (section 12.3):
 
-One built-in strategy is **condition-number-based weighting**: each path is
-evaluated, and paths whose intermediate quantities are better-conditioned
-receive higher weight. The blend is smooth (differentiable) so gradients flow
-through both paths. This ships as `myco::resolution::condition_weighted` (see
-section 14.6).
+- For **computational redundancy**, the metadata determines which evaluator is
+  numerically preferred (better-conditioned, smoother).
+- For **square implicit components** (SCCs), it determines solver strategy and
+  whether the component is differentiable for training.
+- For **overconstrained residuals** where the user applies a closure policy
+  (section 14.6), the metadata is available to the policy — e.g., the
+  `condition_weighted` policy uses condition-number estimates to weight paths.
 
-The operation algebra's invertibility and differentiability metadata is
-available to all resolution strategies — both the standard library strategies
-and user-defined ones — via structural introspection on the competing paths.
-This enables strategies that select or weight paths based on numerical
-properties, not just the values they produce.
+The metadata is available to both standard library closure policies and
+user-defined ones via structural introspection on the competing paths.
 
 ### 9. Function Registry
 
@@ -1625,11 +1636,26 @@ points. The compilation plan makes this cost visible so users can tune the
 strategy or restructure the model.
 
 **Scope and limitations.** Both `deriv` and `integrate` operate within the
-world model's expression graph. `deriv` cannot differentiate through slots
-(slots are opaque). `integrate` cannot integrate over model structure (e.g.,
-"integrate over all soil layers") — use indexed comprehensions for that.
-`deriv` cannot differentiate across timesteps (e.g., d/dt) — use temporal
-blocks for time evolution.
+world model's expression graph.
+
+- `deriv` can differentiate through **contract invocations** (which have
+  transparent expression bodies) and through **square implicit components**
+  (SCCs) via the implicit function theorem. For example,
+  `deriv(photo.assimilation, gas.g_s)` differentiates through the Farquhar
+  A-Ci SCC, which the compiler handles by applying the implicit function
+  theorem to the SCC's equation system.
+- `deriv` **cannot** differentiate through slots (slots are opaque) or through
+  underdetermined residual blocks (where the system is not closed).
+- `integrate` cannot integrate over model structure (e.g., "integrate over all
+  soil layers") — use indexed comprehensions for that.
+- `deriv` cannot differentiate across timesteps (e.g., d/dt) — use temporal
+  blocks for time evolution.
+- If an `integrate` expression depends on SCC-resolved quantities, the
+  integration occurs after the SCC solver runs. If the integral's value feeds
+  back into the SCC, the quadrature is nested inside the solver loop — the
+  emitter includes the quadrature call in the residual function passed to
+  `custom_root`. The plan inspection (section 14.5) reports this nesting and
+  its cost implications.
 
 ---
 
@@ -1758,18 +1784,57 @@ compilation report.
 
 #### 11.2 Internal strategy
 
-The baseline internal strategy is interval propagation over the constraint
-graph. This is:
+The constraint analysis uses a stack of progressively richer analyzers:
 
-- Linear in the number of constraints per pass
-- Typically converges in a small number of fixed-point iterations
-- Sufficient for most bound-based and linear constraints
-- Cheap enough to run on every compilation
+**Interval propagation** (mandatory baseline). Propagates interval bounds
+through the constraint graph via fixed-point iteration. Linear in the number of
+constraints per pass, typically converges in a small number of iterations.
+Sufficient for most bound-based and linear constraints. Cheap enough to run on
+every compilation.
+
+**Monotonicity-aware propagation.** Tracks per-argument monotone direction for
+operations and registered functions on their declared domains. Bounds propagate
+by endpoint evaluation instead of naive interval arithmetic, avoiding the
+"dependency problem" (e.g., evaluating `X - X` yields a wide interval instead
+of `0` under naive intervals).
+
+Example: `conductance = k_max * (1 - vc(psi).plc)`. If `k_max > 0` and the
+contract declares `plc` is increasing in `psi`, then conductance is decreasing
+in `psi`. A bound on `psi` gives a tight bound on conductance, and a bound on
+conductance plus invertibility on the monotone segment contracts `psi`. Harmonic
+means of positive conductances are monotone in each argument. These facts
+enable much tighter bounds through the hydraulic pathway than naive intervals.
+
+**Contractor passes.** For coupled components, the analyzer runs forward and
+backward passes that shrink participating domains while preserving every
+feasible solution. For each relation, a bound on some quantities contracts
+others. Applied repeatedly, this is stronger than one-shot propagation. For
+SCCs, the contractor operates on the block as a whole (interval Newton,
+Krawczyk-like contraction, or Gauss-Seidel residual pruning).
+
+The e-graph (section 12.2) serves as a rewrite substrate for constraint
+analysis — exposing algebraically equivalent forms that are better for monotone
+analysis or contraction — but is not itself the abstract domain.
 
 For constraints involving logical connectives (`implies`, `or`) or nonlinear
 operations, the compiler may fall back to conservative approximation. If
 conservative approximation is insufficient, the compiler errors (it does not
 silently assume the constraint holds).
+
+**Compile-time bounds vs. runtime enforcement.** Compile-time bounds from
+constraint propagation are useful for: initialization (providing initial guesses
+to SCC solvers), numerical stability (detecting potential domain violations
+before runtime), and simple proofs (verifying type constraints and linear
+properties). For highly coupled nonlinear systems (like the hydraulic SCC),
+compile-time bounds may widen to near-type-bounds and provide limited signal.
+
+The primary mechanism for enforcing physical consistency during training is
+**runtime constraint enforcement**: the SCC solver must find a solution at each
+timestep, and that solution must satisfy all observation and constraint losses.
+This is the mechanism by which the mechanistic graph acts as an effective
+inductive bias on the learned controller — not compile-time static bounds.
+The spec should not be read as claiming that compile-time bounds are the
+training signal; they are structural aids.
 
 #### 11.3 Runtime interaction
 
@@ -1786,6 +1851,22 @@ This ensures that `#[verified_externally]` properties are never silently
 trusted at runtime — the user discovers violations even though the compiler
 could not prove them statically.
 
+**Admissibility projections.** Constraints that guard the definedness of
+downstream operations require stronger enforcement than soft penalties. If a
+quantity feeds into `log`, `sqrt`, or division, and the constraint
+`quantity > 0` (or `!= 0`) is not statically proven, the compiler must inject
+a **differentiable projection** (e.g., `softplus` for positivity) at the
+boundary rather than relying solely on penalty losses. Without projections,
+the controller may produce domain-violating values during early training that
+generate `NaN` gradients before the penalty can correct.
+
+The distinction:
+- **Admissibility constraints** (guard definedness): enforced by projection or
+  reparameterization. The operation algebra's domain restrictions (section 8.3)
+  determine which constraints are admissibility guards.
+- **Scientific feasibility constraints** (do not guard definedness): enforced
+  by penalty in `train` mode, assertion in `simulate` mode.
+
 #### 11.4 Interaction with algebraic loops
 
 Proven bounds from the constraint analysis can improve solver behavior for
@@ -1799,85 +1880,138 @@ SCC is bounded to a narrow range, that information can:
 #### 11.5 Upgrade path
 
 The constraint analysis system should be designed so that richer abstract
-domains (polyhedra, symbolic predicates) can be added later without changing the
-user-facing constraint language.
+domains can be added later without changing the user-facing constraint language.
+The analyzer stack (section 11.2) is ordered by cost and precision:
+
+- **Mandatory**: interval propagation, monotonicity-aware propagation
+- **Optional**: contractor passes (stronger but more expensive)
+- **Future**: polyhedral domains, symbolic predicates, relational abstract
+  domains
+
+Each layer refines the bounds produced by the layer below. The knowledge
+envelope (section 12.6) records which analyzers contributed to each quantity's
+bounds via the provenance field.
 
 ### 12. Planning
 
-The planner takes the flat graph from the flattening pass and produces an
-ordered execution plan for a single timestep.
+The planner takes the flat graph from the flattening pass and produces a
+**residual graph** — a deterministic factor graph that represents the complete
+structural knowledge of the system given the current bindings.
 
-#### 12.1 Core algorithm
+The residual graph is the core semantic object of the compiler. From it, the
+emitter derives executable code (section 13). The plan inspection API (section
+14.5) exposes the residual graph to the user as the primary diagnostic tool.
 
-The planning algorithm is fundamentally the same as v1:
+#### 12.1 Residual graph structure
 
-1. Start from what is directly available (assumed quantities, slot outputs,
-   temporal carry-forward)
-2. Determine which relations are buildable (all dependencies satisfied)
-3. Use the e-graph equality core to extract candidate expressions
-4. Choose a canonical path for each computable quantity
-5. Record alternative paths for consistency loss
-6. Separately handle temporal equations for `t -> t+1`
+The residual graph contains:
 
-#### 12.2 Operation algebra integration
+- **Variable nodes**: quantities that remain free after bindings, including
+  explicit latent owners (learned trajectories, learned constants, slot
+  parameters) and time-indexed state variables.
+- **Derived nodes**: quantities that can be eliminated explicitly from the
+  variable nodes via acyclic forward computation.
+- **Residual factors**: equalities from relations and temporal equations,
+  inequality and domain constraints, observation terms, and any explicit
+  closure or discrepancy relations.
+- **Slot nodes**: explicit numeric functions from inputs and parameters to
+  provided outputs.
+- **Metadata**: per-quantity knowledge envelopes (section 12.6) with bounds,
+  monotonicity facts, differentiability class, and provenance.
 
-Path selection is informed by the operation algebra:
+#### 12.2 Core algorithm
+
+The planner builds the residual graph by:
+
+1. Start from the flat graph (section 10.5)
+2. Apply bindings — mark assumed quantities as fixed, mark learned quantities
+   as latent-owned variable nodes, mark slot outputs as slot-provided
+3. Build the dependency graph from the relation set
+4. Identify strongly connected components (SCCs) — see section 12.5
+5. Classify each coupled component by equation/unknown structure (section 12.3)
+6. **Eliminate** what is eliminable: acyclic derivations become derived nodes,
+   square implicit components become solver blocks
+7. **Leave** the rest as residual blocks: underdetermined components (more
+   unknowns than equations) and overconstrained components (more equations
+   than unknowns)
+8. Run constraint analysis (section 11) to populate knowledge envelopes
+9. Handle temporal equations for `t -> t+1`
+
+Path selection within eliminable components is informed by the operation algebra
+(section 8):
 
 - Prefer `bijective`, `smooth` paths over `injective_restricted` or `fragile`
-  ones
 - Assign higher cost to inversions through ill-conditioned operations
 - Reject inversions through `lossy` or `opaque` operations
 - In `train` mode, reject canonical paths through `non_differentiable`
   operations
 
-#### 12.3 Overdetermined quantities
+#### 12.3 Component classification
 
-Overdetermination is detected during planning, **after bindings are applied**
-(section 6.4). The planner enumerates all buildable paths for each quantity
-given the current set of assumptions, slot bindings, and learned quantities.
+After SCC detection, the planner classifies each coupled component by counting
+equations and unknowns. This is the discriminator — not path counting.
 
-A quantity with multiple buildable paths is overdetermined in context. The
-planner then checks whether a resolution strategy has been specified for that
-quantity (via `resolution_config` in compiler configuration — section 14.6).
+**Computational redundancy.** The same underlying system admits multiple
+algebraically equivalent evaluators (e.g., the same expression simplified
+differently by the e-graph). The planner picks a canonical evaluator using the
+operation algebra's cost model. This is compiler-internal and does not affect
+the science. Users do not need to configure it.
 
-**If a resolution strategy is specified:** the planner emits the strategy as
-part of the execution plan. The strategy is a `.myco` relation that takes the
-competing path outputs as inputs and produces a single resolved value. The
-strategy participates normally in SCC detection, differentiability analysis,
-and dimensional checking.
+**Square implicit component** (n_eq = n_unknown). Mutual dependencies like
+Farquhar A-Ci (two equations: biochemical supply and diffusion demand; two
+unknowns: assimilation and internal CO2). These form solver blocks. See section
+12.5 for solver classification and emission.
 
-**If no resolution strategy is specified:** the planner errors with a
-diagnostic listing:
-- The overdetermined quantity's full path
-- Each competing relation and its upstream dependencies
-- Available strategies from `myco::resolution` that are type-compatible
-- Instructions for specifying a strategy or eliminating the overdetermination
-  via bindings
+**Underdetermined residual** (n_eq < n_unknown). More unknowns than equations.
+The component cannot be solved without additional information. The planner
+records it as a residual block and adds its unknowns to the resolution frontier
+(section 12.4).
 
-This error behavior follows the no-trust principle: the compiler will not
-silently choose a path for the user when multiple paths exist. The user must
-explicitly declare how overdetermination is resolved.
+**Overconstrained residual** (n_eq > n_unknown). More equations than unknowns.
+These are simultaneous world-claims — e.g., supply transpiration and demand
+transpiration are both valid derivations but may not agree given approximations
+in the model. The equations must remain as residual constraints unless the user
+explicitly applies a **closure policy** (section 14.6).
 
-**Consistency losses.** Regardless of which resolution strategy is used, the
-compiler may emit consistency losses from the non-canonical paths. In `train`
-mode, these losses penalize disagreement between paths. In `simulate` mode,
-they become diagnostic assertions. This is orthogonal to the resolution strategy
-— every strategy preserves the alternative paths as consistency checks.
+If a closure policy is specified, the planner applies it: the policy selects or
+blends a forward value, and the remaining equations become residual factors
+that contribute consistency losses. If no closure policy is specified, the
+overconstrained component remains as residual factors. In `simulate` mode,
+unresolved overconstrained components error (you need a single forward value).
+In `train` mode, they contribute residual losses.
 
-#### 12.4 Underdetermined quantities
+**Consistency losses.** For overconstrained components (whether closed by a
+policy or left as residuals), the compiler emits consistency losses from the
+extra equations. In `train` mode, these losses penalize disagreement between
+world-claims. In `simulate` mode with a closure policy, they become diagnostic
+assertions.
 
-When a quantity cannot be computed from assumptions and the model structure
-alone, the planner reports it as unresolved. The workflow layer must address it
-via:
+#### 12.4 Underdetermined quantities and the resolution frontier
 
-- Additional assumptions
-- A learned trajectory binding (section 16)
-- A learned constant binding
+When the residual graph contains underdetermined components (more unknowns than
+equations), the planner produces a **resolution frontier**: the minimal set of
+additional bindings or latent-owner declarations that would close the system.
 
-If an unresolved quantity remains after all bindings are applied, compilation
-fails with a diagnostic.
+The resolution frontier reports:
+- Each unresolved quantity's full path
+- What it depends on (which other unknowns, which relations)
+- What bindings would close it (assume, learn_trajectory, learn_constant)
+- How closing it would cascade (what additional quantities become derivable)
 
-#### 12.5 Algebraic loop detection
+**In `simulate` mode**: unresolved quantities always error. The frontier
+provides the actionable diagnostic.
+
+**In `train` mode**: unresolved quantities error UNLESS every remaining unknown
+has an explicit latent owner (learned slot, learned trajectory, learned
+constant, or learned initial). The compiler will not silently invent latent
+owners — the user must explicitly declare what is learned. Once all unknowns
+are owned, the residual graph is closed and the emitter can produce executable
+code.
+
+This follows the no-trust principle: the compiler guides the user to close the
+system but never does it for them.
+
+#### 12.5 Algebraic loop detection and solver emission
 
 Some sets of relations form circular dependencies within a single timestep. For
 example, in the Sperry hydraulic model:
@@ -1899,12 +2033,12 @@ maximal set of quantities where each depends (directly or transitively) on every
 other.
 
 - Quantities not in any SCC are ordered topologically as usual.
-- Each SCC is treated as an implicit system that must be solved simultaneously.
+- Each SCC is classified by equation/unknown structure (section 12.3).
 - If a slot's output feeds into an SCC, the slot is part of that SCC (see
   section 7.3).
 
-**Classification**: The planner classifies each SCC by examining the structure
-of its equations:
+**Solver classification** (for square implicit components): The planner
+classifies each square SCC by examining the structure of its equations:
 
 - **Linear**: all relations are linear in the SCC unknowns. Solve with direct
   linear algebra (LU decomposition).
@@ -1913,8 +2047,8 @@ of its equations:
   numerical solve.
 - **General nonlinear**: the default case. Requires a numerical solver.
 
-**Solver emission**: For each SCC requiring a numerical solve, the emitter
-generates backend-appropriate solver code:
+**Solver emission**: For each square SCC requiring a numerical solve, the
+emitter generates backend-appropriate solver code:
 
 - **JAX**: `jax.lax.custom_root` or a Newton-Raphson loop with
   `jax.jacfwd` for the Jacobian. Implicit differentiation via the implicit
@@ -1922,22 +2056,122 @@ generates backend-appropriate solver code:
 - **Rust**: standard NR with LU decomposition.
 - **PyTorch**: `torch.autograd.Function` with implicit differentiation.
 
+**Multiple SCCs and gradient chains.** When multiple SCCs exist in a single
+timestep (e.g., hydraulic SCC, A-Ci SCC, energy balance SCC) and they depend
+on each other through shared quantities, the emitter generates nested
+`custom_root` calls. Gradients flow through the full chain via composed
+implicit differentiation. The plan inspection reports the SCC dependency order.
+
 **Binding-dependent loops**: Different bindings may produce different SCCs from
 the same model. If a quantity in a loop is assumed as a constant, the loop may
 break into acyclic components. The planner handles this naturally — SCC analysis
-runs on the dependency graph after bindings are applied.
+runs on the dependency graph after bindings are applied. In multi-experiment
+training (section 17), different experiments may produce different SCC
+configurations for the same model. The training infrastructure handles this by
+compiling per-experiment artifacts with different solver structures but shared
+slot parameters.
+
+#### 12.6 Knowledge envelopes
+
+Each quantity in the residual graph carries a **knowledge envelope** —
+orthogonal fields that represent everything the compiler knows about the
+quantity given the current bindings and constraint analysis.
+
+The fields:
+
+- **`realization`**: `explicit(expr)` (the quantity has a forward computation
+  path), `implicit(residual_block)` (the quantity participates in a residual
+  system), or `opaque(provider)` (the quantity is provided by a slot or
+  external binding).
+- **`free_variables`**: the set of latent or still-unbound symbols the
+  quantity depends on. Empty for concrete quantities.
+- **`bounds`**: the current abstract value from constraint analysis. Initially
+  an interval, refined by monotonicity-aware propagation and contractor passes
+  (section 11.2). May be as tight as a point value or as loose as the type
+  bounds.
+- **`obligations`**: residual equations and inequality/domain constraints that
+  this quantity participates in but that have not been eliminated.
+- **`resolver_sets`**: minimal additional bindings or latent-owner declarations
+  that would make the quantity's realization explicit. Empty for concrete
+  quantities.
+- **`provenance`**: which assumptions, equations, properties, and analyzers
+  contributed to the envelope's current state.
+
+From these fields, familiar summary labels are derived views:
+- **Concrete**: `realization = explicit` and `free_variables` is empty
+- **Symbolic**: `realization = explicit` with free variables, or `implicit`
+- **Bounded**: `bounds` is tighter than the type's declared bounds
+- **Unresolved**: `resolver_sets` is non-empty
+
+The knowledge envelope is the user-facing representation exposed by
+`plan.knowledge(path)` (section 14.5). It is also used internally by the
+constraint analysis (section 11) and the emitter (section 13).
+
+#### 12.7 Temporal semantics
+
+Temporal equations (`[t] -> [t+1]`) define how state evolves across timesteps.
+In the residual graph, temporal equations are factors that connect quantity
+nodes across timestep boundaries.
+
+**Semantic model.** Temporal equations lower to **horizon-wide factors** — they
+connect quantities at all timesteps into a single residual graph that spans the
+full simulation horizon. This is the semantic model regardless of mode.
+
+**Execution strategy.** When the within-timestep residual graph is fully closed
+(all unknowns have owners), the emitter can optimize the horizon-wide factor
+graph into a forward rollout (`lax.scan` in JAX). This is the common case in
+both `simulate` and `train` modes after all latent owners are declared.
+
+In `train` mode, sparse observations contribute loss only at observed
+timesteps. Backpropagation through time (BPTT) provides backward information
+flow through the forward rollout — later observations constrain earlier states
+via gradient propagation through the temporal equations. This handles temporal
+data gaps naturally without requiring a special bidirectional planning pass.
+
+**Learned trajectories and temporal equations.** When a quantity has both a
+temporal equation and a learned trajectory binding (section 16), the learned
+trajectory provides the values (it is the latent owner) and the temporal
+equation becomes a **physics residual factor** — a loss term penalizing
+deviation between the trajectory's values and what the temporal equation
+predicts. This is the PINN (physics-informed neural network) pattern and
+falls out naturally from the residual graph design: the temporal equation is
+a factor, the trajectory provides the variable values, and the factor's
+residual becomes a loss.
+
+**Constraint propagation across timesteps.** Compile-time constraint
+propagation (section 11) operates within a single timestep. Cross-timestep
+constraint propagation (e.g., "given observations at t=0 and t=20, what bounds
+can we derive for t=10?") requires unrolling the temporal factors symbolically,
+which is expensive for long horizons. For v2, cross-timestep reasoning is
+handled by gradient-based training (BPTT), not by compile-time constraint
+propagation. Extending the constraint system to reason across timesteps is an
+upgrade path (section 11.5).
 
 ### 13. Code Emission / Backends
 
-The emitter takes the plan and produces executable source code for a specific
-backend.
+The emitter takes the closed residual graph and produces executable source code
+for a specific backend.
+
+**Closure requirement.** The emitter requires that every variable node in the
+residual graph has an explicit owner (assumed, learned, or slot-provided). If
+unowned variables remain, the planner has already errored with the resolution
+frontier (section 12.4). The emitter never receives a residual graph with
+anonymous free variables.
 
 #### 13.1 Plan representation
 
-The plan is backend-agnostic: an ordered list of computation steps (including
-solver blocks for SCCs), each with dependencies, expressions, and metadata
-(which path, whether it's canonical or alternative, operation algebra
-annotations).
+The plan is backend-agnostic. From the closed residual graph, the emitter
+derives:
+
+- Forward computation steps for derived nodes (topologically ordered)
+- Solver blocks for square implicit components (SCCs)
+- Residual evaluators for overconstrained components and physics residuals
+- Observation loss terms
+- Admissibility projections and constraint penalty terms
+- Temporal rollout structure
+
+Each component carries metadata: dependencies, expressions, operation algebra
+annotations, and provenance from the knowledge envelope.
 
 #### 13.2 JAX emitter (primary)
 
@@ -1945,24 +2179,37 @@ The JAX emitter produces a Python module using:
 
 - `jax.numpy` for array operations
 - `jax.lax.scan` for rollout
-- `jax.nn` for smooth projections
+- `jax.nn` for smooth projections and admissibility projections
 - `jax.lax.custom_root` for implicit solves within a step
+- `jax.checkpoint` for gradient checkpointing on long rollouts
 - Standard pytree conventions for state and parameters
 
 The emitted module includes:
 
 - `step()`, `rollout()` (same as v1)
-- `obs_loss()`, `consistency_loss()`, `constraint_violation_loss()`,
-  `soft_penalty_loss()`, `loss_components()`, `total_loss()` (for `train` mode)
+- `obs_loss()` — from observations
+- `consistency_loss()` — from overconstrained residuals (section 12.3)
+- `physics_residual_loss()` — from temporal equations when a learned
+  trajectory coexists with a temporal relation (section 12.7)
+- `constraint_violation_loss()` — from user-declared constraints
+- `admissibility_loss()` — from propagation-derived bounds (section 11.2)
+- `soft_penalty_loss()` — from `#[verified_externally]` properties
+- `loss_components()`, `total_loss()` — weighted aggregation
 - `init_params()`, `validate_rollout_inputs()`, `validate_observations()`
 - Metadata constants and slot interface declarations
 
 The emitter uses differentiability metadata from the operation algebra to:
 
-- Choose smooth approximations where needed (e.g., `softplus` instead of
-  `relu` for projections)
+- Inject admissibility projections at slot boundaries where domain restrictions
+  are not statically proven (section 11.3)
+- Choose smooth approximations where needed
 - Warn about fragile gradient paths
 - Reject `train`-mode plans with non-differentiable canonical paths
+
+**Long rollout stability.** For temporal rollouts, the emitter supports
+gradient checkpointing via `jax.checkpoint` on the scan function to trade
+compute for memory. Truncated backpropagation through time (limiting the
+temporal gradient horizon) is configurable in section 14.7.
 
 #### 13.3 Backend interface
 
@@ -1972,10 +2219,13 @@ modifying the planner or flattener.
 
 The interface requires:
 
-- Emit scalar computation steps
-- Emit solver blocks for SCCs (with backend-appropriate solver)
+- Emit scalar computation steps (derived nodes)
+- Emit solver blocks for square implicit components (backend-appropriate solver)
+- Emit residual evaluators for overconstrained and physics residual factors
 - Emit rollout/scan structure for temporal equations
-- Emit loss functions for `train` mode
+- Emit loss functions for `train` mode (observation, consistency, physics
+  residual, constraint, admissibility)
+- Emit admissibility projections at slot boundaries
 - Emit parameter initialization
 - Emit numerical quadrature calls for unresolved `integrate` expressions
 
@@ -2019,12 +2269,11 @@ Available strategies:
 - **`analytical`**: force analytical solution (fails if the compiler cannot
   derive one).
 
-#### 14.2 Path blending configuration
+#### 14.2 Closure policy configuration
 
-Path blending for overdetermined quantities is now handled through resolution
-strategies (section 14.6). The `condition_weighted` strategy in
-`myco::resolution` provides conditioning-aware blending. See section 8.5 for
-how the operation algebra informs path evaluation.
+Closure policies for overconstrained components are configured in section 14.6.
+The `condition_weighted` policy in `myco::closure` provides conditioning-aware
+blending. See section 8.5 for how the operation algebra informs the policies.
 
 #### 14.3 Other configuration
 
@@ -2084,13 +2333,20 @@ Integrals that were resolved symbolically are not affected by this
 configuration — they have been replaced by closed-form expressions and have no
 runtime cost.
 
+**Train-mode restriction.** In `train` mode, the compiler forces fixed-shape
+quadrature (Gauss-Legendre or fixed-point trapezoid) for all numerical
+integrals. Adaptive strategies (`adaptive_simpson`) are rejected because
+discrete changes in the number of quadrature points create discontinuous loss
+landscapes that break gradient quality. Adaptive strategies are available in
+`simulate` mode only.
+
 #### 14.5 Plan inspection
 
-The compilation plan is an inspectable artifact. After compilation, the user
-can examine what strategies the compiler chose and override them before
-execution. This is the primary discovery mechanism for configurable behavior —
-the user does not need to read documentation to learn that integration strategy
-is configurable; they see it in the plan.
+The residual graph is an inspectable artifact. After compilation, the user
+can examine what strategies the compiler chose, query the knowledge state of
+any quantity, and explore hypotheticals before execution. This is the primary
+discovery mechanism for configurable behavior and the primary diagnostic tool
+for understanding the model's structural properties.
 
 ```python
 artifact = experiment.compile(backend="jax")
@@ -2099,41 +2355,76 @@ print(artifact.plan)
 
 The plan reports:
 
-- **SCCs**: which quantities form algebraic loops, and what solver strategy was
-  chosen for each
+- **Component classification**: which quantities form square implicit
+  components (SCCs), which are overconstrained residuals, which are
+  underdetermined, and what solver/closure strategy was chosen for each
 - **Symbolic resolutions**: which `deriv` and `integrate` expressions were
   resolved at compile time, and what the resulting expressions are
 - **Numerical fallbacks**: which `integrate` expressions require runtime
   quadrature, what strategy was chosen, and how to override it
-- **Overdetermination**: which quantities have multiple buildable paths, what
-  resolution strategy is applied to each, and which quantities still need a
-  strategy (these will error if unresolved)
 - **Slot bindings**: which slots are bound, to what, and whether the binding
   is opaque (neural net) or transparent (`.myco` controller)
 - **Execution order**: the topologically sorted sequence of computation steps
   within a timestep
 - **Temporal state**: which quantities carry forward across timesteps
+- **Resolution frontier**: if the system is not fully closed, the minimal
+  set of additional bindings that would close it (section 12.4)
+
+**Per-quantity knowledge queries.** The user can query the knowledge envelope
+(section 12.6) for any quantity in the model:
+
+```python
+envelope = artifact.plan.knowledge("leaf.water_potential")
+# envelope.realization    → explicit(expr) | implicit(block) | opaque(slot)
+# envelope.free_variables → set of unbound symbols
+# envelope.bounds         → Interval(-3.0, -0.1, unit="MPa")
+# envelope.obligations    → list of residual factors
+# envelope.resolver_sets  → minimal bindings to make concrete
+# envelope.provenance     → which analyzers/assumptions contributed
+```
+
+**Hypothetical reasoning.** The user can explore the consequences of additional
+bindings without committing:
+
+```python
+plan_b = artifact.plan.with_assumption("soil.water_potential", -0.5)
+plan_b.knowledge("leaf.water_potential")
+# → bounds narrowed, expression simplified, resolver_sets reduced
+```
+
+This is plan re-evaluation with additional constraints — the planner reruns
+from the augmented binding set. It enables the scientist to reason about
+experimental design: "if I collect this measurement, how much additional
+information does the model give me?"
+
+Note: the resolution frontier is a structural/computational heuristic ("binding
+X unlocks the most computation"). It does not measure information gain or
+identifiability, which are properties of the loss landscape and require runtime
+analysis.
 
 The plan follows the same principle as the rest of the compiler configuration:
 defaults work out of the box, inspection reveals what was decided, and
 overrides are available for power users. The plan is analogous to a SQL
 `EXPLAIN` — it shows the execution strategy without changing the semantics.
 
-#### 14.6 Overdetermination configuration
+#### 14.6 Closure policies for overconstrained components
 
-When the planner detects overdetermined quantities (section 12.3), the user
-must specify a resolution strategy. Strategies are configured per-quantity or
-globally via `resolution_config`:
+When the planner detects overconstrained residual components (section 12.3) —
+more equations than unknowns — the user may specify a **closure policy** to
+produce a single forward value. This is an explicit approximation that relaxes
+the overconstrained system into a computable form.
+
+Closure policies are configured per-component or globally via `closure_config`:
 
 ```python
 artifact = experiment.compile(
     backend="jax",
-    resolution_config={
-        "default_strategy": None,               # no default — error on unresolved
+    closure_config={
+        "default_policy": None,                 # no default — leave as residual
         "overrides": {
             "leaf.transpiration": "weighted_average",
             "canopy.assimilation": {
-                "strategy": "soft_select",
+                "policy": "soft_select",
                 "preference": ["demand_transpiration", "supply_transpiration"],
                 "sharpness": 10.0,
             },
@@ -2142,45 +2433,54 @@ artifact = experiment.compile(
 )
 ```
 
-Setting `"default_strategy"` to a named strategy (e.g., `"weighted_average"`)
-applies it to all overdetermined quantities that don't have a per-quantity
-override. The default of `None` forces the user to address each case
-explicitly. This follows the no-trust principle: overdetermination is a
-modeling decision, not something the compiler should handle silently.
+Setting `"default_policy"` to `None` (the default) leaves overconstrained
+components as residual factors — their extra equations become consistency losses
+in `train` mode and diagnostic assertions in `simulate` mode. In `simulate`
+mode, if the component needs a single forward value and no closure policy is
+specified, the planner errors with an actionable diagnostic.
 
-**Standard library: `myco::resolution`**
+**Closure policies are approximations.** They change the science of the
+executed artifact by choosing how to reconcile simultaneous world-claims. The
+plan inspection (section 14.5) reports when a closure policy has been applied
+and which original equations were relaxed.
 
-Common resolution strategies ship as a standard library package. These are
-ordinary `.myco` relations — they are convenience shorthand for patterns the
-user could write themselves. The package includes:
+This distinction matters: closure policies are NOT "path selection" (choosing
+among equivalent evaluators, which is compiler-internal) and NOT "resolution
+strategies" (a neutral-sounding name that hides the fact that science is being
+approximated). They are explicit, user-chosen approximations that the compiler
+surfaces transparently.
+
+If the reconciliation is itself part of the world claim — e.g., a sensor fusion
+model, a discrepancy model, or a model-structural assertion that two
+derivations should agree — it belongs in the `.myco` file as an explicit
+relation, not in compiler configuration.
+
+**Standard library: `myco::closure`**
+
+Common closure policies ship as a standard library package. These are ordinary
+`.myco` relations — convenience shorthand for patterns users could write
+themselves. The package includes:
 
 - **`weighted_average`**: arithmetic mean of competing path outputs. Simple,
-  differentiable, no configuration. Appropriate when paths are expected to
-  agree and discrepancies should be averaged out.
+  differentiable. Appropriate when paths are expected to agree and
+  discrepancies should be averaged out.
 
-- **`soft_select`**: differentiable soft selection among paths with a
-  preference ranking. Higher-preference paths receive more weight.
-  `sharpness` controls how hard the selection is — at high sharpness it
-  approximates hard preference, at low sharpness it blends. Appropriate when
-  one path is theoretically preferred but alternatives provide fallback.
+- **`soft_select`**: differentiable soft selection with a preference ranking.
+  `sharpness` controls how hard the selection is. Appropriate when one path
+  is theoretically preferred but alternatives provide fallback.
 
 - **`condition_weighted`**: weights paths by numerical conditioning (section
-  8.5). Uses the operation algebra's metadata to assess each path's numerical
-  stability and weights accordingly. Appropriate for purely numerical
-  stability concerns where all paths are theoretically equivalent.
+  8.5). Appropriate for purely numerical stability concerns where all paths
+  are theoretically equivalent.
 
-- **`hard_select`**: chooses a single path by preference ranking, discarding
-  alternatives. Non-differentiable — rejected in `train` mode unless the
-  discarded paths have no learned parameters upstream. Appropriate for
-  `simulate` mode or when overdetermination is resolved by domain knowledge.
+- **`hard_select`**: chooses a single path, discarding alternatives. Non-
+  differentiable — rejected in `train` mode unless the discarded paths have
+  no learned parameters upstream.
 
-**Custom strategies.** Users can write their own resolution strategies as
-`.myco` relations. A resolution strategy is simply a relation that takes the
-competing outputs as inputs and produces a single value:
+**Custom policies.** Users can write their own closure policies as `.myco`
+relations:
 
 ```myco
-use myco::resolution::ResolutionStrategy
-
 fn my_blend(
     path_a: Scalar<U>,
     path_b: Scalar<U>,
@@ -2193,28 +2493,48 @@ fn my_blend(
 }
 ```
 
-Because strategies are `.myco` relations, they participate in dimensional
-checking (can't accidentally average a pressure with a conductance), are
-differentiable when needed, and are backend-agnostic. This is the same design
-principle as the rest of Myco: strategies are part of the world model, not
-escape hatches to Python.
+Because policies are `.myco` relations, they participate in dimensional
+checking, are differentiable when needed, and are backend-agnostic.
 
-**Consistency losses are orthogonal.** Regardless of which strategy is chosen,
-the compiler may emit consistency losses from the non-selected paths. In
-`train` mode, these losses penalize disagreement between paths, providing a
-training signal even for paths that were not selected as canonical. The
-consistency loss is always available — the resolution strategy only controls
-which value is used in the forward pass. Consistency loss weight is
-configurable:
+**Consistency losses.** Regardless of whether a closure policy is applied,
+the extra equations in overconstrained components generate consistency losses.
+In `train` mode, these losses penalize disagreement between world-claims. The
+closure policy controls the forward value; the consistency loss provides a
+training signal from all equations. Consistency loss weight is configurable:
 
 ```python
 artifact = experiment.compile(
     backend="jax",
-    resolution_config={
+    closure_config={
         "consistency_loss_weight": 0.1,  # default: 0.1
     },
 )
 ```
+
+#### 14.7 Rollout stability configuration
+
+Long temporal rollouts (growing seasons, multi-year ecosystem simulations) can
+produce vanishing or exploding gradients during backpropagation through time.
+The rollout configuration provides controls:
+
+```python
+artifact = experiment.compile(
+    backend="jax",
+    rollout_config={
+        "gradient_checkpointing": True,     # default: True for long rollouts
+        "checkpoint_interval": 50,          # checkpoint every N steps
+        "truncated_bptt_horizon": None,     # None = full BPTT (default)
+    },
+)
+```
+
+- **Gradient checkpointing**: trades compute for memory by recomputing
+  intermediate states during the backward pass rather than storing them.
+  Enabled by default when the rollout horizon exceeds a threshold.
+- **Truncated BPTT**: limits the temporal gradient horizon. Gradients do not
+  propagate further than `truncated_bptt_horizon` steps backward. This
+  sacrifices long-range temporal gradient signal for stability. Default is
+  `None` (full BPTT).
 
 ---
 
@@ -2352,13 +2672,30 @@ quantity:
 These are enforced via smooth penalty losses in training mode and hard checks
 in simulation mode.
 
-#### 16.4 Compiler support
+#### 16.4 Interaction with temporal equations
+
+If a user declares `learn_trajectory` for a quantity that also has a temporal
+equation (section 6.3), the trajectory is the **latent owner** — it provides
+the values for that quantity at each timestep. The temporal equation becomes a
+**physics residual factor** in the residual graph (section 12.7): a loss term
+penalizing deviation between the trajectory's values and what the temporal
+equation predicts.
+
+This is the PINN (physics-informed neural network) pattern and falls out
+naturally from the residual graph design. The temporal equation is a factor,
+the trajectory provides the variable values, and the factor's residual becomes
+a loss. The physics residual loss is reported separately from observation
+losses in the emitted module (`physics_residual_loss()`).
+
+#### 16.5 Compiler support
 
 The compiler treats a learned trajectory similarly to an assumed series, except:
 
 - Its values are learnable parameters (included in the gradient computation)
 - The emitter allocates parameter arrays for the trajectory representation
 - Constraint penalties are added to the loss
+- If the quantity has a temporal equation, the temporal residual is added to
+  the loss (section 16.4)
 
 ### 17. Study-Level Training
 
@@ -2392,11 +2729,34 @@ The optimizer minimizes the joint loss:
 
 ```
 L = sum over experiments k:
-    obs_loss_k + consistency_loss_k + constraint_penalty_k
+    w_k * (obs_loss_k + consistency_loss_k + physics_residual_loss_k
+           + constraint_penalty_k + admissibility_loss_k)
 ```
 
 Each experiment compiles to its own artifact. The controller parameters are
-shared. The joint gradient is the sum of per-experiment gradients.
+shared. The joint gradient is the weighted sum of per-experiment gradients.
+
+**Study weighting.** Different experiments may have very different loss
+magnitudes (a study with 1000 transpiration observations vs. a study with 5
+NSC measurements). Without configurable weighting, data-rich experiments
+dominate gradients and may prevent the shared controller from learning
+generalizable behavior. The `w_k` weights are configurable per-experiment:
+
+```python
+study = myco.Study(model)
+
+exp_a = study.add_experiment(horizon_steps=1000)
+exp_a.set_weight(1.0)  # default
+
+exp_b = study.add_experiment(horizon_steps=50)
+exp_b.set_weight(5.0)  # upweight small study
+
+study.learn_slot("controller")
+```
+
+Per-loss-family weighting (e.g., observation vs. consistency vs. physics
+residual) is also configurable, either globally or per-experiment, via the
+compiler configuration.
 
 #### 17.4 Identifiability
 
