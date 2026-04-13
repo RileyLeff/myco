@@ -175,7 +175,7 @@ node Canopy<const N: usize, P: Photosynthesis> {
 }
 ```
 
-Type parameters must satisfy a declared contract (see section 3.3). Const
+Type parameters must satisfy a declared contract (see section 3.4). Const
 parameters must be compile-time-known positive integers.
 
 Nodes may be generic over multiple contracts:
@@ -1812,10 +1812,6 @@ others. Applied repeatedly, this is stronger than one-shot propagation. For
 SCCs, the contractor operates on the block as a whole (interval Newton,
 Krawczyk-like contraction, or Gauss-Seidel residual pruning).
 
-The e-graph (section 12.2) serves as a rewrite substrate for constraint
-analysis — exposing algebraically equivalent forms that are better for monotone
-analysis or contraction — but is not itself the abstract domain.
-
 For constraints involving logical connectives (`implies`, `or`) or nonlinear
 operations, the compiler may fall back to conservative approximation. If
 conservative approximation is insufficient, the compiler errors (it does not
@@ -1953,7 +1949,7 @@ equations and unknowns. This is the discriminator — not path counting.
 
 **Computational redundancy.** The same underlying system admits multiple
 algebraically equivalent evaluators (e.g., the same expression simplified
-differently by the e-graph). The planner picks a canonical evaluator using the
+differently). The planner picks a canonical evaluator using the
 operation algebra's cost model. This is compiler-internal and does not affect
 the science. Users do not need to configure it.
 
@@ -2598,7 +2594,15 @@ that would enable full Bayesian inference over this same model structure.
 experiment.learn_slot("controller")                              # shared function
 experiment.learn_trajectory("soil_water", parameterization="spline", knots=12)
 experiment.learn_constant("site_hydraulic_cond")                 # per-experiment scalar
+experiment.learn_initial("soil_water")                           # initial condition of temporal quantity
 ```
+
+`learn_initial` declares that a temporal quantity's t=0 value is a free
+parameter to be optimized during training. It applies only to quantities with
+temporal equations. The compiler wires the learned value to the initial timestep
+and rolls forward from there. Semantically this is distinct from `learn_constant`
+(which makes a quantity constant for all time) — a learned initial is the
+starting point of a dynamic trajectory.
 
 See section 16 for details on learned trajectories.
 
@@ -2996,7 +3000,7 @@ See `mock_sperry.myco` for the full mock implementation. Key features exercised:
 - **Structural introspection**: `temporal cavitation[seg in pathway where seg is
   XylemSegment]` — type-filtered subtree iteration
 - **Conditional expressions**: `if j > 0 then ... else 0` in soil water step
-- **Overdetermined quantities**: supply vs demand transpiration
+- **Overconstrained quantities**: supply vs demand transpiration — handled by closure policies (section 14.6)
 - **Full-graph slot inputs**: `inputs = [*]` for the stomatal controller, with
   the slot joining the hydraulic SCC when its output feeds the loop
 - **Pluggable controllers**: slot can be filled by gain-risk optimization,
@@ -3186,8 +3190,8 @@ After compilation, render the execution plan:
 - Quantities are nodes; computational dependencies are edges
 - SCCs are highlighted as clusters with labeled solver strategy (linear,
   polynomial, Newton-Raphson)
-- Overdetermined quantities show canonical vs alternative paths (with path
-  costs from the operation algebra)
+- Overconstrained components show closure policy and residual factors (with
+  path costs from the operation algebra)
 - Slot boundaries are visible, with SCC membership indicated
 - Temporal equations shown as a separate layer
 
@@ -3208,7 +3212,7 @@ Render the structural containment tree and constraint graph:
 For a model like Sperry, visual structure is the fastest way to understand
 the model.
 
-### C.7 Interactive exploration (REPL)
+### C.8 Interactive exploration (REPL)
 
 An interactive mode for incremental model exploration:
 
@@ -3230,7 +3234,7 @@ This supports iterative workflow development — the user progressively adds
 bindings and sees what becomes computable. Faster than edit-compile-run cycles
 for understanding model structure.
 
-### C.8 Package registry
+### C.9 Package registry
 
 A registry for sharing and discovering Myco library packages:
 
@@ -3249,7 +3253,7 @@ The registry should support:
 - `myco publish` — publish a package
 - `myco search "vulnerability curve"` — find packages
 
-### C.9 Compilation diagnostics
+### C.10 Compilation diagnostics
 
 Error messages should be clear, specific, and actionable:
 
@@ -3303,7 +3307,7 @@ Items earlier in the list are prerequisites for items later.
 14. **Planning with SCC detection** (section 12) — causal ordering + loop
     discovery
 15. **JAX emitter with solver emission** (section 13) — code generation
-16. **Compiler configuration** (section 14) — solver strategy, path blending
+16. **Compiler configuration** (section 14) — solver strategy, closure policies
 17. **Constraint analysis** (section 11) — static reasoning, property
     verification, no-trust enforcement
 
