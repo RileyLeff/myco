@@ -70,6 +70,46 @@ The distinction is analogous to Rust's lib vs bin crates. A library defines
 module writes `MySite` with `eco: Ecosystem<3>` and specifies concrete types for
 each element.
 
+#### 1.1.1 Model module instantiation
+
+A model module imports library components and instantiates all generics
+concretely:
+
+```myco
+module my_site
+
+use plant::sperry::{SperryTree, WeibullVC, FarquharC3}
+
+pub node MySite {
+    tree: SperryTree<WeibullVC, FarquharC3, 4, 2>
+}
+```
+
+This model module is what the Python workflow loads:
+
+```python
+model = myco.load("my_site.myco")
+```
+
+The compiler verifies that the root node has no unresolved generics or `dyn`
+references. If it does, the compiler errors with a diagnostic listing which
+type parameters remain open.
+
+Alternatively, for quick experimentation without creating a model module file,
+the Python API supports inline instantiation:
+
+```python
+model = myco.load("plant/sperry/mechanics.myco",
+                   root="SperryTree",
+                   params={"V": "WeibullVC", "P": "FarquharC3",
+                           "N_SOIL": 4, "N_CANOPY": 2})
+```
+
+This is sugar for creating an anonymous model module at load time. The
+compiler resolves the generics identically to a `.myco` model module. For
+production workflows, an explicit model module is preferred — it is
+version-controlled, shareable, and self-documenting.
+
 #### 1.2 Visibility
 
 Items are private by default. The `pub` keyword makes an item visible to
@@ -118,10 +158,23 @@ occupying a unique position in the containment tree.
 
 **Module-scope relations** (relations, temporals, slots declared outside any
 node body) are implicitly scoped to the module's root node. A model module must
-have exactly one root node. Paths in module-scope relations refer to fields
-of that root. For example, if the root is `SperryTree`, a module-scope relation
-can reference `soil.layers[j].element.water_potential` without a `SperryTree.`
-prefix.
+have exactly one root node. The root node is designated by the `root` keyword:
+
+```myco
+root node SperryTree<V: VulnerabilityCurve, P: Photosynthesis,
+                     const N_SOIL: usize, const N_CANOPY: usize> {
+    // ...
+}
+```
+
+A module may contain multiple `pub node` definitions (for reuse by other
+modules), but exactly one must be marked `root`. If no node is marked `root`,
+the compiler errors. If multiple nodes are marked `root`, the compiler errors.
+Library modules may omit `root` — they are not directly compilable.
+
+Paths in module-scope relations refer to fields of the root. For example, if
+the root is `SperryTree`, a module-scope relation can reference
+`soil.layers[j].element.water_potential` without a `SperryTree.` prefix.
 
 #### 2.1 Atomic nodes
 
@@ -865,6 +918,30 @@ counted in moles).
 Named types are optional — `Scalar<MPa>` works fine without a wrapper. But for
 quantities where semantic confusion is possible, named types are the defense.
 
+**Coercion rules for named types in arithmetic.** Arithmetic operations on named
+types produce anonymous dimensional types — the named type is stripped:
+
+```myco
+type LeafArea : Scalar<m2>
+type CarbonFlux : Scalar<umol_m2_s>
+type GrowthRate : Scalar<umol_s>
+
+// LeafArea * CarbonFlux -> anonymous Scalar<umol_s> (names stripped, dimensions multiplied)
+carbon.assimilation_total = structure.leaf_area * gas.photo.assimilation
+```
+
+Assignment from an anonymous type to a named type succeeds if and only if the
+underlying dimensions match. In the example above, the anonymous result has
+dimension `Amount·Time⁻¹`, which matches `GrowthRate`'s dimension. If the
+dimensions don't match, the compiler errors with the concrete dimension
+mismatch.
+
+This rule prevents accidental mixing (CarbonPool + WaterPool) while allowing
+natural expressions where different named quantities combine through physics
+(area × flux = total flux). The key insight: addition requires matching types
+(strong protection), but multiplication produces a new dimension where named
+types would be meaningless to preserve.
+
 #### 4.8 Dimension checking through registered functions
 
 Registered functions declare signatures with typed parameters. The compiler
@@ -1243,6 +1320,32 @@ temporal cavitation_tracking[i in 0..N]:
             pathway.segments[i].water_potential[t])
 ```
 
+**Initial conditions from graph quantities.** Some temporal state has an initial
+value that is algebraically determined by other quantities at t=0, rather than
+supplied externally. For example, `min_historical_pressure[0]` should equal
+`water_potential[0]`, but `water_potential[0]` is solved inside the hydraulic
+SCC — the user cannot provide it via `assume_initial`. The `initial` block
+declares this relationship:
+
+```myco
+initial cavitation[seg in pathway where seg is XylemSegment]:
+    seg.min_historical_pressure = seg.core.water_potential
+```
+
+The `initial` block establishes an equality at t=0 only. The compiler uses it
+to derive the initial state from the first-timestep solution rather than
+requiring external data. If the referenced quantity is itself part of an SCC,
+the initial condition is resolved after the first-timestep solver runs.
+
+`initial` blocks complement the workflow-layer `assume_initial` and
+`learn_initial` verbs. The three mechanisms are mutually exclusive for a given
+temporal quantity — the compiler errors if more than one is provided:
+
+- `initial` block in `.myco`: value determined algebraically from the model
+  graph at t=0
+- `assume_initial` in Python: value supplied externally as data
+- `learn_initial` in Python: value optimized during training
+
 This pattern enables irreversible cavitation tracking: the worst pressure ever
 experienced becomes a permanent ceiling on future conductance, enforced via
 a constraint:
@@ -1385,9 +1488,25 @@ discovers and handles it.
 
 In the Sperry model, the stomatal controller produces `stomata`, which feeds
 into demand transpiration, which is part of the hydraulic SCC. The slot is
-therefore part of the SCC. When the slot is a learned function, the compiler
-differentiates through the solver (implicit function theorem) to get gradients
-to the learned function's parameters.
+therefore part of the SCC.
+
+**Solver mechanics when a slot is inside an SCC.** The emitter wraps the slot's
+forward call inside the residual function passed to `custom_root`. At each
+Newton-Raphson iteration, the solver evaluates the residual — which includes
+calling the slot (e.g., the neural network). This means:
+
+- The neural network is called at **every Newton iteration**, not just once per
+  timestep. For a typical SCC requiring 5-20 Newton steps, this multiplies the
+  NN's cost accordingly.
+- The Newton Jacobian computation requires `d(slot_output)/d(SCC_variables)`.
+  JAX's autodiff handles this automatically — `jax.jacfwd` differentiates
+  through both the NN and the other SCC equations in one pass.
+- Training gradients flow through the solver via the implicit function theorem:
+  `custom_root` provides exact gradients to the slot's learned parameters
+  without differentiating through the Newton iterations themselves.
+
+The compilation plan (section 14.5) reports which slots participate in SCCs
+and the estimated cost multiplier from Newton iterations.
 
 This is consistent with the soul: "the compiler does the work." The user
 declares what the slot provides; the compiler figures out where it sits in the
@@ -2097,6 +2216,12 @@ on each other through shared quantities, the emitter generates nested
 `custom_root` calls. Gradients flow through the full chain via composed
 implicit differentiation. The plan inspection reports the SCC dependency order.
 
+If two SCCs are mutually dependent (SCC A's output feeds SCC B and vice versa),
+they merge into a single SCC. The planner does not assume SCCs are independently
+solvable — SCC detection operates on the full dependency graph, and mutual
+dependencies are discovered automatically by the standard Tarjan/Kosaraju
+algorithm. The merged SCC is classified and solved as a single unit.
+
 **Binding-dependent loops**: Different bindings may produce different SCCs from
 the same model. If a quantity in a loop is assumed as a constant, the loop may
 break into acyclic components. The planner handles this naturally — SCC analysis
@@ -2606,6 +2731,12 @@ experiment.assume_constant("env.hydraulic_cond")        # rollout-stable scalar
 experiment.assume_initial("canopy.leaves[*].water")     # initial state value
 ```
 
+`assume_initial` applies only to temporal quantities — those that appear on the
+left-hand side of a temporal relation or have an `initial` block. Calling
+`assume_initial` on a non-temporal quantity is a compile error: "quantity has no
+temporal equation; use `assume_constant` instead." The same restriction applies
+to `learn_initial`.
+
 #### 15.2 Observation modes
 
 ```python
@@ -2681,10 +2812,27 @@ experiment.bind_slot_metadata("stomatal_control", {
 })
 ```
 
-Slot metadata is concatenated with the slot's structural inputs before being
-passed to the controller. The metadata values are not quantities in the model
-graph — they carry no units, no dimensions, and no constraints. They are
-opaque scalars passed through to the controller's input vector.
+Slot metadata is passed to the controller as a **separate dictionary argument**,
+not concatenated into the structural input vector. This separation is critical
+for architectures like FiLM (Feature-wise Linear Modulation), where integer
+metadata (e.g., a taxonomic ID) must be routed to an embedding layer rather
+than mixed into a float array of physical quantities.
+
+The controller receives two arguments: the structural input vector (from the
+model graph) and the metadata dictionary. How the controller uses metadata is
+determined by its architecture — the compiler does not interpret metadata
+values. They carry no units, no dimensions, and no constraints.
+
+When using `learn_slot`, the user specifies the controller architecture:
+
+```python
+experiment.learn_slot("stomatal_control",
+                      architecture=MyFiLMController(taxon_vocab_size=50))
+```
+
+The architecture must accept both the structural input vector and the metadata
+dictionary. Standard MLP architectures (the default) ignore metadata. Custom
+architectures (FiLM, attention-based, etc.) route metadata as needed.
 
 This keeps the `.myco` world model purely physical while allowing controllers
 to condition on discrete or auxiliary information that varies per experiment.
@@ -3017,7 +3165,7 @@ experiment.assume_constant("hydraulic_cond")
 experiment.assume_constant("g_max")
 experiment.assume_constant("dt", value=1800.0)
 experiment.assume_initial("water")
-experiment.assume_initial("carbon")
+experiment.assume_constant("carbon")
 experiment.learn_slot("controller")
 experiment.observe_dense("transpiration")
 experiment.observe_sparse("water", range(0, 64, 8))
@@ -3038,7 +3186,7 @@ experiment.assume_constant("hydraulic_cond")
 experiment.assume_constant("g_max")
 experiment.assume_constant("dt", value=1800.0)
 experiment.assume_initial("water")
-experiment.assume_initial("carbon")
+experiment.assume_constant("carbon")
 experiment.bind_slot("controller", "path/to/trained_controller")
 
 artifact = experiment.compile(backend="jax")
