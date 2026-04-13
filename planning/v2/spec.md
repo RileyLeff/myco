@@ -485,6 +485,14 @@ outputs (e.g., `photo.assimilation`) are then accessible as fields. If not all
 inputs are wired, the compiler errors. Wiring and explicit call syntax may not
 be mixed for the same contract instance.
 
+**Disambiguating wiring from constraining.** Only equalities (`=`) on contract
+inputs constitute wiring. An inequality or logical predicate referencing a
+contract input (e.g., `photo.temperature >= 0 K`) is a **constraint on the
+bound value**, not a wiring statement — it restricts the quantity that was wired
+to the input, but does not itself establish the wiring. This means the presence
+of `photo.temperature >= 0 K` alone does not satisfy the requirement that the
+input be wired; an equality is still needed.
+
 **Wired vs. invoked semantics for intermediates.** When a contract is wired,
 its internal intermediate variables (e.g., FarquharC3's `j_c`, `j_e`,
 `a_gross`) become persistent quantities in the model graph. They are
@@ -494,6 +502,14 @@ the flat graph like any other quantity. When a contract is invoked functionally
 (`vc(p).plc`), intermediates are anonymous subexpressions — they have no
 persistent path and cannot be observed or bound. This is the key semantic
 difference between the two modes.
+
+**Flattener rule for wired contracts.** When the flattener encounters a fully
+wired contract instance, all of the contract's non-input fields (outputs and
+intermediates) are promoted to concrete quantities in the flat graph. They
+receive paths derived from their structural position (e.g.,
+`canopy_layers[0].photo.j_c`) and participate in SCC detection, the residual
+graph, and all downstream passes exactly like quantities declared directly on a
+node.
 
 Contracts enable generic subsystem swapping:
 
@@ -963,6 +979,12 @@ produces `CarbonPool`, not an anonymous type. Similarly, `CarbonPool -
 CarbonPool` produces `CarbonPool`. This is consistent with the physical
 intuition: adding two carbon pools yields a carbon pool.
 
+**Same-type division strips the named type.** `CarbonPool / CarbonPool`
+produces an anonymous `Scalar<ratio>` (dimensionless), not `CarbonPool`. The
+dimensions cancel, and the result has no meaningful named type to preserve.
+This is consistent with how multiplication strips names — once dimensions
+combine or cancel, the original named type no longer describes the result.
+
 **Named + anonymous addition.** Adding a named type to an anonymous type with
 matching dimensions succeeds — the result has the named type. For example,
 `CarbonPool + anonymous_mol_C` produces `CarbonPool`, because the anonymous
@@ -1207,8 +1229,12 @@ temporal cavitation[seg in pathway where seg is XylemSegment]:
 
 Here `seg in pathway` walks the entire containment subtree rooted at `pathway`,
 and `where seg is XylemSegment` filters to only those descendants whose type
-matches. Array elements are expanded individually — if `pathway.root` is
-`[XylemSegment<V>; M]`, each `root[j]` matches independently.
+matches. The `is` predicate ignores generic type parameters: `seg is
+XylemSegment` matches `XylemSegment<Weibull>`, `XylemSegment<Sigmoidal>`, or
+any other parameterization. To filter by a specific parameterization, use the
+fully qualified form: `seg is XylemSegment<Weibull>`. Array elements are
+expanded individually — if `pathway.root` is `[XylemSegment<V>; M]`, each
+`root[j]` matches independently.
 
 Both forms require the set of fields to be well-defined at compile time, which
 the containment model guarantees. After monomorphization, the iteration expands
@@ -1319,6 +1345,14 @@ temporal water_step[i in 0..N]:
 A quantity that appears on the left-hand side of a temporal relation is
 automatically inferred as persistent (requires initial state in the workflow
 binding).
+
+**Implicit `[t]` indexing.** Within a `temporal` block, unsubscripted
+references to quantities default to `[t]`. That is, writing
+`canopy.leaves[i].transpiration` inside a temporal block is equivalent to
+`canopy.leaves[i].transpiration[t]`. Explicit subscripts (`[t]`, `[t+1]`) are
+always allowed and override the default. This avoids verbose `[t]` annotations
+on every right-hand-side quantity while keeping the temporal semantics
+unambiguous.
 
 **`dt` is a normal quantity.** The timestep is not a magic name or built-in.
 It is a node in the world model, assumed or learned through the normal binding
@@ -1846,7 +1880,7 @@ respect to `var` over the interval `[lower, upper]`.
 ```myco
 // Lockhart growth integral — turgor excess integrated along stem height
 G_0 = phi * (C_wood / u_s)
-    * integrate(max(P_0(z) - turgor_threshold, 0), z, 0, 1)
+    * integrate(max(P_0(z) - turgor_threshold, 0 MPa), z, 0, 1)
 ```
 
 The second argument (`var`) introduces a **bound variable** scoped to the
@@ -3432,7 +3466,7 @@ piecewise-linear integral. With `integrate`, this could be expressed directly:
 
 ```myco
 G_0 = phi * (C_wood / u_s)
-    * integrate(max(P_apex + (P_base - P_apex) * z - turgor_threshold, 0), z, 0, 1)
+    * integrate(max(P_apex + (P_base - P_apex) * z - turgor_threshold, 0 MPa), z, 0, 1)
 ```
 
 The compiler would attempt symbolic resolution (the integrand is piecewise-
