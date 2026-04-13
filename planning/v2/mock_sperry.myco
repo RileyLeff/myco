@@ -586,6 +586,19 @@ relation bottom_drainage:
 // flow, pressures, and conductances are mutually dependent and emit a solver.
 // ============================================================================
 
+// VC evaluation pressures: wire each segment's water_potential to the network
+// pressure where it is evaluated. Without these, core.water_potential is
+// underdetermined and the planner will error.
+relation root_vc_pressure[j in 0..N_SOIL]:
+    pathway.root[j].core.water_potential = pathway.rhizosphere_pressure[j]
+
+relation stem_vc_pressure:
+    pathway.stem.core.water_potential = pathway.stem_pressure
+
+// Leaf VC is already constrained: pathway.leaf.core.water_potential appears
+// as the downstream endpoint in the leaf_flow equation, so it is determined
+// by the SCC. No additional wiring needed.
+
 // Rhizosphere flow: soil to rhizosphere boundary
 // Uses SOIL conducting element (van Genuchten) — not xylem VC
 relation rhizosphere_flow[j in 0..N_SOIL]:

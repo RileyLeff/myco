@@ -1177,6 +1177,16 @@ constraint active_conductance:
         mean(canopy.leaves[i].g_max for i in active)
 ```
 
+**Runtime where-clause lowering.** When a `where` clause's predicate depends
+on runtime values (e.g., `canopy.leaves[i].water > threshold` where `water` is
+solved at each timestep), the compiler does not produce a variable-length list
+— JAX requires static array shapes. Instead, the compiler lowers the filtered
+comprehension to a **statically-sized boolean mask** over the full index range.
+Aggregations like `count`, `sum`, and `mean` are lowered to masked arithmetic:
+`count(active)` becomes `sum(mask)`, `mean(x for i in active)` becomes
+`sum(x * mask) / sum(mask)`. The mask is recomputed at each evaluation from
+the predicate expression.
+
 Pairwise:
 
 ```myco
@@ -1534,8 +1544,10 @@ across experiments.
 graph only. Temporal edges (`[t]` → `[t+1]`) are not traversed — the slot sees
 the current timestep's quantities, not future or past state. Inequality edges
 (constraints) are also excluded: a constraint like `x <= y` does not make `y`
-reachable from `x` for the purposes of `[*]`. Only equalities from `relation`
-blocks (including contract wiring and algebraic relations) contribute edges.
+reachable from `x` for the purposes of `[*]`. All equalities in the flat graph
+contribute edges regardless of whether they were written with the `relation` or
+`constraint` keyword — the equality graph used for `[*]` reachability is the
+same graph used for contract wiring collection (section 3.4).
 
 The structural interface is resolved once at model load time, not per-experiment.
 This is critical for shared controllers in multi-experiment training (section
@@ -1595,13 +1607,39 @@ slot controller provides [canopy.leaves[*].stomata]:
 ```
 
 Path wildcards (`[*]`) indicate that the slot operates over all instances of a
-repeated structure. **Elementwise semantics**: a wildcard slot is called
-once per element. The controller receives one element's inputs and returns one
-element's outputs. The compiler emits `vmap` over the element dimension,
-giving the controller a batched `[N, D_in]` → `[N, D_out]` signature at the
-JAX level without the controller author writing vectorization code. This means
-the controller's input dimensionality `D_in` is per-element (e.g., one canopy
-layer's quantities), not the full model's flattened vector.
+repeated structure.
+
+**Wildcard input partition.** For a wildcard slot like
+`provides [canopy_layers[*].g_w]`, the `[*]` reachability walk discovers all
+reachable quantities from any element's output. Because elements may be
+physically coupled (e.g., all canopy layers connect through
+`aggregate_transpiration` → `pathway.flow`), the walk may reach quantities
+belonging to *other* elements or to the global model. The compiler partitions
+the resolved inputs into two categories:
+
+- **Element-local inputs**: quantities that are structurally indexed by the
+  same wildcard dimension as the provides set. For
+  `provides [canopy_layers[*].g_w]`, these are quantities under
+  `canopy_layers[i]` — e.g., `canopy_layers[i].leaf_temperature`,
+  `canopy_layers[i].leaf_vpd`. These vary per element.
+- **Global inputs**: all other reachable quantities — e.g., `pathway.flow`,
+  `atm.temperature`, `soil.layers[j].element.water_potential`. These are the
+  same for every element.
+
+The controller receives both. At the JAX level, the compiler emits `vmap` over
+the element dimension for element-local inputs, and **broadcasts** global
+inputs identically to every element call. The controller's signature is
+effectively `(element_local_vector, global_vector) → element_output`, vmapped
+over elements to produce `[N, D_out]`. The total input dimensionality
+`D_in = D_local + D_global` is fixed for a given model structure.
+
+This partition is determined structurally: a quantity is element-local if and
+only if its path contains the wildcard index (after flattening). Everything
+else is global. The partition is reported in the plan metadata and the slot
+interface manifest (section 7.5).
+
+When `inputs` are listed explicitly, the same partition applies: paths
+containing `[*]` are element-local, paths without are global.
 
 #### 7.2 Slot binding modes
 
@@ -1723,9 +1761,15 @@ artifact.save_slot("stomatal_control", "path/to/trained_controller")
 The saved artifact contains:
 
 - **Interface manifest**: the slot's ordered structural interface — input path
-  names, output path names, and their dimensions. This is the identity of the
-  controller: two controllers are compatible if and only if their manifests
-  match exactly.
+  names (partitioned into element-local and global for wildcard slots), output
+  path names, and their dimensions. This is the identity of the controller:
+  two controllers are compatible if and only if their manifests match exactly.
+- **Metadata schema**: the required metadata keys, their types, and shapes
+  (section 15.5). If the controller was trained with `bind_slot_metadata`
+  providing `taxon_id` as an integer and `site_elevation` as a float, the
+  schema records these requirements. At rebind time, the compiler verifies
+  that the new experiment's metadata satisfies the schema. Missing or
+  mistyped metadata keys are a compile error.
 - **Parameters**: the learned weights, serialized in the backend's native format
   (e.g., JAX pytree checkpoint). Parameters are backend-specific and not
   portable across backends.
@@ -2474,10 +2518,26 @@ with the final residual and iterate values reported.
 In `train` mode, non-convergence must not crash the training loop. The emitter
 generates a fallback: if the solver exceeds `max_iterations`, it returns the
 last iterate and adds a **convergence penalty** to the loss (proportional to
-the final residual norm). This ensures gradient signal flows even when the
-solver doesn't fully converge, while the penalty steers the controller toward
-regions where the physics is solvable. The convergence penalty weight is
-configurable in the solver configuration (section 14.1).
+the final residual norm).
+
+**Gradient semantics on non-convergence.** The implicit function theorem
+(`custom_root`) computes exact gradients only at a true root. When the solver
+does not converge, the last iterate is not a root, so IFT gradients are not
+mathematically valid. The emitter handles this by **detaching the solver
+path**: gradients from the observation loss do not flow through the
+non-converged SCC via the implicit function theorem. Instead, the convergence
+penalty provides the gradient signal — it is a direct function of the
+residual norm at the last iterate, and its gradients flow through the forward
+Newton iterations via standard autodiff (not IFT). This means: during
+non-convergence, the controller receives gradient signal only from "make the
+solver converge" (the penalty), not from "match observations" (the
+observation loss). Once the solver converges, `custom_root` provides exact
+IFT gradients and the penalty vanishes.
+
+This two-phase gradient regime is intentional: early in training, the
+controller learns to produce solvable physics; later, it learns to match
+observations. The convergence penalty weight is configurable in the solver
+configuration (section 14.1).
 
 As training progresses and the controller learns to produce physically
 reasonable values, convergence failures should become rare. The compilation
