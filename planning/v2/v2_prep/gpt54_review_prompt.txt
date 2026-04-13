@@ -46,31 +46,38 @@ of scope for v2. The supervised approach — train on observations, let the
 controller implicitly learn the behavior — is sufficient for the stated
 research plan and is simpler to implement correctly.
 
-## 2. The `deriv` SCC feedback ban is intentional
+## 2. `deriv` feedback into SCCs uses hierarchical decomposition
 
-Section 9.5 forbids `deriv(A, g_s)` from feeding back into the SCC that
-determines A and g_s. A previous reviewer argued this prevents expressing the
-Sperry gain-risk criterion natively:
+Section 9.5 allows `deriv(A, g_s)` to feed back into the SCC that determines
+A and g_s — but only when the compiler can **hierarchically decompose** the
+SCC into a nested inner/outer structure. This enables expressing optimality
+conditions like the Cowan-Farquhar criterion natively:
 
 ```myco
-// "You can't compile this without lifting the ban!"
-relation gain_risk:
-    deriv(total_assimilation, g_s) = theta * deriv(total_transpiration, g_s)
+relation optimality:
+    deriv(total_assimilation, g_s) = lambda * deriv(total_transpiration, g_s)
 ```
 
-This is a misunderstanding of the workflow. You don't need this relation in the
-`.myco` file because the stomatal controller is a **slot**, not a `deriv`-based
-optimality condition. To generate synthetic data from a baseline Sperry model,
-you provide a hand-coded Python function as the slot (implementing the
-gain-risk criterion externally) and run in simulate mode. The `.myco` file
-contains the physics; the heuristic lives outside it.
+The compiler detects that the physics equations (A-ci coupling, transpiration)
+form a closed inner system given `g_s`, and the optimality equation determines
+`g_s` using IFT derivatives of the inner solution. It emits a nested solver:
+inner Newton for physics, IFT at the boundary, outer root-find for `g_s`.
 
-The ban exists because `deriv` feedback into an SCC requires computing the
-Hessian of the SCC's equation system at every Newton iteration. While JAX can
-compute Hessians, this is tractable only for tiny SCCs (1-2 equations). For the
-general case — a 50-equation hydraulic network — it is genuinely
-intractable. The spec prioritizes a rule that is correct everywhere over one
-that works for special cases.
+This avoids computing the Hessian of the physics at every Newton step — the
+original concern that motivated the blanket ban in earlier spec drafts. The
+decomposition is purely mechanical (graph analysis on the SCC's incidence
+structure) and does not require domain knowledge from the user.
+
+If decomposition fails — because the physics and optimality equations are
+entangled (an equation both consumes a `deriv` result and determines a state
+variable) — the compiler errors with a diagnostic identifying the entangled
+equations. This is a narrow edge case, not the common pattern.
+
+For the Sperry/Potkay mocks, the slot mechanism is used instead of `deriv`
+optimality — the slot learns the optimal response surface from data. Both
+approaches are valid; `deriv` optimality is appropriate when the criterion is
+known analytically, while slots are appropriate when the criterion should be
+learned.
 
 ## 3. Shared controllers require structural identity (by design)
 
@@ -2312,20 +2319,27 @@ The compiler resolves `deriv` by walking the expression graph from
 Because all registered functions have transparent expression bodies (section
 9.2), the compiler always has the full expression chain for acyclic paths.
 
-`deriv` is a semantic derivative operator that lowers to one of two
+`deriv` is a semantic derivative operator that lowers to one of three
 implementations depending on graph structure:
 
 - **Acyclic paths**: the compiler resolves the derivative to a concrete
   symbolic expression at compile time using the chain rule. The emitted code
   evaluates this expression directly — there is no AD overhead at runtime.
-- **Paths through SCCs**: the implicit function theorem requires the Jacobian
-  of the SCC's equation system. For small SCCs (e.g., the 2×2 Farquhar A-Ci
-  system), the compiler may invert the Jacobian symbolically and produce a
-  compile-time expression. For larger SCCs, symbolic Jacobian inversion is
-  intractable and the compiler emits a runtime autodiff call (`jax.jacfwd`
-  over the `custom_root` solver). The compilation plan (section 14.5) reports
-  which `deriv` expressions were resolved symbolically and which require
-  runtime AD.
+- **Paths through SCCs (external consumer)**: when `deriv(A, x)` differentiates
+  through an SCC but the result is consumed *outside* that SCC, the implicit
+  function theorem provides the derivative. For small SCCs (e.g., the 2×2
+  Farquhar A-Ci system), the compiler may invert the Jacobian symbolically and
+  produce a compile-time expression. For larger SCCs, symbolic Jacobian
+  inversion is intractable and the compiler emits a runtime autodiff call
+  (`jax.jacfwd` over the `custom_root` solver).
+- **Paths through SCCs (internal consumer — hierarchical decomposition)**: when
+  `deriv(A, x)` appears inside the same SCC that determines A and x, the
+  compiler attempts **hierarchical SCC decomposition** to avoid computing the
+  Hessian of the physics equations inside the Newton loop. See below.
+
+The compilation plan (section 14.5) reports which `deriv` expressions were
+resolved symbolically, which require runtime AD, and which triggered
+hierarchical decomposition.
 
 `deriv` produces a new expression that the planner treats like any other
 relation. It participates in SCC detection, path selection, and code emission
@@ -2373,20 +2387,15 @@ world model's expression graph.
   for acyclic paths, runtime AD for SCC-bound paths) is described above.
 - `deriv` **cannot** differentiate through slots (slots are opaque) or through
   underdetermined residual blocks (where the system is not closed).
-- **`deriv` output must not feed back into the SCC it differentiates through.**
-  If `deriv(A, g_s)` is used inside the same SCC that determines A and g_s,
-  the solver would need to compute the Hessian of the SCC at every Newton
-  step — this is computationally ruinous and numerically unstable. The compiler
-  detects this cycle and errors with a diagnostic suggesting the user either
-  (a) move the `deriv` expression outside the SCC (e.g., use the previous
-  timestep's derivative as an approximation) or (b) restructure the model so
-  that the derivative consumer and the differentiated quantities are in
-  separate components.
-  **Soul alignment note:** this restriction is an intentional abstraction leak.
-  It requires the model author to know whether a `deriv` expression participates
-  in the same SCC as the quantities it differentiates — a solver-level concern.
-  The tradeoff is accepted because the alternative (silent Hessian computation
-  inside Newton loops) would produce silently wrong or divergent results.
+- **`deriv` feedback into an SCC triggers hierarchical decomposition.** If
+  `deriv(A, g_s)` is used inside the same SCC that determines A and g_s, a
+  naive (monolithic) solver would need to compute the Hessian of the SCC at
+  every Newton step — computationally ruinous and numerically unstable. Instead,
+  the compiler attempts to decompose the SCC into a nested inner/outer
+  structure. See "Hierarchical SCC decomposition" below for the full algorithm.
+  If decomposition succeeds, the compiler emits a nested solver. If
+  decomposition fails, the compiler errors with a diagnostic identifying which
+  equations prevented decomposition.
 - `integrate` cannot integrate over model structure (e.g., "integrate over all
   soil layers") — use indexed comprehensions for that.
 - `deriv` cannot differentiate across timesteps (e.g., d/dt) — use temporal
@@ -2397,6 +2406,119 @@ world model's expression graph.
   emitter includes the quadrature call in the residual function passed to
   `custom_root`. The plan inspection (section 14.5) reports this nesting and
   its cost implications.
+
+**Hierarchical SCC decomposition.** When an SCC contains `deriv` expressions
+whose results feed back into the same SCC, the compiler attempts to split the
+monolithic SCC into a nested inner/outer structure that avoids Hessian
+computation entirely.
+
+The problem: if `deriv(A, g_s)` feeds into an equation that determines `g_s`,
+and `g_s → A` through the physics, the naive SCC is
+`{g_s, ..., A, ..., deriv(A, g_s)}`. The Newton-Raphson Jacobian of this
+system requires `∂(deriv(A, g_s))/∂g_s = ∂²A/∂g_s²` — the Hessian of the
+physics at every Newton step.
+
+The solution: decompose into an inner physics solve and an outer optimality
+solve with an IFT boundary between them.
+
+*Detection algorithm.* Given an SCC S with equations E and unknowns U:
+
+1. Let D ⊂ E be all equations that consume a `deriv` result (the **optimality
+   equations**).
+2. Let P = E \ D (the **physics equations**).
+3. Let X ⊂ U be unknowns that are determined *only* by equations in D (the
+   **control variables** — e.g., `g_s` in the stomatal case).
+4. Let Y = U \ X (the **state variables** — e.g., `ci`, `A`, `E`).
+5. **Decomposable if and only if**: P determines Y as implicit functions of X.
+   That is: |P| = |Y| and P forms a closed square system when X is treated as
+   given. The compiler checks this by constructing the incidence matrix of P
+   over Y and verifying it is square and structurally non-singular.
+
+If the check succeeds, the compiler emits a **nested solver**:
+
+- **Inner solve**: `custom_root` over the physics equations P, solving for
+  state Y given control X. This is a standard SCC solve — Jacobian is
+  first-order, no Hessians.
+- **IFT boundary**: derivatives of state with respect to control (dY/dX) are
+  computed via the implicit function theorem on the inner solve. For the
+  Cowan-Farquhar case, this yields `dA/dg_s` and `dE/dg_s` as first-order
+  IFT expressions.
+- **Outer solve**: root-find over the optimality equations D, which consume the
+  IFT derivatives. The outer system has |X| unknowns (the control variables),
+  which is typically much smaller than the full SCC. The outer Jacobian
+  requires `∂(dA/dg_s)/∂g_s = ∂²A/∂g_s²`, but because |X| is small (often
+  scalar), this is computed cheaply via finite differences on the IFT
+  derivative or via forward-over-reverse AD on the inner solve.
+
+If the check fails — P does not form a closed system over Y, or the physics
+and optimality equations are entangled (an optimality equation also provides a
+physics relation needed to determine state) — the compiler errors:
+
+```
+error[E0952]: cannot decompose SCC into inner/outer structure
+  --> model.myco:42:5
+   |
+42 |     deriv(A, g_s) = lambda * deriv(E, g_s)
+   |     ^^^^^^^^^^^^^^ this deriv result feeds back into the SCC
+   |
+   = note: removing optimality equations leaves {ci, A} underdetermined
+   = note: equation `reaction_rate` (line 38) consumes deriv AND determines
+     state variable `ci` — physics and optimality are entangled
+   = help: restructure so that deriv-consuming equations only determine
+     control variables, not state variables
+```
+
+*Example: Cowan-Farquhar stomatal optimality.*
+
+```myco
+node OptimalLeaf {
+    g_s: Conductance               // control variable
+    vpd: Scalar<MPa>               // environment
+    ca: Scalar<MPa>
+
+    E: WaterFlux
+    ci: Scalar<MPa>
+    A: CarbonFlux
+
+    relation transpiration: E = g_s * vpd
+    relation diffusion: ci = ca - A / (g_s * 1.6)
+    relation biochemistry: A = vmax * ci / (ci + km)
+
+    // Optimality condition — deriv feeds back into the SCC
+    lambda: PositiveScalar
+    relation optimality:
+        deriv(A, g_s) = lambda * deriv(E, g_s)
+}
+```
+
+The compiler detects: optimality equations D = {optimality}, physics equations
+P = {transpiration, diffusion, biochemistry}, control variables X = {g_s},
+state variables Y = {E, ci, A}. P is a 3×3 system over Y given g_s —
+decomposition succeeds. The emitted code is a scalar outer root-find over g_s,
+with each evaluation calling an inner 2×2 Newton solve for {ci, A} (E is
+determined acyclically from g_s) and computing dA/dg_s via IFT.
+
+*Cost model.* The nested solver replaces one N-dimensional Newton (with Hessian)
+with an inner K-dimensional Newton (first-order Jacobian, K = |Y|) nested
+inside an outer M-dimensional root-find (M = |X|, typically 1-3). The outer
+root-find evaluates the inner solver at each step, so the total cost is
+roughly `outer_iterations × inner_iterations × K²` — compared to
+`monolithic_iterations × N² × Hessian_cost` for the naive approach. For
+typical plant physiology models (K ≈ 5-20, M ≈ 1-2), this is orders of
+magnitude cheaper.
+
+The compilation plan (section 14.5) reports hierarchical decompositions: the
+inner/outer split, the control and state variable sets, the estimated cost,
+and whether the outer Jacobian uses finite differences or forward-over-reverse
+AD.
+
+**Soul alignment note.** Hierarchical decomposition largely eliminates the
+abstraction leak of the original `deriv` SCC ban. The model author writes the
+optimality condition declaratively; the compiler detects the structure and
+emits the nested solver automatically. The remaining leak: when decomposition
+*fails*, the error message requires the author to understand why the physics
+and optimality equations are entangled — a solver-level concern. This is
+accepted as a narrow, diagnosable edge case rather than a blanket restriction.
 
 ---
 
@@ -2809,6 +2931,16 @@ on each other through shared quantities, the emitter generates nested
 `custom_root` calls. Gradients flow through the full chain via composed
 implicit differentiation. The plan inspection reports the SCC dependency order.
 
+**Hierarchical SCC decomposition.** When the planner detects a `deriv`
+expression feeding back into its own SCC, it attempts hierarchical
+decomposition (section 9.5). If successful, the emitter generates a nested
+solver structure: an inner `custom_root` for the physics equations (first-order
+Jacobian), IFT derivatives at the inner/outer boundary, and an outer root-find
+for the optimality equations over the control variables. The outer root-find
+uses finite differences or forward-over-reverse AD for its Jacobian, depending
+on the number of control variables and the configurable strategy (section
+14.4). The plan inspection reports the decomposition and estimated cost.
+
 If two SCCs are mutually dependent (SCC A's output feeds SCC B and vice versa),
 they merge into a single SCC. The planner does not assume SCCs are independently
 solvable — SCC detection operates on the full dependency graph, and mutual
@@ -3160,6 +3292,9 @@ The plan reports:
   underdetermined, and what solver/closure strategy was chosen for each
 - **Symbolic resolutions**: which `deriv` and `integrate` expressions were
   resolved at compile time, and what the resulting expressions are
+- **Hierarchical decompositions**: which SCCs were split into inner/outer
+  structure due to `deriv` feedback, what the control/state variable partition
+  is, the inner/outer solver strategies, and the estimated cost multiplier
 - **Numerical fallbacks**: which `integrate` expressions require runtime
   quadrature, what strategy was chosen, and how to override it
 - **Slot bindings**: which slots are bound, to what, and whether the binding
@@ -3964,14 +4099,27 @@ linear, so a closed form exists) and fall back to numerical quadrature if
 needed.
 
 **Optimality conditions and `deriv`.** The paper's optimality condition
-(Eqn 8) requires the marginal carbon cost of water: chi_w = dG/dE. This
-cannot be expressed as a native `.myco` `deriv` expression that feeds back
-into `g_s`, because doing so would create a `deriv`-containing SCC cycle
-(section 9.5). In the mock, the slot mechanism handles this: the slot is
-trained to maximize growth, and the optimality condition emerges from training.
-For analytical optimality models, the optimality rule belongs in the Python
-workflow (computing the derivative externally and supplying it as data) or in
-a neural slot that learns the optimal response surface.
+(Eqn 8) requires the marginal carbon cost of water: chi_w = dG/dE. This can
+be expressed natively via hierarchical SCC decomposition (section 9.5):
+
+```myco
+// Inside a model with coupled A-ci physics and stomatal control:
+relation optimality:
+    deriv(gas.photo.assimilation, gas.g_s) =
+        lambda * deriv(hydraulics.transpiration, gas.g_s)
+```
+
+The compiler detects that `g_s` is the control variable (determined only by
+the optimality equation) and the A-ci physics is the inner system. It emits a
+scalar outer root-find over `g_s`, with each evaluation running an inner
+Newton solve for the physics and computing the marginal derivatives via IFT.
+
+In the mock, the slot mechanism is used instead — the slot is trained to
+maximize growth, and the optimality condition emerges from training. This is a
+design choice: the slot approach learns the optimal response surface from data
+without assuming a specific optimality criterion, while the `deriv` approach
+hard-codes the Cowan-Farquhar criterion. Both are valid for different use
+cases.
 
 ---
 
@@ -5653,4 +5801,4 @@ temporal soil_drought_memory:
 
 ## 6. Project Context Note
 
-This spec has been through multiple rounds of review by Claude, Gemini, GPT 5.4 Pro, and Meta Muse Spark. Previous rounds addressed: ConductingElement split, slot runtime contract unification, wildcard input partition, temporal first-order restriction, deriv two-tier lowering, failed SCC gradient semantics, trained slot serialization, runtime where-clause lowering, affine unit subtraction semantics, VC monotonicity direction, overconstrained canopy demand, soil water dimensional consistency, expression unit syntax, wildcard slots over dyn arrays, affine exception to named type subtraction, trajectory-local property enforcement, deriv appendix SCC contradiction (example removed), dimensionless exponentiation rule, TinyTree dimensional fix, contract satisfaction rewrite (input signature vs output obligation), dyn per-element type ascription formalization, const generic where-clause bounds, wildcard stability warning for const-generic arrays, intentional soul alignment leaks documented, and named-type minus anonymous preservation rule. If you find issues that have already been addressed, note them as resolved. Focus on NEW findings.
+This spec has been through multiple rounds of review by Claude, Gemini, GPT 5.4 Pro, and Meta Muse Spark. Previous rounds addressed: ConductingElement split, slot runtime contract unification, wildcard input partition, temporal first-order restriction, deriv two-tier lowering, failed SCC gradient semantics, trained slot serialization, runtime where-clause lowering, affine unit subtraction semantics, VC monotonicity direction, overconstrained canopy demand, soil water dimensional consistency, expression unit syntax, wildcard slots over dyn arrays, affine exception to named type subtraction, trajectory-local property enforcement, dimensionless exponentiation rule, TinyTree dimensional fix, contract satisfaction rewrite, dyn per-element type ascription formalization, const generic where-clause bounds, wildcard stability warning, named-type minus anonymous preservation rule, and MAJOR: replacement of the blanket deriv SCC feedback ban with hierarchical SCC decomposition (inner physics solve + IFT boundary + outer optimality solve). If you find issues that have already been addressed, note them as resolved. Focus on NEW findings.
