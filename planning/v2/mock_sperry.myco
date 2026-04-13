@@ -26,8 +26,10 @@ use units::si::{
     watt_per_square_meter as W_m2,
     micromole_per_square_meter_second as umol_m2_s,
     millimole_per_square_meter_second as mmol_m2_s,
+    mole_per_square_meter_second as mol_m2_s,
     millimole_per_square_meter_second_per_megapascal as mmol_m2_s_MPa,
     joule_per_mole as J_mol,
+    joule_per_mole_kelvin as J_mol_K,
     meter as m,
     meter_per_second as m_s,
     seconds as s,
@@ -112,8 +114,10 @@ pub contract Photosynthesis {
 
 // Weibull VC (the standard Sperry parameterization for xylem)
 pub node WeibullVC : VulnerabilityCurve {
-    b: PositiveScalar       // Weibull scale (related to P50)
+    b: Scalar<MPa>          // Weibull scale (related to P50 magnitude)
     c: PositiveScalar       // Weibull shape (>1 sigmoidal, =1 exponential)
+
+    constraint b_positive: b > 0 MPa
 
     plc = 1.0 - exp(-(-pressure / b) ** c)
 }
@@ -130,8 +134,10 @@ pub node SigmoidVC : VulnerabilityCurve {
 // Soil desaturation follows the same interface as xylem cavitation:
 // both map water potential to fractional loss of conductivity.
 pub node VanGenuchtenVC : VulnerabilityCurve {
-    vg_alpha: PositiveScalar    // inverse of air-entry pressure
+    vg_alpha: Scalar<MPa>       // air-entry pressure scale parameter
     vg_n: PositiveScalar        // pore size distribution parameter
+
+    constraint vg_alpha_positive: vg_alpha > 0 MPa
 
     constraint valid_n:
         vg_n > 1
@@ -167,10 +173,10 @@ pub node FarquharC3 : Photosynthesis {
     // Arrhenius activation energies — nodes, so they can be assumed or learned
     ha_vmax: Scalar<J_mol>
     hd_vmax: Scalar<J_mol>
-    sv_vmax: Scalar<J_mol>
+    sv_vmax: Scalar<J_mol_K>
     ha_jmax: Scalar<J_mol>
     hd_jmax: Scalar<J_mol>
-    sv_jmax: Scalar<J_mol>
+    sv_jmax: Scalar<J_mol_K>
     ha_rday: Scalar<J_mol>
     ha_kc: Scalar<J_mol>
     ha_ko: Scalar<J_mol>
@@ -295,7 +301,7 @@ pub fn peaked_arrhenius<U: Unit>(
     value_25: Scalar<U>,
     ha: Scalar<J_mol>,
     hd: Scalar<J_mol>,
-    sv: Scalar<J_mol>,
+    sv: Scalar<J_mol_K>,
     temperature: Temperature,
 ) -> Scalar<U> {
     invertibility: lossy    // peaked, so not injective over full range
@@ -310,13 +316,16 @@ pub fn peaked_arrhenius<U: Unit>(
 }
 
 // Saturated vapor pressure (Buck equation)
+// Empirical equation calibrated to Celsius values — uses value_in to extract
+// raw float, then attaches kPa to the result.
 pub fn saturated_vapor_pressure(
     temperature: Temperature,
 ) -> Scalar<kPa> {
     invertibility: injective_restricted
     differentiability: smooth
 
-    0.61121 * exp((18.678 - temperature / 234.5) * temperature / (257.14 + temperature))
+    let T = temperature.value_in(degC)
+    0.61121 kPa * exp((18.678 - T / 234.5) * T / (257.14 + T))
 }
 
 
@@ -398,8 +407,10 @@ node CanopyRadiation<const L: usize> {
 
 node SoilLayer {
     element: ConductingElement<VanGenuchtenVC>
-    thickness: PositiveScalar      // layer depth (m)
+    thickness: Scalar<m>           // layer depth
     root_fraction: Fraction        // fraction of root biomass in this layer
+
+    constraint thickness_positive: thickness > 0 m
 }
 
 node Soil<const M: usize> {
@@ -424,8 +435,11 @@ node Soil<const M: usize> {
 
 node LeafProperties {
     emissivity: Fraction           // longwave emissivity (~0.97)
-    width: PositiveScalar          // leaf width (m), for boundary layer calc
-    latent_heat: PositiveScalar    // latent heat of vaporization (J/mol, ~44100)
+    width: Scalar<m>              // leaf width, for boundary layer calc
+    latent_heat: Scalar<J_mol>    // latent heat of vaporization (~44100)
+
+    constraint width_positive: width > 0 m
+    constraint latent_heat_positive: latent_heat > 0 J_mol
 }
 
 
@@ -507,6 +521,7 @@ pub node SperryTree<
             radiation.layers[i].lai_fraction
             * canopy_layers[i].g_w
             * canopy_layers[i].leaf_vpd
+            / atm.pressure
             for i in 0..N_CANOPY
         )
 
@@ -586,8 +601,9 @@ relation leaf_flow:
         * (pathway.stem_pressure - pathway.leaf.core.water_potential)
 
 // Transpiration from demand (per canopy layer)
+// VPD is in kPa; divide by atmospheric pressure to get mole fraction deficit
 relation demand_transpiration[i in 0..N_CANOPY]:
-    canopy_layers[i].g_w * canopy_layers[i].leaf_vpd =
+    canopy_layers[i].g_w * canopy_layers[i].leaf_vpd / atm.pressure =
         radiation.layers[i].lai_fraction * pathway.flow
 
 
@@ -622,8 +638,13 @@ relation photo_pressure[i in 0..N_CANOPY]:
 // ============================================================================
 
 relation energy_balance[i in 0..N_CANOPY]:
-    let g_ha = 1.4 * 0.135 * sqrt(atm.wind_speed / (leaf_props.width * 0.72))
-    let g_r = 0.1579 + 0.0017 * atm.temperature + 7.17e-6 * atm.temperature ** 2
+    // Boundary layer heat conductance (Nobel): empirical, calibrated to m/s and m
+    let u = atm.wind_speed.value_in(m_s)
+    let d = leaf_props.width.value_in(m)
+    let g_ha = (1.4 * 0.135 * sqrt(u / (d * 0.72))) mol_m2_s
+    // Radiative conductance: empirical polynomial, calibrated to degC
+    let T_c = atm.temperature.value_in(degC)
+    let g_r = (0.1579 + 0.0017 * T_c + 7.17e-6 * T_c ** 2) mol_m2_s
     let e_layer = radiation.layers[i].lai_fraction * pathway.flow
     // Compiler handles degC → K for Stefan-Boltzmann term (affine unit transform)
     canopy_layers[i].leaf_temperature =
@@ -659,15 +680,20 @@ slot stomatal_control provides [canopy_layers[*].g_w]:
 // ============================================================================
 
 // Soil water balance: extraction by roots + redistribution + rain + drainage
+// NOTE: This is a simplification — the equation updates water potential directly
+// from flow rates. A production model would track volumetric water content and
+// use the moisture retention curve (dθ/dψ) to convert. This approximation is
+// adequate for the mock's purpose of stress-testing the language spec.
 temporal soil_water_step[j in 0..N_SOIL]:
-    let extraction = pathway.layer_flow[j] / soil.layers[j].thickness
-    let inflow_above = if j > 0 then soil.interlayer_flow[j-1] / soil.layers[j].thickness else 0
-    let outflow_below = if j < N_SOIL-1 then soil.interlayer_flow[j] / soil.layers[j].thickness else 0
-    let infiltration = if j = 0 then atm.precipitation / soil.layers[0].thickness else 0
-    let drain = if j = N_SOIL-1 then soil.drainage / soil.layers[j].thickness else 0
+    let extraction = pathway.layer_flow[j]
+    let inflow_above = if j > 0 then soil.interlayer_flow[j-1] else 0 mmol_m2_s
+    let outflow_below = if j < N_SOIL-1 then soil.interlayer_flow[j] else 0 mmol_m2_s
+    let infiltration = if j = 0 then atm.precipitation else 0 mmol_m2_s
+    let drain = if j = N_SOIL-1 then soil.drainage else 0 mmol_m2_s
     soil.layers[j].element.water_potential[t+1] =
         soil.layers[j].element.water_potential[t]
         + dt * (inflow_above - outflow_below + infiltration - extraction - drain)
+        / soil.layers[j].thickness
 
 // Irreversible cavitation: track the worst pressure ever experienced.
 // Uses structural introspection to generate one temporal block per XylemSegment

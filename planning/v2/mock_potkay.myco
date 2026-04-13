@@ -66,11 +66,17 @@ use units::si::{
     mole_carbon as mol_C,
     mole_carbon_per_second as mol_C_s,
     joule_per_mole as J_mol,
+    joule_per_mole_kelvin as J_mol_K,
     meter as m,
     meter_squared as m2,
+    meter_per_second as m_s,
     seconds as s,
     ratio,
+    inverse_kelvin as K_inv,
     megapascal_per_second_inverse as MPa_s_inv,
+    mole_per_joule as mol_J,
+    mole_per_kilogram as mol_kg,
+    kilogram_per_mole as kg_mol,
 }
 
 
@@ -135,6 +141,7 @@ pub fn substrate_limitation(
 
 // Q10 temperature response for maintenance respiration
 // Simpler than Arrhenius — appropriate when empirical Q10 is available.
+// Empirical equation calibrated to Celsius differences — uses value_in.
 pub fn q10_response<U: Unit>(
     value_ref: Scalar<U>,
     q10: PositiveScalar,
@@ -144,7 +151,8 @@ pub fn q10_response<U: Unit>(
     invertibility: bijective
     differentiability: smooth
 
-    value_ref * q10 ** ((temperature - T_ref) / 10)
+    let dT = (temperature - T_ref).value_in(degC)
+    value_ref * q10 ** (dT / 10)
 }
 
 // Temperature-dependent cell wall extensibility (Table 3, φ̄)
@@ -161,7 +169,7 @@ pub fn extensibility_temperature(
     let T_opt = 298.15 K                     // optimal temperature for growth
     let H_a = 63000 J_mol                    // activation energy
     let H_d = 200000 J_mol                   // deactivation energy
-    let S_v = 650 J_mol                      // entropy factor
+    let S_v = 650 J_mol_K                    // entropy factor
     let R = 8.314 J_mol_K
     let cold_limit = 278.15 K               // 5°C — growth ceases below this
 
@@ -169,8 +177,8 @@ pub fn extensibility_temperature(
     let high_T_inhibition = (1 + exp((S_v * T_opt - H_d) / (R * T_opt)))
         / (1 + exp((S_v * temperature - H_d) / (R * temperature)))
 
-    // Smooth ramp to zero below 5°C
-    let cold_factor = 1 / (1 + exp(-2 * (temperature - cold_limit)))
+    // Smooth ramp to zero below 5°C (2 K⁻¹ steepness)
+    let cold_factor = 1 / (1 + exp(-2 K_inv * (temperature - cold_limit)))
 
     phi_25 * arrhenius_factor * high_T_inhibition * cold_factor
 }
@@ -202,7 +210,7 @@ pub fn mean_turgor_excess(
         (P_base - turgor_threshold) ** 2 / (2 * (P_base - P_apex))
     else
         // No growth — entire stem below threshold
-        0
+        0 MPa
 }
 
 
@@ -254,8 +262,11 @@ node TreeStructure {
 node LeafProperties {
     emissivity: Fraction               // longwave emissivity (~0.97)
     absorptance: Fraction              // shortwave absorptance (~0.5)
-    width: PositiveScalar              // leaf width (m), for boundary layer
-    kappa: PositiveScalar              // quantum yield (mol photon J⁻¹, Table 3: 6.9e-7)
+    width: Scalar<m>                  // leaf width, for boundary layer
+    kappa: Scalar<mol_J>              // quantum yield (Table 3: 6.9e-7 mol J⁻¹)
+
+    constraint width_positive: width > 0 m
+    constraint kappa_positive: kappa > 0 mol_J
 }
 
 
@@ -300,6 +311,7 @@ node GasExchange<P: Photosynthesis> {
     g_b: Conductance                   // boundary layer conductance
     g_c: Conductance                   // total CO2 conductance (series)
     g_w: Conductance                   // water vapor conductance
+    atm_pressure: Scalar<kPa>         // atmospheric pressure (for VPD → mole fraction)
 
     leaf_temperature: Temperature
     leaf_vpd: Scalar<kPa>
@@ -314,8 +326,8 @@ node GasExchange<P: Photosynthesis> {
     // Water vapor conductance (1.6× CO2 for diffusivity ratio)
     g_w = 1.6 * g_c
 
-    // Leaf-area-specific transpiration
-    E_leaf = g_w * leaf_vpd
+    // Leaf-area-specific transpiration (VPD / P_atm = mole fraction deficit)
+    E_leaf = g_w * leaf_vpd / atm_pressure
 
     // CO2 conductance wired to photosynthesis contract input
     constraint co2_conductance:
@@ -379,21 +391,28 @@ node TurgorGrowth {
     psi_stem: WaterPotential           // stem water potential (from hydraulics)
     osmotic_potential: WaterPotential   // π (from phloem sap molality)
 
-    // Phloem sap molality parameters (Table 3)
-    c_m1: PositiveScalar               // intercept (~0.48 mol kg⁻¹)
-    c_m2: PositiveScalar               // slope (~0.13 mol kg⁻¹ MPa⁻¹)
-    c_pi1: PositiveScalar              // linear osmotic coefficient (~0.998)
-    c_pi2: PositiveScalar              // quadratic osmotic coefficient (~0.089)
+    // Phloem sap molality parameters (Table 3, Paljakka et al. 2017)
+    c_m1: Scalar<mol_kg>              // intercept (~0.48 mol kg⁻¹)
+    c_m2: Scalar<mol_kg>              // slope (~0.13 mol kg⁻¹ MPa⁻¹, calibrated to MPa)
+    c_pi1: PositiveScalar              // linear osmotic coefficient (~0.998, dimensionless)
+    c_pi2: Scalar<kg_mol>             // quadratic osmotic coefficient (~0.089 kg mol⁻¹)
+
+    constraint c_m1_positive: c_m1 > 0 mol_kg
+    constraint c_m2_positive: c_m2 > 0 mol_kg
+    constraint c_pi2_positive: c_pi2 > 0 kg_mol
 
     // Phloem sap molality: m_p = c_m1 - c_m2 · ψ_S
-    // (empirical, Paljakka et al. 2017)
-    phloem_molality: PositiveScalar
-    phloem_molality = c_m1 - c_m2 * psi_stem
+    // c_m2 is calibrated to MPa inputs — use value_in to extract dimensionless pressure
+    phloem_molality: Scalar<mol_kg>
+    let psi_MPa = psi_stem.value_in(MPa)
+    phloem_molality = c_m1 - c_m2 * psi_MPa
 
-    // Osmotic potential from phloem molality
-    // π = -m̄ · ρ · R · T · (c_Π1 · m_p + c_Π2 · m_p²)
-    // where m̄ = 10⁻⁶ MPa Pa⁻¹ (unit conversion factor)
-    osmotic_potential = -1e-6 * water_density * gas_constant * temperature
+    // Osmotic potential from phloem molality (van't Hoff equation)
+    // π = -ρ · R · T · (c_Π1 · m_p + c_Π2 · m_p²)
+    // Units: kg/m³ · J/(mol·K) · K · mol/kg = J/m³ = Pa.
+    // c_pi1 · m_p has units mol/kg; c_pi2 · m_p² has units (kg/mol)·(mol/kg)² = mol/kg.
+    // The compiler converts the Pa result to MPa for WaterPotential automatically.
+    osmotic_potential = -water_density * gas_constant * temperature
         * (c_pi1 * phloem_molality + c_pi2 * phloem_molality ** 2)
 
     temperature: Temperature           // for osmotic potential and extensibility
@@ -514,6 +533,9 @@ relation photo_o2:
 relation photo_pressure:
     gas.photo.atm_pressure = atm.pressure
 
+relation gas_atm_pressure:
+    gas.atm_pressure = atm.pressure
+
 
 // ============================================================================
 // Relations: Leaf Energy Balance
@@ -525,13 +547,19 @@ relation photo_pressure:
 // ============================================================================
 
 relation energy_balance:
-    let g_ha = 1.4 * 0.135 * sqrt(atm.wind_speed / (leaf_props.width * 0.72))
-    let g_r = 0.1579 + 0.0017 * atm.temperature + 7.17e-6 * atm.temperature ** 2
+    // Boundary layer heat conductance (Nobel): empirical, calibrated to m/s and m
+    let u = atm.wind_speed.value_in(m_s)
+    let d = leaf_props.width.value_in(m)
+    let g_ha = (1.4 * 0.135 * sqrt(u / (d * 0.72))) mol_m2_s
+    // Radiative conductance: empirical polynomial, calibrated to degC
+    let T_c = atm.temperature.value_in(degC)
+    let g_r = (0.1579 + 0.0017 * T_c + 7.17e-6 * T_c ** 2) mol_m2_s
+    let latent_heat = 44100 J_mol              // latent heat of vaporization
     gas.leaf_temperature =
         atm.temperature
         + (atm.insolation * leaf_props.absorptance
            - leaf_props.emissivity * stefan_boltzmann * atm.temperature ** 4
-           - 44100 * gas.E_leaf)
+           - latent_heat * gas.E_leaf)
           / (specific_heat_air * (g_r + g_ha))
 
 relation leaf_vpd:
@@ -542,7 +570,7 @@ relation leaf_vpd:
 
 // Boundary layer conductance (Table 3: g_b = 2.4 mol m⁻² s⁻¹, treated as constant)
 relation boundary_layer:
-    gas.g_b = 2.4
+    gas.g_b = 2.4 mol_m2_s
 
 
 // ============================================================================
@@ -579,7 +607,7 @@ relation actual_growth:
 // NSC-limited maintenance respiration with Q10 temperature response (Eqn 4)
 relation maintenance_respiration:
     carbon.R_M = carbon.sigma_r
-        * q10_response(carbon.R_M_25, carbon.q10_respiration, atm.temperature, 25)
+        * q10_response(carbon.R_M_25, carbon.q10_respiration, atm.temperature, 25 degC)
 
 // Total assimilation = leaf area × leaf-specific A_n
 relation total_assimilation:
