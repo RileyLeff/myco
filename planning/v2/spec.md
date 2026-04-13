@@ -7,7 +7,8 @@ layer.
 For earlier design exploration that led to this spec, see `v2_prep/`.
 
 For the Sperry model mock implementation that stress-tested this spec, see
-`mock_sperry.myco`.
+`mock_sperry.myco`. For the Potkay GOSM mock that stress-tests carbon-water-
+turgor coupling and library reuse, see `mock_potkay.myco`.
 
 For the invariant design principles that guide all decisions, see
 `../soul.md`.
@@ -509,22 +510,90 @@ the plant model.
 
 ### 4. Units and Dimensions
 
-Units are first-class, not string labels.
+Units are first-class, not string labels. The goal is Rust-`uom`-level rigor:
+if you try to add a pressure to a length, it is a compile error. The compiler
+enforces dimensional consistency throughout the world model, and the workflow
+layer validates unit consistency at binding boundaries.
 
-#### 4.1 Dimensions vs units
+The unit system is **not hardcoded to SI**. SI ships as a standard library
+package that everyone can import, but the language provides primitives for
+defining any unit system. Users can define custom base units, derived units,
+and unit packages.
 
-A dimension is a physical kind: pressure, conductance, ratio, area.
+#### 4.1 Base units and dimensions
 
-A unit is a specific scale within a dimension: MPa, Pa, kPa are all units of
-pressure.
+A **base unit** declares a fundamental measurement scale and implicitly
+introduces a **base dimension**. A dimension is a physical kind, represented
+internally as an integer exponent vector over all declared base dimensions.
 
-The system tracks both. Two quantities with the same dimension but different
-units are compatible via conversion. Two quantities with different dimensions
-are incompatible.
+Base units are declared with the `base_unit` keyword:
 
-#### 4.2 Import and definition
+```myco
+// In the SI standard library (units/si.myco)
+pub base_unit kilogram     // introduces base dimension: Mass
+pub base_unit meter        // introduces base dimension: Length
+pub base_unit second       // introduces base dimension: Time
+pub base_unit kelvin       // introduces base dimension: Temperature
+pub base_unit mole         // introduces base dimension: Amount
+pub base_unit ampere       // introduces base dimension: Current
+pub base_unit candela      // introduces base dimension: Luminosity
+```
 
-Standard unit systems are importable:
+Each `base_unit` declaration introduces a new orthogonal axis in the dimension
+exponent vector. The SI package introduces seven; a custom package could
+introduce more or fewer.
+
+Every dimension is a product of powers of base dimensions:
+
+| Dimension   | Exponent vector          |
+|-------------|--------------------------|
+| Length      | L¹                       |
+| Area        | L²                       |
+| Velocity    | L¹·T⁻¹                  |
+| Pressure    | M¹·L⁻¹·T⁻²             |
+| Force       | M¹·L¹·T⁻²              |
+| Energy      | M¹·L²·T⁻²              |
+| Conductance (molar) | N¹·L⁻²·T⁻¹     |
+| Dimensionless | (all zeros)            |
+
+The compiler propagates dimensions through all expressions using exponent
+vector arithmetic. This is a standard, well-understood approach (see Rust's
+`uom`, F#'s units of measure, Boost.Units in C++).
+
+#### 4.2 Unit declarations and the package model
+
+A **unit** is a specific scale (and optional offset) within a dimension. MPa,
+Pa, and kPa all have dimension `M¹·L⁻¹·T⁻²` but differ by scale factors.
+
+**Derived units** are defined as products, quotients, and scalar multiples of
+existing units:
+
+```myco
+// In the SI standard library
+pub unit newton = kilogram * meter / second ** 2
+pub unit pascal = newton / meter ** 2
+pub unit megapascal = 1e6 * pascal
+pub unit joule = newton * meter
+pub unit watt = joule / second
+
+// Affine unit (section 4.4)
+pub unit celsius : affine(kelvin, offset = -273.15)
+
+// Dimensionless
+pub unit ratio = 1
+
+// Compound units
+pub unit mol_m2_s = mole / meter ** 2 / second
+pub unit mmol_m2_s = 1e-3 * mol_m2_s
+pub unit J_mol = joule / mole
+pub unit J_mol_K = joule / mole / kelvin
+```
+
+The compiler infers the dimension of a derived unit from its definition. In the
+last example, `joule / mole / kelvin` has dimension
+`(M¹·L²·T⁻²) · N⁻¹ · Θ⁻¹ = M¹·L²·T⁻²·N⁻¹·Θ⁻¹`.
+
+**The SI package** ships as a standard library. Models import from it:
 
 ```myco
 use units::si::{
@@ -534,45 +603,329 @@ use units::si::{
 }
 ```
 
-Derived units can be defined locally:
+**Custom unit packages** follow the same pattern. A domain-specific package can
+define units built on SI base units, or define entirely new base units:
 
 ```myco
-unit mmol_m2_s = 1e-3 * mol_m2_s
+// In a domain package: forestry/units.myco
+module forestry::units
+
+use units::si::{mole, kilogram, second, meter}
+
+pub unit mol_C = mole           // same dimension as mole (Amount)
+pub unit mol_C_s = mol_C / second
+pub unit gC = 12.011e-3 * kilogram
+pub unit m2_leaf = meter ** 2   // same dimension as m² (Area)
 ```
 
-#### 4.3 Affine unit transforms
+Note that `mol_C` and `mole` have the same dimension (Amount). The unit system
+does not distinguish them dimensionally — both are `N¹`. Semantic distinction
+(preventing accidental mixing of carbon moles and water moles) is handled at
+the **type level**, not the unit level (see section 4.7).
+
+**Non-SI systems** (CGS, imperial, etc.) are defined the same way. A CGS
+package would either define its own base units (introducing independent
+dimensions) or define CGS units as derived from SI base units (allowing
+cross-system conversion).
+
+#### 4.3 `Scalar<U>` — the parameterized quantity type
+
+`Scalar<U>` is the built-in parameterized type meaning "a real number measured
+in unit U." Every quantity in the world model has a `Scalar<U>` type (or a
+named type that derives from one).
+
+```myco
+pub type WaterPotential : Scalar<MPa>     // dimension: pressure
+pub type Temperature : Scalar<degC>       // dimension: temperature
+pub type Fraction : Scalar<ratio> {       // dimension: dimensionless
+    0 <= self <= 1
+}
+```
+
+The type parameter `U` carries both the dimension (for compile-time checking)
+and the unit scale (for runtime value interpretation). When the user writes
+`type WaterPotential : Scalar<MPa>`, they are declaring:
+
+- **Dimension**: pressure (M¹·L⁻¹·T⁻²)
+- **Unit**: megapascals (the runtime value 1.0 means 1.0 MPa)
+- **Subtype**: `WaterPotential <: Scalar<MPa>`
+
+Generic functions parameterized over `U: Unit` (section 9.2) accept any unit
+and preserve it through the computation:
+
+```myco
+fn arrhenius<U: Unit>(value_25: Scalar<U>, ...) -> Scalar<U>
+```
+
+The compiler monomorphizes each call site to the concrete unit type and verifies
+that the function body is dimensionally consistent for that unit.
+
+#### 4.4 Affine unit transforms
 
 Some unit conversions are affine (offset + scale) rather than purely
 multiplicative. The canonical example: Celsius to Kelvin.
 
 ```myco
-unit kelvin
-unit celsius : affine(kelvin, offset=-273.15)
+pub unit celsius : affine(kelvin, offset = -273.15)
 ```
 
 The compiler handles affine conversions automatically. When a relation mixes
 Celsius and Kelvin quantities, the compiler inserts the correct conversion. This
 eliminates manual `+ 273.15` scattered through model code — the Arrhenius
-functions in the Sperry mock, for example, should accept a `Temperature` type
-and the compiler handles the conversion to absolute temperature internally.
+functions in the Sperry mock accept a `Temperature` type and the compiler
+handles the conversion to absolute temperature internally.
+
+**Affine caveat**: affine units cannot be freely multiplied or divided. `20°C *
+2` is physically meaningless (is it 40°C or 586.3 K?). The compiler requires
+conversion to the absolute unit (Kelvin) before multiplication. Expressions
+like `temperature * temperature` in an energy balance equation trigger
+automatic conversion to Kelvin; the result has dimension Θ² in absolute units.
+Addition and subtraction of two affine quantities is permitted (the offsets
+cancel for subtraction, producing a temperature *difference* which is purely
+multiplicative).
 
 Affine transforms also cover other offset-based systems (Fahrenheit, gauge
 pressure vs absolute pressure).
 
-#### 4.4 Compile-time checking
+#### 4.5 Internal representation and storage model
 
-The compiler checks dimensional consistency in relations:
+Internally, **all math happens in base units**. Declared units are a user-facing
+layer. This is the same approach as Rust's `uom`: values are converted to base
+units on entry, all computation uses base units, and results are converted back
+to declared units on output.
 
-- Both sides of an equation must have the same dimension
-- Arithmetic operations follow standard dimensional analysis rules
-  (multiplication multiplies dimensions, addition requires matching dimensions)
-- Type annotations on nodes provide the expected unit
-- Binding-time validation checks that supplied data matches expected units
+The mental model:
 
-#### 4.5 What is out of scope
+```
+User declares:      temperature: Temperature      // type uses degC
+User provides:      temperature = 25              // means 25°C
+Stored internally:  298.15                        // in kelvin (base unit)
+User reads result:  25                            // converted back to degC
+```
 
-- Arbitrary symbolic unit algebra in the source language
-- Full theorem-prover-level unit reasoning
+For purely multiplicative units (MPa vs Pa), the conversion is a scale factor:
+
+```
+User declares:      psi: WaterPotential           // type uses MPa
+User provides:      psi = -1.5                    // means -1.5 MPa
+Stored internally:  -1.5e6                        // in pascal (base unit)
+User reads result:  -1.5                          // converted back to MPa
+```
+
+This design guarantees:
+
+- **No unit mixing in computation**: intermediate values are always in base
+  units. The compiler never needs to track "which unit is this temporary in?"
+- **Constraints work across units**: `constraint: temperature > 0 degC` and
+  `constraint: temperature > 273.15 K` are compile-time equivalent. The
+  compiler converts annotated literals to base units. `0 degC` → `273.15`
+  (base). `32 F` → `273.15` (base). The comparison happens in base units.
+- **No runtime overhead**: scale factors are compile-time constants. The
+  compiler folds conversions into the emitted expressions. The only cost is
+  the initial conversion on input and final conversion on output.
+
+Each base dimension has exactly one base unit (the one declared with
+`base_unit`). For SI: kilogram, meter, second, kelvin, mole, ampere, candela.
+All other units in that dimension are derived and carry a known conversion
+factor to the base.
+
+#### 4.6 Dimensional algebra rules
+
+The compiler enforces these rules for every subexpression in every relation,
+constraint, registered function body, and inline expression:
+
+**Addition and subtraction**: both operands must have the same dimension. The
+result has that dimension.
+
+```myco
+// OK: pressure - pressure = pressure
+turgor = psi_stem - osmotic_potential
+
+// ERROR: pressure + length — dimension mismatch
+bad = psi_stem + height
+```
+
+**Multiplication**: dimensions multiply (exponent vectors add). The result
+dimension is the product of the operand dimensions.
+
+```myco
+// conductance [N·L⁻²·T⁻¹] × pressure [M·L⁻¹·T⁻²]
+// = [M·N·L⁻³·T⁻³] (a flux)
+flow = conductance * pressure_drop
+```
+
+**Division**: dimensions divide (exponent vectors subtract).
+
+```myco
+// energy [M·L²·T⁻²] / (amount [N] × temperature [Θ])
+// = [M·L²·T⁻²·N⁻¹·Θ⁻¹] — the gas constant R
+R = 8.314 J_mol_K
+```
+
+**Exponentiation by literal integer or const generic**: dimension is raised to
+that power.
+
+```myco
+// temperature⁴ in Stefan-Boltzmann term
+atm.temperature ** 4   // dimension: Θ⁴
+```
+
+Exponentiation by a non-integer or by a quantity with non-zero dimension is a
+compile error.
+
+**Transcendental functions** (`exp`, `log`, `sin`, `cos`, `sqrt`, etc.): the
+argument must be **dimensionless**. The result is dimensionless (except `sqrt`,
+which halves the dimension exponents).
+
+```myco
+// OK: the Arrhenius exponent is dimensionless
+//   [J/mol] × [K] / ([K] × [J/(mol·K)] × [K])
+//   = [J·K/mol] / [J·K/mol] = dimensionless ✓
+exp(ha * (T - T_ref) / (T_ref * R * T))
+
+// ERROR: exp of a pressure
+exp(psi_stem)   // compile error: argument has dimension M·L⁻¹·T⁻²
+```
+
+This rule catches a large class of physics errors. If a user writes
+`exp(activation_energy / temperature)` and forgets to divide by R, the
+compiler errors: the argument has dimension `M·L²·T⁻²·N⁻¹·Θ⁻¹`, not
+dimensionless.
+
+**Comparison operators** (`=`, `>=`, `<=`, `>`, `<`): both sides must have the
+same dimension. If both sides have the same dimension but different units, the
+compiler converts both to base units before comparison.
+
+**Literal numbers**: bare numeric literals (e.g., `1.6`, `0.01`) are
+dimensionless. To give a literal a unit, annotate it: `298.15 K`, `0.75 MPa`.
+Annotated literals are converted to base units at compile time. `0 degC`,
+`273.15 K`, and `32 F` are all compile-time equivalent — they all resolve to
+`273.15` in the base unit (kelvin).
+
+#### 4.7 Type-level semantic distinction
+
+The dimension system catches physics errors (pressure + length). The **type
+system** catches semantic errors (carbon moles + water moles).
+
+Two quantities with the same dimension but different semantic meaning should
+have different named types:
+
+```myco
+use forestry::units::{mol_C, mol_C_s}
+
+type CarbonPool : Scalar<mol_C>     // dimension: Amount
+type WaterPool : Scalar<mole>       // dimension: Amount (same!)
+
+type GrowthRate : Scalar<mol_C_s>   // dimension: Amount·Time⁻¹
+type TranspirationRate : Scalar<mol_m2_s>  // dimension: Amount·Length⁻²·Time⁻¹
+```
+
+`CarbonPool` and `WaterPool` both have dimension `Amount` (N¹). The unit
+system would dimensionally allow adding them. But the type system prevents it:
+
+```myco
+// ERROR: CarbonPool + WaterPool — different types
+total = carbon_pool + water_pool
+
+// OK: CarbonPool + CarbonPool — same type
+total_carbon = nsc + structural_carbon
+```
+
+This is the same separation of concerns as Rust newtypes. Dimensions catch
+broad physics errors (you can't add meters and seconds). Types catch narrow
+semantic errors (you shouldn't add carbon and water even though both are
+counted in moles).
+
+Named types are optional — `Scalar<MPa>` works fine without a wrapper. But for
+quantities where semantic confusion is possible, named types are the defense.
+
+#### 4.8 Dimension checking through registered functions
+
+Registered functions declare signatures with typed parameters. The compiler
+checks:
+
+1. At the **definition site**: the function body is dimensionally consistent
+   given the declared parameter types and return type.
+2. At each **call site**: the supplied arguments have the correct dimensions,
+   and the return value is used in a dimensionally consistent context.
+
+For generic functions like `arrhenius<U: Unit>`, the compiler checks that the
+body is consistent for *any* unit `U`. This means the body can only use `U` in
+ways that are valid regardless of dimension — e.g., multiplying by a
+dimensionless factor. The compiler verifies this parametrically at definition
+time, not just at each monomorphized call site.
+
+#### 4.9 Dimension checking through contracts
+
+Contract declarations include typed inputs and outputs. When a contract is
+invoked (section 3.4), the compiler verifies:
+
+- The supplied arguments match the declared input dimensions
+- The produced outputs are used consistently with their declared dimensions
+- The contract implementation's body is dimensionally consistent
+
+Contract implementations inherit the input/output types from the contract
+declaration. If an implementation's body produces a result with the wrong
+dimension, it is a compile error on the implementation.
+
+#### 4.10 Unit validation at binding boundaries
+
+The `.myco` file is dimensionally self-consistent by construction (the compiler
+enforces it). The remaining boundary is between the world model and the
+workflow layer, where external values enter the system.
+
+**Assumed data**: when the user supplies data via `assume_series`,
+`assume_constant`, or `assume_initial`, the binding layer validates that the
+target quantity's declared unit matches the data. The workflow API accepts an
+optional `unit` parameter for explicit declaration:
+
+```python
+# Data is in the quantity's declared unit (degC) by default
+experiment.assume_series("atm.temperature", data)
+
+# Explicit unit — binding layer converts if compatible, errors if not
+experiment.assume_series("atm.temperature", data_in_kelvin, unit="K")
+```
+
+If `unit` is omitted, the data is assumed to be in the quantity's declared
+unit. If provided and the dimension matches, the binding layer converts to the
+declared unit. If the dimension doesn't match, it errors.
+
+Internally, the binding layer converts all supplied data to base units (section
+4.5) before passing it to the compiled model. Results are converted back to
+declared units before returning to the user.
+
+**Observed data**: same validation as assumed data.
+
+**Slot bindings**: a slot declares typed outputs (e.g., `provides [g_s]` where
+`g_s: Conductance`). For `.myco` controller bindings (section 7.2), the
+compiler checks dimensional consistency of the controller's output relation —
+this is just normal compile-time checking.
+
+For opaque slot bindings (neural nets, Python callables), the binding layer
+converts the slot's output from base units to declared units (and vice versa
+for inputs) at the boundary. The implementation operates in base units. This
+means a neural net that provides stomatal conductance outputs a value in the
+base unit for that dimension (e.g., `mol·m⁻²·s⁻¹` rather than
+`mmol·m⁻²·s⁻¹`). The binding layer handles the conversion. This is simpler and
+less error-prone than requiring the neural net to know about declared units.
+
+**Cross-module imports**: imported types carry their unit and dimension. If
+module A exports `pub type WaterPotential : Scalar<MPa>` and module B imports
+it, the dimension and unit are carried across. No re-declaration is needed.
+
+#### 4.11 What is out of scope
+
+- **Dependent unit types**: the system does not support units that depend on
+  runtime values (e.g., "per unit leaf area" where leaf area is a model
+  quantity).
+- **Full symbolic simplification**: the compiler checks dimensional consistency
+  but does not simplify compound unit expressions for display. Diagnostics show
+  the dimension exponent vector, not a simplified name.
+- **Automatic unit inference for bare literals in typed contexts**: if a field
+  is declared as `Scalar<MPa>` and the user writes `psi = -1.5`, the literal is
+  dimensionless and the compiler errors. The user must write `psi = -1.5 MPa`.
+  This is intentional — explicit unit annotations prevent silent errors.
 
 ### 5. Constraints (The Predicate Language)
 
@@ -877,15 +1230,31 @@ constraint irreversible_cavitation[i in 0..N]:
 #### 6.4 Overdetermined quantities
 
 A quantity may be computable by more than one relation. This is intentional and
-is one of the core reasons Myco exists.
+is one of the core reasons Myco exists — the same physical quantity (e.g.,
+transpiration) can be derived from demand-side logic, supply-side logic, or
+energy balance, and the model should express all of these paths.
 
-When a quantity is overdetermined:
+**Overdetermination is context-dependent.** A quantity that has multiple
+derivation paths in the abstract graph may not be overdetermined in a specific
+run. After the user applies bindings (assumptions, slot bindings, learned
+quantities), some paths may become non-buildable because their upstream
+dependencies are not provided. The planner detects overdetermination at plan
+time, after bindings are applied — not at load time.
 
-- The planner selects one relation as the canonical computation path
-- Remaining relations become alternative paths
-- The compiler may emit consistency losses from the alternatives (see section
-  12)
-- Path selection is informed by the operation algebra (see section 8)
+When a quantity is overdetermined in context:
+
+- The planner identifies all buildable paths for the quantity
+- If exactly one path is buildable: no overdetermination, proceed normally
+- If multiple paths are buildable: the quantity is overdetermined and requires
+  a **resolution strategy**
+- If no resolution strategy is specified for an overdetermined quantity, the
+  planner errors with an actionable diagnostic listing the competing paths and
+  available strategies
+
+**Resolution strategies** define how competing paths are reconciled. They are
+ordinary `.myco` relations imported from a standard library package
+(`myco::resolution`) or written by the user. See section 12.3 for detection
+semantics and section 14.6 for configuration.
 
 ### 7. Slots
 
@@ -1066,31 +1435,20 @@ The planner uses this metadata to:
 
 #### 8.5 Conditioning-aware path selection
 
-For overdetermined quantities where multiple paths exist, the emitter may
-generate conditioning-aware code that dynamically weights paths based on
-numerical stability.
+When a quantity is overdetermined and a resolution strategy is applied (section
+6.4, 12.3), the operation algebra informs how the strategy evaluates each path.
 
-The default algorithm uses condition-number-based weighting: each path is
+One built-in strategy is **condition-number-based weighting**: each path is
 evaluated, and paths whose intermediate quantities are better-conditioned
 receive higher weight. The blend is smooth (differentiable) so gradients flow
-through both paths.
+through both paths. This ships as `myco::resolution::condition_weighted` (see
+section 14.6).
 
-Configuration via compiler config (section 14):
-
-```python
-artifact = experiment.compile(
-    backend="jax",
-    path_blending={
-        "enabled": True,                  # default: True
-        "sharpness": 10.0,                # higher = sharper selection
-        "method": "condition_number",      # default method
-    },
-)
-```
-
-When `sharpness` is very high, this approximates hard path selection. When low,
-it's a soft blend. The default provides both numerical stability in the forward
-pass and well-behaved gradients in the backward pass.
+The operation algebra's invertibility and differentiability metadata is
+available to all resolution strategies — both the standard library strategies
+and user-defined ones — via structural introspection on the competing paths.
+This enables strategies that select or weight paths based on numerical
+properties, not just the values they produce.
 
 ### 9. Function Registry
 
@@ -1209,6 +1567,69 @@ pub fn peaked_arrhenius<U: Unit>(
 // In a user's model
 use physiology::temperature::peaked_arrhenius
 ```
+
+#### 9.5 Compiler primitives: differentiation and integration
+
+Two expression-level primitives allow models to reference derivatives and
+integrals of other model quantities. These are not runtime functions — they are
+compiler directives that the compiler resolves during compilation.
+
+**`deriv(quantity_a, quantity_b)`** — the partial derivative of `quantity_a`
+with respect to `quantity_b`, evaluated at the current operating point.
+
+```myco
+// Marginal carbon gain — sensitivity of assimilation to stomatal conductance
+let dA_dgs = deriv(photo.assimilation, gas.g_s)
+
+// Allocation rule: invest carbon where marginal return is highest
+allocation_leaves = dA_dgs / (dA_dgs + dG_dk_root)
+```
+
+The compiler resolves `deriv` by walking the expression graph from
+`quantity_a` back to `quantity_b` and applying the chain rule symbolically.
+Because all registered functions have transparent expression bodies (section
+9.2), the compiler always has the full expression chain. No numerical fallback
+is needed for `deriv` within the world model — symbolic differentiation is
+mechanical (the chain rule always works on a known expression graph).
+
+`deriv` produces a new expression that the planner treats like any other
+relation. It participates in SCC detection, path selection, and code emission
+normally. The emitted code evaluates the derivative expression directly — there
+is no AD overhead at runtime because the derivative has been resolved to a
+concrete expression at compile time.
+
+**`integrate(expr, var, lower, upper)`** — the definite integral of `expr` with
+respect to `var` over the interval `[lower, upper]`.
+
+```myco
+// Lockhart growth integral — turgor excess integrated along stem height
+G_0 = phi * (C_wood / u_s)
+    * integrate(max(P_0(z) - turgor_threshold, 0), z, 0, 1)
+```
+
+Unlike `deriv`, symbolic integration is not always possible. The compiler
+attempts symbolic resolution for known integrand forms (polynomials,
+piecewise-linear, compositions of elementary functions). If symbolic resolution
+succeeds, the integral is replaced by its closed-form expression at compile
+time.
+
+If symbolic resolution fails, the compiler emits a numerical quadrature call.
+The quadrature strategy is configurable (section 14.4). The default is
+Gauss-Legendre with a point count chosen by the compiler based on the
+integrand's differentiability metadata. The compiler reports which integrals
+were resolved symbolically and which require numerical quadrature in the
+compilation plan (section 14.5).
+
+`integrate` introduces a runtime cost proportional to the number of quadrature
+points. The compilation plan makes this cost visible so users can tune the
+strategy or restructure the model.
+
+**Scope and limitations.** Both `deriv` and `integrate` operate within the
+world model's expression graph. `deriv` cannot differentiate through slots
+(slots are opaque). `integrate` cannot integrate over model structure (e.g.,
+"integrate over all soil layers") — use indexed comprehensions for that.
+`deriv` cannot differentiate across timesteps (e.g., d/dt) — use temporal
+blocks for time evolution.
 
 ---
 
@@ -1411,12 +1832,37 @@ Path selection is informed by the operation algebra:
 
 #### 12.3 Overdetermined quantities
 
-When a quantity can be computed by multiple relations:
+Overdetermination is detected during planning, **after bindings are applied**
+(section 6.4). The planner enumerates all buildable paths for each quantity
+given the current set of assumptions, slot bindings, and learned quantities.
 
-- The lowest-cost path becomes canonical
-- Remaining paths become alternatives
-- The compiler may emit consistency losses from the alternatives
-- The compiler may emit conditioning-aware path blending (section 8.5)
+A quantity with multiple buildable paths is overdetermined in context. The
+planner then checks whether a resolution strategy has been specified for that
+quantity (via `resolution_config` in compiler configuration — section 14.6).
+
+**If a resolution strategy is specified:** the planner emits the strategy as
+part of the execution plan. The strategy is a `.myco` relation that takes the
+competing path outputs as inputs and produces a single resolved value. The
+strategy participates normally in SCC detection, differentiability analysis,
+and dimensional checking.
+
+**If no resolution strategy is specified:** the planner errors with a
+diagnostic listing:
+- The overdetermined quantity's full path
+- Each competing relation and its upstream dependencies
+- Available strategies from `myco::resolution` that are type-compatible
+- Instructions for specifying a strategy or eliminating the overdetermination
+  via bindings
+
+This error behavior follows the no-trust principle: the compiler will not
+silently choose a path for the user when multiple paths exist. The user must
+explicitly declare how overdetermination is resolved.
+
+**Consistency losses.** Regardless of which resolution strategy is used, the
+compiler may emit consistency losses from the non-canonical paths. In `train`
+mode, these losses penalize disagreement between paths. In `simulate` mode,
+they become diagnostic assertions. This is orthogonal to the resolution strategy
+— every strategy preserves the alternative paths as consistency checks.
 
 #### 12.4 Underdetermined quantities
 
@@ -1531,6 +1977,13 @@ The interface requires:
 - Emit rollout/scan structure for temporal equations
 - Emit loss functions for `train` mode
 - Emit parameter initialization
+- Emit numerical quadrature calls for unresolved `integrate` expressions
+
+Note that `deriv` does not appear in the backend interface. `deriv` is fully
+resolved at compile time to a concrete expression via symbolic chain-rule
+expansion — the backend never sees it. Only `integrate` may require a runtime
+primitive (numerical quadrature) from the backend, and only when symbolic
+resolution fails.
 
 The JAX backend is the primary implementation for v2. Other backends are
 specified here for interface design but implemented post-v2.
@@ -1568,7 +2021,10 @@ Available strategies:
 
 #### 14.2 Path blending configuration
 
-See section 8.5 for the path blending algorithm and configuration options.
+Path blending for overdetermined quantities is now handled through resolution
+strategies (section 14.6). The `condition_weighted` strategy in
+`myco::resolution` provides conditioning-aware blending. See section 8.5 for
+how the operation algebra informs path evaluation.
 
 #### 14.3 Other configuration
 
@@ -1579,6 +2035,186 @@ See section 8.5 for the path blending algorithm and configuration options.
 
 These are analogous to optimization levels in a C compiler: they affect how the
 code runs, not what it computes.
+
+#### 14.4 Integration configuration
+
+When `integrate` expressions cannot be resolved symbolically, the compiler emits
+numerical quadrature. The quadrature strategy is configurable per-integral or
+globally:
+
+```python
+artifact = experiment.compile(
+    backend="jax",
+    integration_config={
+        "default_strategy": "auto",         # compiler picks based on integrand
+        "default_quadrature": "gauss_legendre",
+        "default_points": 16,
+    },
+)
+```
+
+Available strategies:
+
+- **`auto`** (default): compiler inspects the integrand's differentiability
+  metadata and chooses appropriately. Smooth integrands → Gauss-Legendre.
+  Piecewise/subgradient integrands → adaptive Simpson or Clenshaw-Curtis.
+- **`gauss_legendre`**: fixed-point Gauss-Legendre quadrature. Efficient for
+  smooth integrands. Configurable point count.
+- **`adaptive_simpson`**: adaptive Simpson's rule. Better for integrands with
+  kinks or rapid variation. Configurable tolerance.
+- **`trapezoid`**: simple trapezoidal rule. Configurable point count. Lowest
+  accuracy but most predictable cost.
+
+Per-integral overrides use the integral's label (derived from the containing
+relation or named explicitly):
+
+```python
+artifact = experiment.compile(
+    backend="jax",
+    integration_config={
+        "default_strategy": "auto",
+        "overrides": {
+            "turgor_integral": {"strategy": "adaptive_simpson", "tolerance": 1e-10},
+        },
+    },
+)
+```
+
+Integrals that were resolved symbolically are not affected by this
+configuration — they have been replaced by closed-form expressions and have no
+runtime cost.
+
+#### 14.5 Plan inspection
+
+The compilation plan is an inspectable artifact. After compilation, the user
+can examine what strategies the compiler chose and override them before
+execution. This is the primary discovery mechanism for configurable behavior —
+the user does not need to read documentation to learn that integration strategy
+is configurable; they see it in the plan.
+
+```python
+artifact = experiment.compile(backend="jax")
+print(artifact.plan)
+```
+
+The plan reports:
+
+- **SCCs**: which quantities form algebraic loops, and what solver strategy was
+  chosen for each
+- **Symbolic resolutions**: which `deriv` and `integrate` expressions were
+  resolved at compile time, and what the resulting expressions are
+- **Numerical fallbacks**: which `integrate` expressions require runtime
+  quadrature, what strategy was chosen, and how to override it
+- **Overdetermination**: which quantities have multiple buildable paths, what
+  resolution strategy is applied to each, and which quantities still need a
+  strategy (these will error if unresolved)
+- **Slot bindings**: which slots are bound, to what, and whether the binding
+  is opaque (neural net) or transparent (`.myco` controller)
+- **Execution order**: the topologically sorted sequence of computation steps
+  within a timestep
+- **Temporal state**: which quantities carry forward across timesteps
+
+The plan follows the same principle as the rest of the compiler configuration:
+defaults work out of the box, inspection reveals what was decided, and
+overrides are available for power users. The plan is analogous to a SQL
+`EXPLAIN` — it shows the execution strategy without changing the semantics.
+
+#### 14.6 Overdetermination configuration
+
+When the planner detects overdetermined quantities (section 12.3), the user
+must specify a resolution strategy. Strategies are configured per-quantity or
+globally via `resolution_config`:
+
+```python
+artifact = experiment.compile(
+    backend="jax",
+    resolution_config={
+        "default_strategy": None,               # no default — error on unresolved
+        "overrides": {
+            "leaf.transpiration": "weighted_average",
+            "canopy.assimilation": {
+                "strategy": "soft_select",
+                "preference": ["demand_transpiration", "supply_transpiration"],
+                "sharpness": 10.0,
+            },
+        },
+    },
+)
+```
+
+Setting `"default_strategy"` to a named strategy (e.g., `"weighted_average"`)
+applies it to all overdetermined quantities that don't have a per-quantity
+override. The default of `None` forces the user to address each case
+explicitly. This follows the no-trust principle: overdetermination is a
+modeling decision, not something the compiler should handle silently.
+
+**Standard library: `myco::resolution`**
+
+Common resolution strategies ship as a standard library package. These are
+ordinary `.myco` relations — they are convenience shorthand for patterns the
+user could write themselves. The package includes:
+
+- **`weighted_average`**: arithmetic mean of competing path outputs. Simple,
+  differentiable, no configuration. Appropriate when paths are expected to
+  agree and discrepancies should be averaged out.
+
+- **`soft_select`**: differentiable soft selection among paths with a
+  preference ranking. Higher-preference paths receive more weight.
+  `sharpness` controls how hard the selection is — at high sharpness it
+  approximates hard preference, at low sharpness it blends. Appropriate when
+  one path is theoretically preferred but alternatives provide fallback.
+
+- **`condition_weighted`**: weights paths by numerical conditioning (section
+  8.5). Uses the operation algebra's metadata to assess each path's numerical
+  stability and weights accordingly. Appropriate for purely numerical
+  stability concerns where all paths are theoretically equivalent.
+
+- **`hard_select`**: chooses a single path by preference ranking, discarding
+  alternatives. Non-differentiable — rejected in `train` mode unless the
+  discarded paths have no learned parameters upstream. Appropriate for
+  `simulate` mode or when overdetermination is resolved by domain knowledge.
+
+**Custom strategies.** Users can write their own resolution strategies as
+`.myco` relations. A resolution strategy is simply a relation that takes the
+competing outputs as inputs and produces a single value:
+
+```myco
+use myco::resolution::ResolutionStrategy
+
+fn my_blend(
+    path_a: Scalar<U>,
+    path_b: Scalar<U>,
+    confidence_a: Scalar<ratio>,
+) -> Scalar<U> {
+    invertibility: bijective
+    differentiability: smooth
+
+    path_a * confidence_a + path_b * (1.0 - confidence_a)
+}
+```
+
+Because strategies are `.myco` relations, they participate in dimensional
+checking (can't accidentally average a pressure with a conductance), are
+differentiable when needed, and are backend-agnostic. This is the same design
+principle as the rest of Myco: strategies are part of the world model, not
+escape hatches to Python.
+
+**Consistency losses are orthogonal.** Regardless of which strategy is chosen,
+the compiler may emit consistency losses from the non-selected paths. In
+`train` mode, these losses penalize disagreement between paths, providing a
+training signal even for paths that were not selected as canonical. The
+consistency loss is always available — the resolution strategy only controls
+which value is used in the forward pass. Consistency loss weight is
+configurable:
+
+```python
+artifact = experiment.compile(
+    backend="jax",
+    resolution_config={
+        "consistency_loss_weight": 0.1,  # default: 0.1
+    },
+)
+```
 
 ---
 
@@ -1969,10 +2605,14 @@ experiment.assume_initial("carbon")
 experiment.bind_slot("controller", "path/to/trained_controller")
 
 artifact = experiment.compile(backend="jax")
+
+# Inspect the compilation plan (section 14.5)
+print(artifact.plan)
 ```
 
 No observations, no loss helpers. The same structural model produces a different
-compiled artifact because the binding changed.
+compiled artifact because the binding changed. The plan shows the execution
+strategy: SCCs, solver choices, slot bindings, and execution order.
 
 ---
 
@@ -2019,6 +2659,62 @@ See `mock_sperry.myco` for the full mock implementation. Key features exercised:
   expressed via contracts (which have multiple named outputs) or via multiple
   relations that the planner couples into an SCC. This is a deliberate design
   choice — contracts handle the common case cleanly.
+
+---
+
+## Appendix B.2: Worked Example — Potkay GOSM (Carbon-Water-Turgor Coupling)
+
+See `mock_potkay.myco` for the full mock implementation of Potkay & Feng (2023),
+"Do stomata optimize turgor-driven growth?" This model stress-tests features
+beyond those exercised by the Sperry mock:
+
+- **Carbon-turgor coupling across timesteps**: NSC dynamics feed the Lockhart
+  growth equation, which feeds back into the carbon balance. The substrate
+  limitation functions (sigma_g, sigma_r) throttle both growth and respiration
+  based on NSC reserves.
+- **Library reuse**: imports `VulnerabilityCurve`, `SigmoidVC`,
+  `ConductingElement`, `XylemSegment` from `plant::hydraulics` and
+  `Photosynthesis`, `FarquharC3` from `plant::photosynthesis` — the same
+  contracts and implementations used in the Sperry mock.
+- **Piecewise registered functions**: `mean_turgor_excess` with
+  `differentiability: subgradient` annotation, exercising the conditional
+  expression system and differentiability metadata.
+- **Q10 temperature response**: an alternative to Arrhenius for maintenance
+  respiration, as a generic function `q10_response<U: Unit>`.
+- **Peaked Arrhenius with cold limit**: `extensibility_temperature` for the
+  cell wall extensibility, with a smooth sigmoid ramp to zero below 5C.
+- **Phloem osmotic potential**: computed from stem water potential via an
+  empirical phloem molality relation, creating an additional algebraic coupling
+  path between water status and turgor.
+- **GOH as slot training objective**: stomatal control is a slot; the growth
+  optimization hypothesis (maximize integral of G over lifetime) becomes the
+  training objective in the workflow layer, not a hardcoded optimality condition.
+
+**Candidate use of `integrate` (section 9.5):** The `mean_turgor_excess`
+registered function (Eqn 7 of the paper) hardcodes the analytical solution to a
+piecewise-linear integral. With `integrate`, this could be expressed directly:
+
+```myco
+G_0 = phi * (C_wood / u_s)
+    * integrate(max(P_apex + (P_base - P_apex) * z - turgor_threshold, 0), z, 0, 1)
+```
+
+The compiler would attempt symbolic resolution (the integrand is piecewise-
+linear, so a closed form exists) and fall back to numerical quadrature if
+needed.
+
+**Candidate use of `deriv` (section 9.5):** The paper's optimality condition
+(Eqn 8) requires the marginal carbon cost of water: chi_w = dG/dE. In the mock,
+this is handled by the slot mechanism (the slot is trained to maximize growth,
+and the optimality condition emerges from training). For models that use
+analytical optimality rules (e.g., Potkay et al. 2021, THORP), `deriv` would
+express the marginal gain directly:
+
+```myco
+let dA_dgs = deriv(gas.photo.assimilation, gas.g_s)
+let dE_dgs = deriv(hydraulics.transpiration, gas.g_s)
+marginal_carbon_cost_of_water = dA_dgs / dE_dgs
+```
 
 ---
 
