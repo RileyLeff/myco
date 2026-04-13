@@ -485,13 +485,17 @@ outputs (e.g., `photo.assimilation`) are then accessible as fields. If not all
 inputs are wired, the compiler errors. Wiring and explicit call syntax may not
 be mixed for the same contract instance.
 
-**Disambiguating wiring from constraining.** Only equalities (`=`) on contract
-inputs constitute wiring. An inequality or logical predicate referencing a
-contract input (e.g., `photo.temperature >= 0 K`) is a **constraint on the
-bound value**, not a wiring statement — it restricts the quantity that was wired
-to the input, but does not itself establish the wiring. This means the presence
-of `photo.temperature >= 0 K` alone does not satisfy the requirement that the
-input be wired; an equality is still needed.
+**Disambiguating wiring from constraining.** Only bare equalities on contract
+input fields constitute wiring (e.g., `photo.temperature = leaf_temp`). An
+inequality or logical predicate referencing a contract input (e.g.,
+`photo.temperature >= 0 K`) is a **constraint on the bound value**, not a wiring
+statement — it restricts the quantity that was wired to the input, but does not
+itself establish the wiring. Functional invocation (`vc(water_potential).plc`)
+is also not wiring — each call creates a fresh anonymous scope, binds the
+input within that scope, and returns a value. The contract instance's inputs
+remain unwired in the graph. This means a node can invoke the same contract
+instance at multiple operating points (e.g., `vc(current_pressure).plc` and
+`vc(historical_min_pressure).plc`) without conflict.
 
 **Wired vs. invoked semantics for intermediates.** When a contract is wired,
 its internal intermediate variables (e.g., FarquharC3's `j_c`, `j_e`,
@@ -1137,9 +1141,11 @@ assignment operator in Myco. The compiler may solve in either direction.
 within the enclosing body (node, relation, constraint, temporal, or function).
 `let` has lexical scope — all names visible at the binding site are in scope,
 including the enclosing node's fields, contract inputs (if inside a contract
-implementation), and earlier `let` bindings. A `let` binding does **not**
-introduce a new quantity in the model graph; it is purely a readability
-mechanism that the compiler inlines during flattening.
+implementation), and earlier `let` bindings. In module-scope relation bodies,
+`let` bindings can access root node fields via the same paths available to the
+relation itself (e.g., `let u = atm.wind_speed.value_in(m_s)`). A `let`
+binding does **not** introduce a new quantity in the model graph; it is purely a
+readability mechanism that the compiler inlines during flattening.
 
 #### 5.3 Examples
 
@@ -1420,6 +1426,11 @@ temporal quantity — the compiler errors if more than one is provided:
   graph at t=0
 - `assume_initial` in Python: value supplied externally as data
 - `learn_initial` in Python: value optimized during training
+
+If none of the three is provided for a temporal quantity, the planner adds it
+to the resolution frontier as an unresolved initial condition. The compiler
+errors with a diagnostic listing the temporal quantities that lack
+initialization and the available mechanisms to provide it.
 
 This pattern enables irreversible cavitation tracking: the worst pressure ever
 experienced becomes a permanent ceiling on future conductance, enforced via
