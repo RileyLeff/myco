@@ -386,6 +386,14 @@ The same contract instance can be invoked at different argument values because
 inputs are formal parameters, not graph quantities. There is no implicit
 "current context" binding.
 
+Each invocation inlines the contract's output relations as a fresh anonymous
+scope — `vc(p1).plc` and `vc(p2).plc` produce two independent expressions
+with no shared intermediate variables, even if the contract's implementation
+uses internal intermediates. The flattener expands each call site into its own
+subexpression. This means contracts with internal variables (like FarquharC3's
+`j_c` and `j_e`) are safe to invoke multiple times — each invocation gets its
+own copies of those intermediates.
+
 **Named arguments.** For single-input contracts, positional invocation is
 natural: `vc(pressure).plc`. For multi-input contracts, named arguments are
 supported:
@@ -683,6 +691,24 @@ automatic conversion to Kelvin; the result has dimension Θ² in absolute units.
 Addition and subtraction of two affine quantities is permitted (the offsets
 cancel for subtraction, producing a temperature *difference* which is purely
 multiplicative).
+
+**Escape hatch for empirical equations.** Many empirical equations in the
+scientific literature expect raw numeric values in a specific unit (e.g., Buck's
+saturated vapor pressure equation expects a Celsius float, Q10 temperature
+responses expect a Celsius difference). The `value_in(unit)` primitive extracts
+a dimensionless scalar representing the quantity's value in the requested unit:
+
+```myco
+let t_c = temperature.value_in(degC)    // dimensionless float in Celsius
+let svp = 0.61121 * exp((18.678 - t_c / 234.5) * t_c / (257.14 + t_c))
+```
+
+`value_in` is the only way to exit the dimension system. It strips the
+dimension entirely — the result is `Scalar<ratio>` (dimensionless). This is
+intentionally explicit: it forces the user to name which unit scale the
+empirical equation was calibrated for. Without `value_in`, empirical equations
+that depend on a specific unit scale (not just a dimension) cannot be written,
+since the compiler stores all quantities in base units internally.
 
 Affine transforms also cover other offset-based systems (Fahrenheit, gauge
 pressure vs absolute pressure).
@@ -1270,10 +1296,14 @@ slot stomatal_control provides [stomata]:
 ```
 
 The slot declares what it provides and what it needs. The `[*]` wildcard means
-"all quantities reachable from the slot's outputs via backward traversal of
-the model's relation graph, excluding the slot's own outputs." This is the
-slot's **structural interface** — it is determined from the model structure
-alone and is invariant across experiments.
+"all quantities structurally reachable from the slot's outputs via the model's
+relation graph, excluding the slot's own outputs." Reachability is undirected —
+it traverses the relation graph as an undirected constraint graph, not a causal
+DAG. This means `[*]` may resolve to a large set (potentially all quantities in
+a connected component), which is intentional: the neural network receives a
+superset and learns to weight relevant inputs. This is the slot's **structural
+interface** — it is determined from the model structure alone and is invariant
+across experiments.
 
 The structural interface is resolved once at model load time, not per-experiment.
 This is critical for shared controllers in multi-experiment training (section
@@ -1644,6 +1674,15 @@ world model's expression graph.
   `deriv(photo.assimilation, gas.g_s)` differentiates through the Farquhar
   A-Ci SCC, which the compiler handles by applying the implicit function
   theorem to the SCC's equation system.
+- **`deriv` through SCCs is not fully symbolic.** The implicit function theorem
+  requires the Jacobian of the SCC's equation system. For small SCCs (e.g.,
+  the 2×2 Farquhar A-Ci system), the compiler can invert the Jacobian
+  symbolically and produce a compile-time expression. For larger SCCs (e.g.,
+  an N-segment hydraulic network), symbolic Jacobian inversion is
+  intractable. In these cases, the compiler emits a runtime autodiff call
+  (`jax.jacfwd` over the `custom_root` solver) rather than a symbolic
+  expression. The compilation plan (section 14.5) reports which `deriv`
+  expressions were resolved symbolically and which require runtime AD.
 - `deriv` **cannot** differentiate through slots (slots are opaque) or through
   underdetermined residual blocks (where the system is not closed).
 - `integrate` cannot integrate over model structure (e.g., "integrate over all
@@ -2202,6 +2241,16 @@ The emitter uses differentiability metadata from the operation algebra to:
 - Warn about fragile gradient paths
 - Reject `train`-mode plans with non-differentiable canonical paths
 
+**Heterogeneous collections and vectorization.** Monomorphized `dyn` arrays
+(section 2.5) are flattened into structurally distinct leaves in the JAX
+pytree. For small heterogeneous collections (e.g., N=2 sun/shade canopy layers
+with different photosynthesis implementations), this is fine. For large
+collections (N >> 10), the unrolled graph may cause slow JAX compilation and
+lose `vmap` vectorization benefits. Users modeling large ecosystems with many
+structurally identical individuals should prefer homogeneous generics (e.g.,
+`Canopy<N, FarquharC3>`) where possible, which the emitter can vectorize
+efficiently.
+
 **Long rollout stability.** For temporal rollouts, the emitter supports
 gradient checkpointing via `jax.checkpoint` on the scan function to trade
 compute for memory. Truncated backpropagation through time (limiting the
@@ -2225,11 +2274,12 @@ The interface requires:
 - Emit parameter initialization
 - Emit numerical quadrature calls for unresolved `integrate` expressions
 
-Note that `deriv` does not appear in the backend interface. `deriv` is fully
-resolved at compile time to a concrete expression via symbolic chain-rule
-expansion — the backend never sees it. Only `integrate` may require a runtime
-primitive (numerical quadrature) from the backend, and only when symbolic
-resolution fails.
+`deriv` through acyclic paths is fully resolved at compile time — the backend
+never sees it. However, `deriv` through large SCCs may require runtime
+autodiff (section 9.5), in which case the backend must support differentiation
+through its solver primitive (e.g., `jax.jacfwd` over `custom_root` for JAX).
+`integrate` may require a runtime primitive (numerical quadrature) when
+symbolic resolution fails.
 
 The JAX backend is the primary implementation for v2. Other backends are
 specified here for interface design but implemented post-v2.
@@ -2616,7 +2666,30 @@ experiment.bind_slot("stomatal_control", "sperry/controllers/gain_risk")
 experiment.assume_series("stomata", observed_stomata_data)
 ```
 
-#### 15.5 Path-based binding
+#### 15.5 Slot metadata
+
+Slots operate on continuous physical quantities from the model graph. Some
+controller architectures also need discrete, experiment-level metadata that has
+no representation in the `.myco` world model — for example, a taxonomic
+identifier for FiLM conditioning, a site index, or a categorical treatment
+label.
+
+```python
+experiment.bind_slot_metadata("stomatal_control", {
+    "taxon_id": 4,              # integer index for FiLM embedding
+    "site_elevation": 1200.0,   # auxiliary float not in the model graph
+})
+```
+
+Slot metadata is concatenated with the slot's structural inputs before being
+passed to the controller. The metadata values are not quantities in the model
+graph — they carry no units, no dimensions, and no constraints. They are
+opaque scalars passed through to the controller's input vector.
+
+This keeps the `.myco` world model purely physical while allowing controllers
+to condition on discrete or auxiliary information that varies per experiment.
+
+#### 15.6 Path-based binding
 
 All binding operations accept paths with wildcards:
 
@@ -2627,7 +2700,7 @@ experiment.observe_sparse("canopy.leaves[*].water", steps)
 
 Wildcards expand to all matching instances in the flattened graph.
 
-#### 15.6 Unit validation
+#### 15.7 Unit validation
 
 The binding layer validates that supplied data matches the expected units
 declared in the world model. Mismatched units produce a diagnostic. Convertible
