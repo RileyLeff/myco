@@ -1,6 +1,6 @@
 // ============================================================================
 // Sperry et al. (2017) Gain-Risk Hydraulic-Stomatal Model
-// Mock v2 Myco implementation — NOT executable, for spec stress-testing
+// Mock v2 Myco implementation for spec stress-testing
 //
 // Design principles:
 // - Represent the actual physics, not the numerical algorithms

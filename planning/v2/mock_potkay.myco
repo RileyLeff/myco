@@ -1,0 +1,630 @@
+// ============================================================================
+// Potkay & Feng (2023) Growth-Optimizing Stomatal Model (GOSM)
+// Mock v2 Myco implementation for spec stress-testing
+//
+// "Do stomata optimize turgor-driven growth?"
+// New Phytologist (2023) 238: 506–528
+//
+// Design principles:
+// - Carbon-water coupling through turgor and osmotic potential
+// - NSC dynamics as temporal state with substrate limitation
+// - Turgor-driven Lockhart growth equation
+// - Stomatal control as a slot (the GOH criterion = training objective)
+// - Library reuse: imports VulnerabilityCurve, Photosynthesis from Sperry
+// - Simpler hydraulic catena than Sperry (single soil, no canopy layers)
+// - Different temperature responses (Q10 for respiration, peaked for growth)
+// - Tests carbon-water-turgor algebraic coupling across timesteps
+// ============================================================================
+
+module plant::potkay_gosm
+
+// ============================================================================
+// Imports: shared library modules
+//
+// In a real setup, these come from library packages. The Sperry mock and
+// this mock both use the same contracts and implementations, demonstrating
+// the library reuse story.
+// ============================================================================
+
+use plant::hydraulics::{
+    VulnerabilityCurve,
+    SigmoidVC,
+    ConductingElement,
+    XylemSegment,
+}
+
+use plant::photosynthesis::{
+    Photosynthesis,
+    FarquharC3,
+    rubisco_limited,
+    electron_transport_limited,
+    electron_transport_rate,
+    collatz_smooth_min,
+    arrhenius,
+    peaked_arrhenius,
+    saturated_vapor_pressure,
+}
+
+use physics::constants::{
+    stefan_boltzmann,
+    specific_heat_air,
+    gas_constant,           // R = 8.314 J mol⁻¹ K⁻¹
+    gravity,                // g = 9.81 m s⁻²
+    water_density,          // ρ = 998 kg m⁻³
+}
+
+use units::si::{
+    megapascal as MPa,
+    kilopascal as kPa,
+    pascal as Pa,
+    celsius as degC,
+    kelvin as K,
+    watt_per_square_meter as W_m2,
+    mole_per_square_meter_second as mol_m2_s,
+    micromole_per_square_meter_second as umol_m2_s,
+    mole_per_second as mol_s,
+    mole_carbon as mol_C,
+    mole_carbon_per_second as mol_C_s,
+    joule_per_mole as J_mol,
+    meter as m,
+    meter_squared as m2,
+    seconds as s,
+    ratio,
+    megapascal_per_second_inverse as MPa_s_inv,
+}
+
+
+// ============================================================================
+// Types (new types specific to this model)
+// ============================================================================
+
+use plant::hydraulics::{
+    WaterPotential,
+    HydraulicConductance,
+    TranspirationRate,
+}
+
+use plant::photosynthesis::{
+    CarbonFlux,
+    Temperature,
+    Pressure,
+    Conductance,
+    Fraction,
+    PositiveScalar,
+}
+
+pub type GrowthRate : Scalar<mol_C_s> {
+    self >= 0
+}
+
+pub type CarbonPool : Scalar<mol_C> {
+    self >= 0
+}
+
+pub type LeafArea : Scalar<m2> {
+    self > 0
+}
+
+pub type Height : Scalar<m> {
+    self > 0
+}
+
+pub type Extensibility : Scalar<MPa_s_inv> {
+    self >= 0
+}
+
+
+// ============================================================================
+// Registered functions (new for this model)
+// ============================================================================
+
+// NSC substrate limitation (Eqn 5, 6)
+// Smooth sigmoid: approaches 0 when C is small, 1 when C is large.
+// γ controls the half-saturation point relative to structural biomass.
+pub fn substrate_limitation(
+    C: CarbonPool,
+    gamma: PositiveScalar,
+    C_struct: CarbonPool,
+) -> Fraction {
+    invertibility: injective_restricted
+    differentiability: smooth
+    domain: C >= 0 and C_struct > 0
+
+    C / (C + gamma * C_struct)
+}
+
+// Q10 temperature response for maintenance respiration
+// Simpler than Arrhenius — appropriate when empirical Q10 is available.
+pub fn q10_response<U: Unit>(
+    value_ref: Scalar<U>,
+    q10: PositiveScalar,
+    temperature: Temperature,
+    T_ref: Temperature,
+) -> Scalar<U> {
+    invertibility: bijective
+    differentiability: smooth
+
+    value_ref * q10 ** ((temperature - T_ref) / 10)
+}
+
+// Temperature-dependent cell wall extensibility (Table 3, φ̄)
+// Following Johnson et al. (1942) / Parent et al. (2010),
+// modified so extensibility → 0 as temperature → 5°C.
+pub fn extensibility_temperature(
+    phi_25: Extensibility,
+    temperature: Temperature,
+) -> Extensibility {
+    invertibility: lossy
+    differentiability: smooth
+
+    // Compiler handles degC → K via affine conversion
+    let T_opt = 298.15 K                     // optimal temperature for growth
+    let H_a = 63000 J_mol                    // activation energy
+    let H_d = 200000 J_mol                   // deactivation energy
+    let S_v = 650 J_mol                      // entropy factor
+    let R = 8.314 J_mol_K
+    let cold_limit = 278.15 K               // 5°C — growth ceases below this
+
+    let arrhenius_factor = exp(H_a * (temperature - T_opt) / (R * T_opt * temperature))
+    let high_T_inhibition = (1 + exp((S_v * T_opt - H_d) / (R * T_opt)))
+        / (1 + exp((S_v * temperature - H_d) / (R * temperature)))
+
+    // Smooth ramp to zero below 5°C
+    let cold_factor = 1 / (1 + exp(-2 * (temperature - cold_limit)))
+
+    phi_25 * arrhenius_factor * high_T_inhibition * cold_factor
+}
+
+// Mean turgor excess along the stem (Eqn 7 integral)
+// Integrates max(P₀(z̄) - Γ, 0) from z̄=0 (apex) to z̄=1 (base),
+// where P₀ varies linearly with z̄ due to the gravity gradient.
+// Analytical solution of the piecewise-linear integral.
+pub fn mean_turgor_excess(
+    P_base: WaterPotential,     // turgor at base of stem (z̄ = 1)
+    P_apex: WaterPotential,     // turgor at apex of stem (z̄ = 0)
+    turgor_threshold: WaterPotential,   // Γ
+) -> WaterPotential {
+    invertibility: lossy
+    differentiability: subgradient
+
+    // P₀(z̄) = P_apex + (P_base - P_apex) · z̄  (linear gradient)
+    // Integral of max(P₀ - Γ, 0) from 0 to 1
+    if P_apex >= turgor_threshold and P_base >= turgor_threshold then
+        // Entire stem above threshold
+        (P_apex + P_base) / 2 - turgor_threshold
+    else if P_apex >= turgor_threshold and P_base < turgor_threshold then
+        // Partial — only upper portion growing
+        let z_crit = (turgor_threshold - P_apex) / (P_base - P_apex)
+        (P_apex - turgor_threshold) ** 2 / (2 * (P_apex - P_base))
+    else if P_apex < turgor_threshold and P_base >= turgor_threshold then
+        // Partial — only lower portion growing
+        let z_crit = (turgor_threshold - P_apex) / (P_base - P_apex)
+        (P_base - turgor_threshold) ** 2 / (2 * (P_base - P_apex))
+    else
+        // No growth — entire stem below threshold
+        0
+}
+
+
+// ============================================================================
+// Nodes: Atmosphere
+// ============================================================================
+
+node Atmosphere {
+    co2: Pressure                      // atmospheric CO2 (~40 Pa)
+    o2: Pressure                       // atmospheric O2 (~21000 Pa)
+    temperature: Temperature           // air temperature
+    rh: Fraction                       // relative humidity
+    pressure: Scalar<kPa>             // atmospheric pressure (~101.3)
+    insolation: Scalar<W_m2>          // incoming solar radiation
+    wind_speed: Scalar<m_s>           // wind speed
+    solar_elevation: Scalar<ratio>     // solar elevation angle (rad) (Table 3: Phi)
+    psi_soil: WaterPotential           // soil water potential (single layer)
+    min_psi_soil: WaterPotential       // drought memory: worst soil ψ experienced
+}
+
+
+// ============================================================================
+// Nodes: Tree Structure (allometric parameters)
+//
+// These are treated as rollout-stable or slowly-varying parameters.
+// In a full growth model they would be temporal state; here they are
+// assumed constant following the paper's "large, mature tree" assumption.
+// ============================================================================
+
+node TreeStructure {
+    leaf_area: LeafArea                // a_t — total leaf area (m²)
+    height: Height                     // H — stem height (m)
+    rooting_depth: Height              // Z — rooting depth (m)
+    canopy_width: Height               // W — canopy width (m)
+    C_struct: CarbonPool               // whole-tree structural biomass (mol C)
+    C_wood: CarbonPool                 // aboveground stem wood biomass (mol C)
+
+    // Gravity-induced water potential drop along the stem
+    // ρgH ≈ 0.01 MPa per meter of height
+    gravity_drop: WaterPotential
+    gravity_drop = water_density * gravity * height
+}
+
+
+// ============================================================================
+// Nodes: Leaf Properties
+// ============================================================================
+
+node LeafProperties {
+    emissivity: Fraction               // longwave emissivity (~0.97)
+    absorptance: Fraction              // shortwave absorptance (~0.5)
+    width: PositiveScalar              // leaf width (m), for boundary layer
+    kappa: PositiveScalar              // quantum yield (mol photon J⁻¹, Table 3: 6.9e-7)
+}
+
+
+// ============================================================================
+// Nodes: Hydraulic Catena
+//
+// Soil → Root → Stem → Leaf, each segment with its own SigmoidVC.
+// Uses ConductingElement<SigmoidVC> for the conductance computation.
+// Junction water potentials are solved by the planner's SCC detection.
+//
+// Compared to Sperry mock: single soil layer, no multi-layer roots,
+// but each segment has distinct VC parameters (different P50, slope).
+// ============================================================================
+
+node HydraulicCatena {
+    // Three conducting segments, each with SigmoidVC
+    // The VC parameters (p50, slope) differ per segment
+    root_soil: ConductingElement<SigmoidVC>     // k_R, vc at ψ_soil
+    stem: XylemSegment<SigmoidVC>               // k_S, vc at ψ_S, with cavitation
+    leaf: XylemSegment<SigmoidVC>               // k_L, vc at ψ_L, with cavitation
+
+    // Internal junction pressure (solved by planner)
+    psi_root_junction: WaterPotential
+
+    // Whole-tree transpiration rate
+    transpiration: TranspirationRate
+}
+
+
+// ============================================================================
+// Nodes: Gas Exchange
+//
+// Stomatal and boundary layer conductance, Farquhar photosynthesis.
+// The Photosynthesis contract is imported from the library — same
+// FarquharC3 implementation used in the Sperry mock.
+// ============================================================================
+
+node GasExchange<P: Photosynthesis> {
+    photo: P
+
+    g_s: Conductance                   // stomatal conductance (from slot)
+    g_b: Conductance                   // boundary layer conductance
+    g_c: Conductance                   // total CO2 conductance (series)
+    g_w: Conductance                   // water vapor conductance
+
+    leaf_temperature: Temperature
+    leaf_vpd: Scalar<kPa>
+    leaf_water_potential: WaterPotential // downstream endpoint of leaf hydraulic segment
+
+    // Transpiration per unit leaf area
+    E_leaf: TranspirationRate
+
+    // Series conductance: stomata + boundary layer
+    g_c = g_s * g_b / (g_s + g_b)
+
+    // Water vapor conductance (1.6× CO2 for diffusivity ratio)
+    g_w = 1.6 * g_c
+
+    // Leaf-area-specific transpiration
+    E_leaf = g_w * leaf_vpd
+
+    // CO2 conductance wired to photosynthesis contract input
+    constraint co2_conductance:
+        photo.g_c = g_c
+}
+
+
+// ============================================================================
+// Nodes: Carbon Balance
+//
+// Whole-tree NSC pool with source-sink dynamics.
+// Carbon in = photosynthetic assimilation.
+// Carbon out = maintenance respiration + growth + growth respiration.
+// NSC substrate limitation throttles both growth and respiration when
+// reserves are low.
+//
+// Eqn 2: dC/dt = a_t · A_n - R_M - R_G - G
+// ============================================================================
+
+node CarbonBalance {
+    // NSC storage — the key temporal state variable
+    C: CarbonPool
+
+    // Carbon fluxes
+    assimilation_total: GrowthRate     // a_t · A_n (whole-tree GPP)
+    R_M: GrowthRate                    // maintenance respiration
+    R_G: GrowthRate                    // growth respiration
+    growth: GrowthRate                 // G (structural growth rate)
+
+    // Substrate limitation
+    sigma_g: Fraction                  // σ_g(C) — growth limitation
+    sigma_r: Fraction                  // σ_r(C) — respiration limitation
+    gamma_g: PositiveScalar            // shape parameter for σ_g (~0.26)
+    gamma_r: PositiveScalar            // shape parameter for σ_r (~0.38)
+
+    // Maintenance respiration parameters
+    R_M_25: GrowthRate                 // R_M,0 at 25°C
+    q10_respiration: PositiveScalar    // Q10 for maintenance respiration
+
+    // Growth respiration fraction
+    f_c: Fraction                      // fraction of GPP to growth resp (~0.28)
+
+    // Growth respiration is proportional to growth (Eqn 2 text)
+    R_G = growth * f_c / (1 - f_c)
+}
+
+
+// ============================================================================
+// Nodes: Turgor-Driven Growth
+//
+// The Lockhart equation: growth depends on turgor excess above a
+// threshold, modulated by cell wall extensibility and NSC substrate
+// limitation.
+//
+// Eqn 3: G = σ_g(C) · G_0
+// Eqn 7: G_0 = φ̄ · (C_W / w_S) · ∫max(P₀(z̄) - Γ, 0) dz̄
+// ============================================================================
+
+node TurgorGrowth {
+    // Turgor computation
+    psi_stem: WaterPotential           // stem water potential (from hydraulics)
+    osmotic_potential: WaterPotential   // π (from phloem sap molality)
+
+    // Phloem sap molality parameters (Table 3)
+    c_m1: PositiveScalar               // intercept (~0.48 mol kg⁻¹)
+    c_m2: PositiveScalar               // slope (~0.13 mol kg⁻¹ MPa⁻¹)
+    c_pi1: PositiveScalar              // linear osmotic coefficient (~0.998)
+    c_pi2: PositiveScalar              // quadratic osmotic coefficient (~0.089)
+
+    // Phloem sap molality: m_p = c_m1 - c_m2 · ψ_S
+    // (empirical, Paljakka et al. 2017)
+    phloem_molality: PositiveScalar
+    phloem_molality = c_m1 - c_m2 * psi_stem
+
+    // Osmotic potential from phloem molality
+    // π = -m̄ · ρ · R · T · (c_Π1 · m_p + c_Π2 · m_p²)
+    // where m̄ = 10⁻⁶ MPa Pa⁻¹ (unit conversion factor)
+    osmotic_potential = -1e-6 * water_density * gas_constant * temperature
+        * (c_pi1 * phloem_molality + c_pi2 * phloem_molality ** 2)
+
+    temperature: Temperature           // for osmotic potential and extensibility
+
+    // Turgor at stem base and apex
+    turgor_base: WaterPotential        // P at base = ψ_stem - π
+    turgor_apex: WaterPotential        // P at apex = ψ_stem - gravity_drop - π
+
+    turgor_base = psi_stem - osmotic_potential
+    turgor_apex = psi_stem - gravity_drop - osmotic_potential
+
+    gravity_drop: WaterPotential       // from tree structure
+
+    // Growth threshold and extensibility
+    turgor_threshold: WaterPotential   // Γ (~0.75 MPa)
+    phi_25: Extensibility              // φ̄ at 25°C
+    phi: Extensibility                 // temperature-adjusted φ̄
+
+    phi = extensibility_temperature(phi_25, temperature)
+
+    // Potential growth rate G_0 (Eqn 7)
+    // G_0 = φ̄ · (C_W / w_S) · mean_turgor_excess
+    // where w_S = stem carbon density per unit normalized height
+    G_0: GrowthRate
+    C_wood: CarbonPool                 // from tree structure
+    u_s: Fraction                      // fraction of new growth to stems (~0.25)
+
+    G_0 = phi * (C_wood / u_s) * mean_turgor_excess(turgor_base, turgor_apex, turgor_threshold)
+}
+
+
+// ============================================================================
+// Top-level model
+// ============================================================================
+
+pub node PotkayTree<P: Photosynthesis> {
+    atm: Atmosphere
+    structure: TreeStructure
+    leaf_props: LeafProperties
+    hydraulics: HydraulicCatena
+    gas: GasExchange<P>
+    carbon: CarbonBalance
+    turgor: TurgorGrowth
+
+    // Simulation timestep
+    dt: Scalar<s>
+}
+
+
+// ============================================================================
+// Relations: Hydraulics (the planner finds the SCC)
+//
+// The flow-pressure-conductance system forms an algebraic loop:
+// flow depends on conductance, conductance depends on pressure,
+// pressure depends on flow. Same structure as Sperry, simpler catena.
+//
+// Potkay uses per-leaf-area k_L but whole-tree k_R, k_S.
+// Total E = k_R·(ψ_soil - ψ_R) = k_S·(ψ_R - ψ_S - ρgH) = a_t·k_L·(ψ_S - ψ_L)
+// ============================================================================
+
+// Root-soil segment VC evaluated at soil water potential
+relation root_vc_pressure:
+    hydraulics.root_soil.water_potential = atm.psi_soil
+
+// Stem VC evaluated at stem water potential
+relation stem_vc_pressure:
+    hydraulics.stem.core.water_potential = turgor.psi_stem
+
+// Leaf VC evaluated at leaf water potential
+relation leaf_vc_pressure:
+    hydraulics.leaf.core.water_potential = gas.leaf_water_potential
+
+// Where leaf water potential lives on the gas exchange node
+// (it's the downstream endpoint of the leaf segment)
+
+// Root-soil flow: soil to root junction
+relation root_flow:
+    hydraulics.transpiration =
+        hydraulics.root_soil.conductance
+        * (atm.psi_soil - hydraulics.psi_root_junction)
+
+// Stem flow: root junction to stem
+relation stem_flow:
+    hydraulics.transpiration =
+        hydraulics.stem.core.conductance
+        * (hydraulics.psi_root_junction - turgor.psi_stem - structure.gravity_drop)
+
+// Leaf flow: stem to leaf (scaled by leaf area)
+relation leaf_flow:
+    hydraulics.transpiration =
+        structure.leaf_area * hydraulics.leaf.core.conductance
+        * (turgor.psi_stem - hydraulics.leaf.core.water_potential)
+
+// Whole-tree transpiration = leaf-area × leaf-specific transpiration
+relation transpiration_scaling:
+    hydraulics.transpiration = structure.leaf_area * gas.E_leaf
+
+
+// ============================================================================
+// Relations: Photosynthesis inputs
+//
+// Wire the Photosynthesis contract inputs via the wiring pattern.
+// FarquharC3 is imported from the library — same implementation as Sperry.
+// ============================================================================
+
+relation photo_temperature:
+    gas.photo.temperature = gas.leaf_temperature
+
+relation photo_par:
+    gas.photo.par = leaf_props.kappa * atm.insolation * leaf_props.absorptance
+
+relation photo_co2:
+    gas.photo.co2 = atm.co2
+
+relation photo_o2:
+    gas.photo.o2 = atm.o2
+
+relation photo_pressure:
+    gas.photo.atm_pressure = atm.pressure
+
+
+// ============================================================================
+// Relations: Leaf Energy Balance
+//
+// T_leaf depends on E (latent heat), E depends on D_leaf (leaf VPD),
+// D_leaf depends on T_leaf (saturation vapor pressure).
+// The planner discovers this SCC and emits a solver.
+// Same structure as Sperry, simplified for single canopy.
+// ============================================================================
+
+relation energy_balance:
+    let g_ha = 1.4 * 0.135 * sqrt(atm.wind_speed / (leaf_props.width * 0.72))
+    let g_r = 0.1579 + 0.0017 * atm.temperature + 7.17e-6 * atm.temperature ** 2
+    gas.leaf_temperature =
+        atm.temperature
+        + (atm.insolation * leaf_props.absorptance
+           - leaf_props.emissivity * stefan_boltzmann * atm.temperature ** 4
+           - 44100 * gas.E_leaf)
+          / (specific_heat_air * (g_r + g_ha))
+
+relation leaf_vpd:
+    let e_sat_leaf = saturated_vapor_pressure(gas.leaf_temperature)
+    let e_sat_air = saturated_vapor_pressure(atm.temperature)
+    let e_air = e_sat_air * atm.rh
+    gas.leaf_vpd = e_sat_leaf - e_air
+
+// Boundary layer conductance (Table 3: g_b = 2.4 mol m⁻² s⁻¹, treated as constant)
+relation boundary_layer:
+    gas.g_b = 2.4
+
+
+// ============================================================================
+// Relations: Carbon-Turgor Coupling
+//
+// Connects the carbon balance to the turgor growth computation.
+// This is the key new coupling that doesn't exist in the Sperry mock.
+// ============================================================================
+
+// Substrate limitation from NSC pool (Eqn 5, 6)
+relation growth_limitation:
+    carbon.sigma_g = substrate_limitation(carbon.C, carbon.gamma_g, structure.C_struct)
+
+relation respiration_limitation:
+    carbon.sigma_r = substrate_limitation(carbon.C, carbon.gamma_r, structure.C_struct)
+
+// Wire turgor growth inputs
+relation turgor_stem_pressure:
+    turgor.psi_stem = hydraulics.stem.core.water_potential
+
+relation turgor_temperature:
+    turgor.temperature = atm.temperature
+
+relation turgor_gravity:
+    turgor.gravity_drop = structure.gravity_drop
+
+relation turgor_wood:
+    turgor.C_wood = structure.C_wood
+
+// Actual growth = potential growth × substrate limitation (Eqn 3)
+relation actual_growth:
+    carbon.growth = carbon.sigma_g * turgor.G_0
+
+// NSC-limited maintenance respiration with Q10 temperature response (Eqn 4)
+relation maintenance_respiration:
+    carbon.R_M = carbon.sigma_r
+        * q10_response(carbon.R_M_25, carbon.q10_respiration, atm.temperature, 25)
+
+// Total assimilation = leaf area × leaf-specific A_n
+relation total_assimilation:
+    carbon.assimilation_total = structure.leaf_area * gas.photo.assimilation
+
+
+// ============================================================================
+// Slot: Stomatal Control
+//
+// The world model declares WHAT stomata depend on. The HOW is pluggable.
+// Under the GOH, the optimal g_s maximizes ∫G dt (Eqn 1).
+// In Myco, this means training the slot to maximize cumulative growth —
+// the GOH criterion becomes the training objective in the workflow layer.
+// ============================================================================
+
+slot stomatal_control provides [gas.g_s]:
+    inputs = [*]
+
+
+// ============================================================================
+// Temporal: State Evolution
+// ============================================================================
+
+// NSC dynamics: the core carbon balance equation (Eqn 2)
+// dC/dt = a_t · A_n - R_M - R_G - G
+temporal nsc_dynamics:
+    carbon.C[t+1] = carbon.C[t]
+        + dt * (carbon.assimilation_total[t]
+                - carbon.R_M[t]
+                - carbon.R_G[t]
+                - carbon.growth[t])
+
+// Irreversible cavitation: track worst pressure for stem and leaf
+temporal stem_cavitation:
+    hydraulics.stem.min_historical_pressure[t+1] =
+        min(hydraulics.stem.min_historical_pressure[t],
+            hydraulics.stem.core.water_potential[t])
+
+temporal leaf_cavitation:
+    hydraulics.leaf.min_historical_pressure[t+1] =
+        min(hydraulics.leaf.min_historical_pressure[t],
+            hydraulics.leaf.core.water_potential[t])
+
+// Track minimum soil water potential for root-soil conductance hysteresis
+// (the paper uses this for drought legacy effects, Fig 5)
+temporal soil_drought_memory:
+    atm.min_psi_soil[t+1] =
+        min(atm.min_psi_soil[t], atm.psi_soil[t])
