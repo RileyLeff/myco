@@ -30,31 +30,38 @@ of scope for v2. The supervised approach — train on observations, let the
 controller implicitly learn the behavior — is sufficient for the stated
 research plan and is simpler to implement correctly.
 
-## 2. The `deriv` SCC feedback ban is intentional
+## 2. `deriv` feedback into SCCs uses hierarchical decomposition
 
-Section 9.5 forbids `deriv(A, g_s)` from feeding back into the SCC that
-determines A and g_s. A previous reviewer argued this prevents expressing the
-Sperry gain-risk criterion natively:
+Section 9.5 allows `deriv(A, g_s)` to feed back into the SCC that determines
+A and g_s — but only when the compiler can **hierarchically decompose** the
+SCC into a nested inner/outer structure. This enables expressing optimality
+conditions like the Cowan-Farquhar criterion natively:
 
 ```myco
-// "You can't compile this without lifting the ban!"
-relation gain_risk:
-    deriv(total_assimilation, g_s) = theta * deriv(total_transpiration, g_s)
+relation optimality:
+    deriv(total_assimilation, g_s) = lambda * deriv(total_transpiration, g_s)
 ```
 
-This is a misunderstanding of the workflow. You don't need this relation in the
-`.myco` file because the stomatal controller is a **slot**, not a `deriv`-based
-optimality condition. To generate synthetic data from a baseline Sperry model,
-you provide a hand-coded Python function as the slot (implementing the
-gain-risk criterion externally) and run in simulate mode. The `.myco` file
-contains the physics; the heuristic lives outside it.
+The compiler detects that the physics equations (A-ci coupling, transpiration)
+form a closed inner system given `g_s`, and the optimality equation determines
+`g_s` using IFT derivatives of the inner solution. It emits a nested solver:
+inner Newton for physics, IFT at the boundary, outer root-find for `g_s`.
 
-The ban exists because `deriv` feedback into an SCC requires computing the
-Hessian of the SCC's equation system at every Newton iteration. While JAX can
-compute Hessians, this is tractable only for tiny SCCs (1-2 equations). For the
-general case — a 50-equation hydraulic network — it is genuinely
-intractable. The spec prioritizes a rule that is correct everywhere over one
-that works for special cases.
+This avoids computing the Hessian of the physics at every Newton step — the
+original concern that motivated the blanket ban in earlier spec drafts. The
+decomposition is purely mechanical (graph analysis on the SCC's incidence
+structure) and does not require domain knowledge from the user.
+
+If decomposition fails — because the physics and optimality equations are
+entangled (an equation both consumes a `deriv` result and determines a state
+variable) — the compiler errors with a diagnostic identifying the entangled
+equations. This is a narrow edge case, not the common pattern.
+
+For the Sperry/Potkay mocks, the slot mechanism is used instead of `deriv`
+optimality — the slot learns the optimal response surface from data. Both
+approaches are valid; `deriv` optimality is appropriate when the criterion is
+known analytically, while slots are appropriate when the criterion should be
+learned.
 
 ## 3. Shared controllers require structural identity (by design)
 
