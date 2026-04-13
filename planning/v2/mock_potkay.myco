@@ -618,9 +618,12 @@ relation total_assimilation:
 // Slot: Stomatal Control
 //
 // The world model declares WHAT stomata depend on. The HOW is pluggable.
-// Under the GOH, the optimal g_s maximizes ∫G dt (Eqn 1).
-// In Myco, this means training the slot to maximize cumulative growth —
-// the GOH criterion becomes the training objective in the workflow layer.
+// Under the GOH, the optimal g_s maximizes ∫G dt (Eqn 1). In Myco, the
+// slot replaces this heuristic: it is trained on observational data via
+// supervised loss, learning to reproduce observed stomatal behavior without
+// being told the optimization criterion. To generate synthetic training data
+// from a GOH baseline, provide a hand-coded Python function implementing
+// the GOH criterion as the slot and run in simulate mode.
 // ============================================================================
 
 slot stomatal_control provides [gas.g_s]:

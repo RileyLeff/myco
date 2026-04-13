@@ -33,6 +33,7 @@ use units::si::{
     meter as m,
     meter_per_second as m_s,
     seconds as s,
+    megapascal_cubic_meter_per_millimole as MPa_m3_mmol,
     ratio,
 }
 
@@ -88,7 +89,7 @@ pub contract VulnerabilityCurve {
     input pressure: WaterPotential
     output plc: Fraction
 
-    property monotone: increasing(pressure -> plc)
+    property monotone: decreasing(pressure -> plc)
 }
 
 // Photosynthesis: any model mapping environmental inputs + CO2 conductance
@@ -355,6 +356,11 @@ pub node XylemSegment<V: VulnerabilityCurve> {
     min_historical_pressure: WaterPotential
     max_conductance: HydraulicConductance
 
+    // The inequality enforces that conductance cannot exceed its historical
+    // maximum — this is the irreversibility mechanism. The constraint alone
+    // detects and clamps violations; the temporal update of
+    // min_historical_pressure (in the root node's temporal block) is what
+    // ratchets the limit over time.
     constraint irreversible_cavitation:
         core.conductance <= max_conductance
 
@@ -410,6 +416,12 @@ node SoilLayer {
     thickness: Scalar<m>           // layer depth
     root_fraction: Fraction        // fraction of root biomass in this layer
 
+    // Soil water storage capacity: converts molar flux divergence (mmol m⁻³ s⁻¹)
+    // to water potential change rate (MPa s⁻¹). This lumps the moisture retention
+    // slope dθ/dψ and the molar volume of water into a single parameter.
+    // A production model would compute this from the van Genuchten curve directly.
+    water_capacity: Scalar<MPa_m3_mmol>
+
     constraint thickness_positive: thickness > 0 m
 }
 
@@ -455,6 +467,7 @@ node LeafGasExchange<P: Photosynthesis> {
     photo: P
     leaf_temperature: Temperature
     leaf_vpd: Scalar<kPa>
+    transpiration: TranspirationRate
     g_w: Conductance               // diffusive conductance to water vapour
     g_w_max: Conductance           // maximum stomatal + boundary layer
 
@@ -515,13 +528,10 @@ pub root node SperryTree<
     total_transpiration: TranspirationRate
     total_assimilation: CarbonFlux
 
-    // Canopy-aggregate transpiration is LAI-weighted sum
+    // Canopy-aggregate transpiration
     constraint aggregate_transpiration:
         total_transpiration = sum(
-            radiation.layers[i].lai_fraction
-            * canopy_layers[i].g_w
-            * canopy_layers[i].leaf_vpd
-            / atm.pressure
+            canopy_layers[i].transpiration
             for i in 0..N_CANOPY
         )
 
@@ -600,11 +610,15 @@ relation leaf_flow:
         pathway.leaf.core.conductance
         * (pathway.stem_pressure - pathway.leaf.core.water_potential)
 
-// Transpiration from demand (per canopy layer)
+// Per-layer transpiration demand
 // VPD is in kPa; divide by atmospheric pressure to get mole fraction deficit
-relation demand_transpiration[i in 0..N_CANOPY]:
-    canopy_layers[i].g_w * canopy_layers[i].leaf_vpd / atm.pressure =
-        radiation.layers[i].lai_fraction * pathway.flow
+relation layer_transpiration[i in 0..N_CANOPY]:
+    canopy_layers[i].transpiration =
+        canopy_layers[i].g_w * canopy_layers[i].leaf_vpd / atm.pressure
+
+// Aggregate transpiration: total demand across canopy layers equals total flow
+relation aggregate_transpiration:
+    pathway.flow = sum(canopy_layers[i].transpiration for i in 0..N_CANOPY)
 
 
 // ============================================================================
@@ -645,7 +659,7 @@ relation energy_balance[i in 0..N_CANOPY]:
     // Radiative conductance: empirical polynomial, calibrated to degC
     let T_c = atm.temperature.value_in(degC)
     let g_r = (0.1579 + 0.0017 * T_c + 7.17e-6 * T_c ** 2) mol_m2_s
-    let e_layer = radiation.layers[i].lai_fraction * pathway.flow
+    let e_layer = canopy_layers[i].transpiration
     // Compiler handles degC → K for Stefan-Boltzmann term (affine unit transform)
     canopy_layers[i].leaf_temperature =
         atm.temperature
@@ -693,7 +707,7 @@ temporal soil_water_step[j in 0..N_SOIL]:
     soil.layers[j].element.water_potential[t+1] =
         soil.layers[j].element.water_potential[t]
         + dt * (inflow_above - outflow_below + infiltration - extraction - drain)
-        / soil.layers[j].thickness
+        * soil.layers[j].water_capacity / soil.layers[j].thickness
 
 // Irreversible cavitation: track the worst pressure ever experienced.
 // Uses structural introspection to generate one temporal block per XylemSegment

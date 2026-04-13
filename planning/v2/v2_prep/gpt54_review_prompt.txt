@@ -1,3 +1,181 @@
+You are reviewing the complete design specification for Myco, a compiler for acausal scientific models. Myco separates world-description (.myco files) from experimental workflow (Python API), and compiles declarative scientific models into executable JAX code for simulation, training, and analysis.
+
+Below you will find:
+1. Notes for reviewers — context on design philosophy and common misunderstandings
+2. The soul document — the guiding principles behind every design decision
+3. The full v2 language specification
+4. Two mock implementations (Sperry hydraulics model, Potkay growth model) — these are the primary test cases for whether the spec's abstractions hold up
+5. The author's project note — explains the research use case Myco is being built for
+
+Review this specification for soundness. Find whatever you find — gaps, contradictions, underspecified areas, things that would force ad-hoc decisions during implementation, abstractions that don't hold up, semantic issues in the compiler pipeline, places where the spec says one thing and the mocks assume another, anything that concerns you.
+
+Pay particular attention to whether the end-to-end story holds: can a user actually write the models shown in the mocks, bind them with the Python API as described, and get correct compiled JAX output through the pipeline the spec describes? Where does that story break down or require decisions the spec doesn't make?
+
+================================================================================
+DOCUMENT 1: NOTES FOR REVIEWERS
+================================================================================
+
+# Notes for Reviewers
+
+These notes provide context that previous reviewers have found helpful. They
+cover design philosophy, intentional constraints, and areas where the spec's
+choices are motivated by the research use case in ways that aren't obvious from
+the documents alone.
+
+## 1. Slots replace heuristics — that's the whole point
+
+The core research vision (Document 5) is to replace teleological stomatal
+optimization heuristics (Sperry gain-risk, Potkay GOH) with neural controllers
+trained on observational data. The `slot` mechanism is how this works: the world
+model declares the physics, and the slot provides the control policy. The slot
+is trained by minimizing observation losses against real data — the controller
+learns to reproduce observed stomatal behavior without being told the
+optimization criterion.
+
+This means you will NOT find a way to express "maximize cumulative growth" or
+"solve the gain-risk first-order condition" in the workflow API. That's
+intentional. Those are the heuristics being replaced, not training objectives.
+The GOH comment in the Potkay mock ("the GOH criterion becomes the training
+objective") is aspirational shorthand — what it means is that the GOH's
+*predictions* become the synthetic training data, not that the workflow layer
+implements reward maximization.
+
+Previous reviewers have suggested adding `maximize(quantity)` or
+`slot_objective(reward=...)` to the workflow vocabulary. This would be a
+fundamentally different training paradigm (reinforcement learning) that is out
+of scope for v2. The supervised approach — train on observations, let the
+controller implicitly learn the behavior — is sufficient for the stated
+research plan and is simpler to implement correctly.
+
+## 2. The `deriv` SCC feedback ban is intentional
+
+Section 9.5 forbids `deriv(A, g_s)` from feeding back into the SCC that
+determines A and g_s. A previous reviewer argued this prevents expressing the
+Sperry gain-risk criterion natively:
+
+```myco
+// "You can't compile this without lifting the ban!"
+relation gain_risk:
+    deriv(total_assimilation, g_s) = theta * deriv(total_transpiration, g_s)
+```
+
+This is a misunderstanding of the workflow. You don't need this relation in the
+`.myco` file because the stomatal controller is a **slot**, not a `deriv`-based
+optimality condition. To generate synthetic data from a baseline Sperry model,
+you provide a hand-coded Python function as the slot (implementing the
+gain-risk criterion externally) and run in simulate mode. The `.myco` file
+contains the physics; the heuristic lives outside it.
+
+The ban exists because `deriv` feedback into an SCC requires computing the
+Hessian of the SCC's equation system at every Newton iteration. While JAX can
+compute Hessians, this is tractable only for tiny SCCs (1-2 equations). For the
+general case — a 50-equation hydraulic network — it is genuinely
+intractable. The spec prioritizes a rule that is correct everywhere over one
+that works for special cases.
+
+## 3. Shared controllers require structural identity (by design)
+
+Section 7.1 requires that all experiments sharing a controller use the same
+model instantiation. Previous reviewers have noted that this prevents sharing a
+controller across sites with different `N_SOIL` or `N_CANOPY`, and suggested
+element-wise (vectorized) slots where the controller operates per-element with
+a fixed input dimension.
+
+This is a good idea and may be added in a future version. The current strict
+rule is intentionally conservative: it guarantees that the controller's input
+vector has the same structure across experiments without requiring the compiler
+to prove equivalence of resolved input sets. Relaxing it is an optimization,
+not a correctness fix.
+
+For the stated research plan, the workaround is straightforward: use explicit
+`inputs = [list]` instead of `inputs = [*]`, choosing inputs that are
+structurally invariant across sites (e.g., leaf-level quantities rather than
+soil-layer arrays).
+
+## 4. Dimensional analysis through the unit system
+
+The unit system tracks dimension exponent vectors algebraically. A few points
+that have tripped up reviewers:
+
+- **Temperature differences are purely multiplicative.** Subtracting two
+  affine-unit quantities (e.g., `T1 - T2` where both are `degC`) produces a
+  temperature difference in the base unit (Kelvin). The affine offset cancels.
+  This means `(temperature - T_ref) / 10 K` is a valid dimensionless
+  expression — you do not need `value_in` for temperature differences.
+
+- **`value_in` is for empirical equations calibrated to specific unit scales**
+  (Buck equation, energy balance boundary layer conductance). It is the escape
+  hatch, not the default. If the physics works in the dimension system
+  directly, prefer that.
+
+- **The compiler stores everything in base SI units internally** (section 4.5).
+  When a quantity declared as `Scalar<MPa>` participates in an equation that
+  produces a result in Pa, the compiler handles the conversion automatically.
+  You will not find explicit conversion factors like `1e-6` in correctly
+  written models.
+
+- **`MPa_s_inv` in the Potkay mock means 1/(MPa*s)** — the Lockhart
+  extensibility has units of reciprocal pressure per time. This is an
+  admittedly confusing unit alias name; if it reads like MPa/s to you, that's
+  a naming issue, not a dimensional error.
+
+## 5. Mock simplifications
+
+The mocks are stress tests for the language spec, not production-ready models.
+Known simplifications:
+
+- **Soil water balance (Sperry):** The temporal equation updates water
+  potential directly from flow rates, which is dimensionally approximate. A
+  production model would track volumetric water content and use the moisture
+  retention curve. This is noted in the mock comments.
+
+- **Single soil layer (Potkay):** The paper models a single soil layer. This
+  is intentional — it tests a simpler hydraulic catena than Sperry while
+  exercising different features (carbon balance, turgor growth).
+
+- **Phloem osmotic coefficients (Potkay):** The empirical parameterization
+  from Paljakka et al. 2017 uses `value_in(MPa)` to extract a dimensionless
+  pressure value for the linear fit. This is the correct use of `value_in` —
+  the fit was calibrated to specific units.
+
+================================================================================
+DOCUMENT 2: THE SOUL OF MYCO
+================================================================================
+
+# The Soul of Myco
+
+Myco is a compiler that separates what is true about the world from how you use
+it.
+
+1. **The model is the science.** A `.myco` file should read like a description
+   of what relationships hold in reality — not like a program that computes
+   something. If you have to think about execution order while writing the
+   model, the abstraction is leaking.
+
+2. **The workflow is a separate concern.** What you assume, observe, and learn
+   is not a property of the world. It's a property of your experiment. The same
+   world supports many experiments.
+
+3. **The compiler does the work.** Causal ordering, solver selection, code
+   generation, algebraic inversion, loop detection — all of this is the
+   compiler's job. The user declares truth; the compiler figures out
+   computation.
+
+4. **Structure is the regularizer.** Overdetermined relations, constraints,
+   temporal dynamics, and cross-quantity coupling are not inconveniences to be
+   simplified away. They are the signal. The more structure the model encodes,
+   the less data you need.
+
+5. **Generated code is the product.** Myco emits ordinary source code, not a
+   hidden runtime. The user owns the output — they can inspect it, import it,
+   and run it with standard tools. But the source of truth is the `.myco` model
+   and the binding, not the generated artifact. Reproducibility comes from
+   recompilation, not from hand-editing outputs.
+
+================================================================================
+DOCUMENT 3: V2 LANGUAGE SPECIFICATION
+================================================================================
+
 # Myco V2 Language Specification
 
 This is the working specification for Myco V2. It covers the world-model
@@ -785,10 +963,7 @@ like `temperature * temperature` in an energy balance equation trigger
 automatic conversion to Kelvin; the result has dimension Θ² in absolute units.
 Addition and subtraction of two affine quantities is permitted (the offsets
 cancel for subtraction, producing a temperature *difference* which is purely
-multiplicative). Concretely: `T1 - T2` where both are `degC` produces a result
-typed in the base multiplicative unit (`K`), not `degC`. The affine offset
-cancels algebraically, yielding a quantity that can freely participate in
-multiplication and division.
+multiplicative).
 
 **Escape hatch for empirical equations.** Many empirical equations in the
 scientific literature expect raw numeric values in a specific unit (e.g., Buck's
@@ -1355,21 +1530,13 @@ A quantity that appears on the left-hand side of a temporal relation is
 automatically inferred as persistent (requires initial state in the workflow
 binding).
 
-**First-order only.** Temporal relations are restricted to first-order recurrences:
-only the subscripts `[t]` and `[t+1]` are permitted. Higher-order references
-like `[t-1]` or `[t+2]` are compile-time errors. If a model needs
-second-order state (e.g., acceleration), it must introduce an explicit auxiliary
-variable (e.g., `velocity[t+1] = velocity[t] + dt * acceleration`).
-
 **Implicit `[t]` indexing.** Within a `temporal` block, unsubscripted
 references to quantities default to `[t]`. That is, writing
 `canopy.leaves[i].transpiration` inside a temporal block is equivalent to
 `canopy.leaves[i].transpiration[t]`. Explicit subscripts (`[t]`, `[t+1]`) are
 always allowed and override the default. This avoids verbose `[t]` annotations
 on every right-hand-side quantity while keeping the temporal semantics
-unambiguous. For quantities that are constant (not temporal state), the implicit
-`[t]` is a no-op — the compiler recognizes that the quantity has no temporal
-dimension and ignores the subscript.
+unambiguous.
 
 **`dt` is a normal quantity.** The timestep is not a magic name or built-in.
 It is a node in the world model, assumed or learned through the normal binding
@@ -1524,13 +1691,6 @@ a connected component), which is intentional: the neural network receives a
 superset and learns to weight relevant inputs. This is the slot's **structural
 interface** — it is determined from the model structure alone and is invariant
 across experiments.
-
-**Reachability scope.** The `[*]` traversal walks the *within-timestep* equality
-graph only. Temporal edges (`[t]` → `[t+1]`) are not traversed — the slot sees
-the current timestep's quantities, not future or past state. Inequality edges
-(constraints) are also excluded: a constraint like `x <= y` does not make `y`
-reachable from `x` for the purposes of `[*]`. Only equalities from `relation`
-blocks (including contract wiring and algebraic relations) contribute edges.
 
 The structural interface is resolved once at model load time, not per-experiment.
 This is critical for shared controllers in multi-experiment training (section
@@ -3766,3 +3926,1443 @@ Items earlier in the list are prerequisites for items later.
 28. **Interactive REPL** (appendix C.7) — incremental exploration
 29. **Doc comments and generation** (appendix C.4) — `///` comments, HTML docs
 30. **Package registry** (appendix C.8) — publish, discover, depend on packages
+
+================================================================================
+DOCUMENT 4: MOCK SPERRY IMPLEMENTATION
+================================================================================
+
+// ============================================================================
+// Sperry et al. (2017) Gain-Risk Hydraulic-Stomatal Model
+// Mock v2 Myco implementation for spec stress-testing
+//
+// Design principles:
+// - Represent the actual physics, not the numerical algorithms
+// - Let the compiler discover algebraic loops and choose solvers
+// - Vulnerability curves are a contract — soil and plant share the interface
+// - Photosynthesis is a contract — FarquharC3 encapsulates all biochemistry
+// - Stomatal control is a slot — pluggable (per canopy layer)
+// - Sun/shade canopy decomposition via const generics
+// - Irreversible cavitation via temporal min accumulator
+// - Generic ConductingElement shared by soil and xylem
+// - dt is a normal quantity, not a magic name
+// - All relations use = (equality), contracts invoked as functions
+// ============================================================================
+
+module plant::sperry
+
+use units::si::{
+    megapascal as MPa,
+    kilopascal as kPa,
+    kelvin as K,
+    celsius as degC,
+    pascal as Pa,
+    watt_per_square_meter as W_m2,
+    micromole_per_square_meter_second as umol_m2_s,
+    millimole_per_square_meter_second as mmol_m2_s,
+    mole_per_square_meter_second as mol_m2_s,
+    millimole_per_square_meter_second_per_megapascal as mmol_m2_s_MPa,
+    joule_per_mole as J_mol,
+    joule_per_mole_kelvin as J_mol_K,
+    meter as m,
+    meter_per_second as m_s,
+    seconds as s,
+    ratio,
+}
+
+use physics::constants::{stefan_boltzmann, specific_heat_air}
+
+
+// ============================================================================
+// Types
+// ============================================================================
+
+pub type WaterPotential : Scalar<MPa>
+
+pub type Conductance : Scalar<mmol_m2_s> {
+    self >= 0
+}
+
+pub type HydraulicConductance : Scalar<mmol_m2_s_MPa> {
+    self >= 0
+}
+
+pub type CarbonFlux : Scalar<umol_m2_s> {
+    self >= 0
+}
+
+pub type TranspirationRate : Scalar<mmol_m2_s> {
+    self >= 0
+}
+
+pub type Temperature : Scalar<degC>
+
+pub type Pressure : Scalar<Pa> {
+    self >= 0
+}
+
+pub type Fraction : Scalar<ratio> {
+    0 <= self <= 1
+}
+
+pub type PositiveScalar : Scalar<ratio> {
+    self > 0
+}
+
+
+// ============================================================================
+// Contracts
+// ============================================================================
+
+// Vulnerability curve: any function mapping water potential to fractional
+// loss of hydraulic conductivity. Shared by soil (van Genuchten) and plant
+// (Weibull, sigmoid). The unifying insight: both are pressure-dependent
+// conductance curves with the same mathematical shape.
+pub contract VulnerabilityCurve {
+    input pressure: WaterPotential
+    output plc: Fraction
+
+    property monotone: increasing(pressure -> plc)
+}
+
+// Photosynthesis: any model mapping environmental inputs + CO2 conductance
+// to net assimilation and internal CO2. Implementations may contain internal
+// algebraic loops (e.g., A-Ci coupling) — the compiler discovers and handles
+// them via SCC detection.
+pub contract Photosynthesis {
+    input temperature: Temperature
+    input par: CarbonFlux
+    input g_c: Conductance
+    input co2: Pressure
+    input o2: Pressure
+    input atm_pressure: Scalar<kPa>
+
+    output assimilation: CarbonFlux
+    output c_i: Pressure
+}
+
+
+// ============================================================================
+// Vulnerability curve implementations
+// ============================================================================
+
+// Weibull VC (the standard Sperry parameterization for xylem)
+pub node WeibullVC : VulnerabilityCurve {
+    b: Scalar<MPa>          // Weibull scale (related to P50 magnitude)
+    c: PositiveScalar       // Weibull shape (>1 sigmoidal, =1 exponential)
+
+    constraint b_positive: b > 0 MPa
+
+    plc = 1.0 - exp(-(-pressure / b) ** c)
+}
+
+// P50-slope sigmoid VC (cleaner parameterization, trivially invertible)
+pub node SigmoidVC : VulnerabilityCurve {
+    p50: WaterPotential     // pressure at 50% loss of conductivity
+    slope: PositiveScalar   // steepness of the transition
+
+    plc = 1.0 / (1.0 + exp(slope * (pressure - p50)))
+}
+
+// Van Genuchten VC (for soil — same contract, different physics)
+// Soil desaturation follows the same interface as xylem cavitation:
+// both map water potential to fractional loss of conductivity.
+pub node VanGenuchtenVC : VulnerabilityCurve {
+    vg_alpha: Scalar<MPa>       // air-entry pressure scale parameter
+    vg_n: PositiveScalar        // pore size distribution parameter
+
+    constraint vg_alpha_positive: vg_alpha > 0 MPa
+
+    constraint valid_n:
+        vg_n > 1
+
+    let m = 1.0 - 1.0 / vg_n
+    let h = abs(pressure) / vg_alpha
+    let se = (1.0 + h ** vg_n) ** (-m)
+    let k_r = sqrt(se) * (1.0 - (1.0 - se ** (1.0 / m)) ** m) ** 2
+    plc = 1.0 - k_r
+}
+
+
+// ============================================================================
+// Photosynthesis implementations
+// ============================================================================
+
+// Farquhar-von Caemmerer-Berry C3 photosynthesis.
+// Encapsulates temperature adjustment, biochemistry, and the A-Ci algebraic
+// loop. The planner discovers the loop (assimilation depends on c_i via
+// biochemistry, c_i depends on assimilation via diffusion) and emits a solver.
+pub node FarquharC3 : Photosynthesis {
+    // Parameters at 25C (assumable, learnable via workflow)
+    v_max_25: CarbonFlux
+    j_max_25: CarbonFlux
+    r_day_25: CarbonFlux
+    k_c_25: Pressure               // Michaelis-Menten for CO2 (~41 Pa)
+    k_o_25: Pressure               // Michaelis-Menten for O2 (~28202 Pa)
+    gamma_star_25: Pressure        // CO2 compensation point (~4.36 Pa)
+
+    constraint coordinated_capacity:
+        j_max_25 = 1.67 * v_max_25
+
+    // Arrhenius activation energies — nodes, so they can be assumed or learned
+    ha_vmax: Scalar<J_mol>
+    hd_vmax: Scalar<J_mol>
+    sv_vmax: Scalar<J_mol_K>
+    ha_jmax: Scalar<J_mol>
+    hd_jmax: Scalar<J_mol>
+    sv_jmax: Scalar<J_mol_K>
+    ha_rday: Scalar<J_mol>
+    ha_kc: Scalar<J_mol>
+    ha_ko: Scalar<J_mol>
+    ha_gamma: Scalar<J_mol>
+
+    // Fixed parameters
+    alpha: Fraction                // quantum yield (~0.3)
+    curvature_light: Fraction      // light response curvature (~0.9)
+    curvature_collab: Fraction     // Jc/Je curvature (~0.98)
+
+    // Temperature-adjusted values (internal, computed from contract input)
+    v_max: CarbonFlux
+    j_max: CarbonFlux
+    k_c: Pressure
+    k_o: Pressure
+    gamma_star: Pressure
+    r_day: CarbonFlux
+
+    v_max = peaked_arrhenius(v_max_25, ha_vmax, hd_vmax, sv_vmax, temperature)
+    j_max = peaked_arrhenius(j_max_25, ha_jmax, hd_jmax, sv_jmax, temperature)
+    k_c = arrhenius(k_c_25, ha_kc, temperature)
+    k_o = arrhenius(k_o_25, ha_ko, temperature)
+    gamma_star = arrhenius(gamma_star_25, ha_gamma, temperature)
+    r_day = arrhenius(r_day_25, ha_rday, temperature)
+
+    // Intermediate photosynthesis quantities
+    j_c: CarbonFlux
+    j_e: CarbonFlux
+    a_gross: CarbonFlux
+
+    j_c = rubisco_limited(v_max, c_i, gamma_star, k_c, k_o, o2)
+    j_e = electron_transport_limited(
+        electron_transport_rate(j_max, par, alpha, curvature_light),
+        c_i, gamma_star,
+    )
+    a_gross = collatz_smooth_min(j_c, j_e, curvature_collab)
+    assimilation = a_gross - r_day
+
+    // CO2 diffusion: creates the A-Ci algebraic loop
+    // The planner discovers that assimilation and c_i are mutually dependent
+    // and emits a solver for this 2-equation system.
+    assimilation = g_c * (co2 - c_i) / atm_pressure
+}
+
+
+// ============================================================================
+// Registered functions
+// ============================================================================
+
+// Farquhar Rubisco-limited assimilation
+pub fn rubisco_limited(
+    v_max: CarbonFlux,
+    c_i: Pressure,
+    gamma_star: Pressure,
+    k_c: Pressure,
+    k_o: Pressure,
+    o_a: Pressure,
+) -> CarbonFlux {
+    invertibility: injective_restricted
+    differentiability: smooth
+    domain: c_i > gamma_star
+
+    v_max * (c_i - gamma_star) / (c_i + k_c * (1.0 + o_a / k_o))
+}
+
+// Farquhar electron-transport-limited assimilation
+pub fn electron_transport_limited(
+    j: CarbonFlux,
+    c_i: Pressure,
+    gamma_star: Pressure,
+) -> CarbonFlux {
+    invertibility: injective_restricted
+    differentiability: smooth
+    domain: c_i > gamma_star
+
+    0.25 * j * (c_i - gamma_star) / (c_i + 2.0 * gamma_star)
+}
+
+// Electron transport rate (hyperbolic response to PAR)
+pub fn electron_transport_rate(
+    j_max: CarbonFlux,
+    q: CarbonFlux,
+    alpha: Fraction,
+    curvature: Fraction,
+) -> CarbonFlux {
+    invertibility: lossy
+    differentiability: smooth
+
+    let x = alpha * q + j_max
+    (x - sqrt(x * x - 4.0 * curvature * alpha * q * j_max)) / (2.0 * curvature)
+}
+
+// Collatz smooth minimum of Rubisco and electron-transport limited rates
+pub fn collatz_smooth_min(
+    j_c: CarbonFlux,
+    j_e: CarbonFlux,
+    curvature: Fraction,
+) -> CarbonFlux {
+    invertibility: lossy
+    differentiability: smooth
+
+    let x = j_c + j_e
+    (x - sqrt(x * x - 4.0 * curvature * j_c * j_e)) / (2.0 * curvature)
+}
+
+// Arrhenius temperature response (generic over unit of value_25)
+pub fn arrhenius<U: Unit>(
+    value_25: Scalar<U>,
+    activation_energy: Scalar<J_mol>,
+    temperature: Temperature,
+) -> Scalar<U> {
+    invertibility: bijective
+    differentiability: smooth
+
+    let R = 8.314 J_mol_K
+    // Compiler handles degC → K conversion automatically (affine unit transform)
+    value_25 * exp(activation_energy * (temperature - 298.15 K) / (298.15 K * R * temperature))
+}
+
+// Peaked Arrhenius (Leuning 2002) for Vmax, Jmax (generic over unit)
+pub fn peaked_arrhenius<U: Unit>(
+    value_25: Scalar<U>,
+    ha: Scalar<J_mol>,
+    hd: Scalar<J_mol>,
+    sv: Scalar<J_mol_K>,
+    temperature: Temperature,
+) -> Scalar<U> {
+    invertibility: lossy    // peaked, so not injective over full range
+    differentiability: smooth
+
+    let R = 8.314 J_mol_K
+    // Compiler handles degC → K conversion automatically (affine unit transform)
+    let numerator = (1.0 + exp((sv * 298.15 K - hd) / (R * 298.15 K)))
+        * exp((ha / (R * 298.15 K)) * (1.0 - 298.15 K / temperature))
+    let denominator = 1.0 + exp((sv * temperature - hd) / (R * temperature))
+    value_25 * numerator / denominator
+}
+
+// Saturated vapor pressure (Buck equation)
+// Empirical equation calibrated to Celsius values — uses value_in to extract
+// raw float, then attaches kPa to the result.
+pub fn saturated_vapor_pressure(
+    temperature: Temperature,
+) -> Scalar<kPa> {
+    invertibility: injective_restricted
+    differentiability: smooth
+
+    let T = temperature.value_in(degC)
+    0.61121 kPa * exp((18.678 - T / 234.5) * T / (257.14 + T))
+}
+
+
+// ============================================================================
+// Nodes: Generic Conducting Element
+//
+// The fundamental building block shared by soil and plant hydraulics.
+// Both soil desaturation and xylem cavitation follow the same interface:
+// conductance = k_max * (1 - vc(pressure).plc)
+// ============================================================================
+
+pub node ConductingElement<V: VulnerabilityCurve> {
+    k_max: HydraulicConductance
+    vc: V
+    water_potential: WaterPotential
+    conductance: HydraulicConductance
+
+    conductance = k_max * (1.0 - vc(water_potential).plc)
+}
+
+// Xylem segment: a conducting element with irreversible cavitation tracking.
+// Soil elements use ConductingElement directly (desaturation is reversible).
+pub node XylemSegment<V: VulnerabilityCurve> {
+    core: ConductingElement<V>
+
+    // Cavitation tracking
+    min_historical_pressure: WaterPotential
+    max_conductance: HydraulicConductance
+
+    constraint irreversible_cavitation:
+        core.conductance <= max_conductance
+
+    constraint max_conductance_from_history:
+        max_conductance = core.k_max * (1.0 - core.vc(min_historical_pressure).plc)
+}
+
+
+// ============================================================================
+// Nodes: Atmosphere
+// ============================================================================
+
+node Atmosphere {
+    co2: Pressure                  // atmospheric CO2 (~40 Pa)
+    o2: Pressure                   // atmospheric O2 (~21000 Pa)
+    vpd: Scalar<kPa>              // vapour pressure deficit
+    temperature: Temperature       // air temperature
+    pressure: Scalar<kPa>         // atmospheric pressure (~101.3)
+    wind_speed: Scalar<m_s>       // wind speed
+    r_abs: Scalar<W_m2>           // absorbed radiation
+    precipitation: TranspirationRate  // rainfall rate (for infiltration)
+}
+
+
+// ============================================================================
+// Nodes: Canopy Radiation
+// ============================================================================
+
+node CanopyLayer {
+    par: CarbonFlux                // PAR for this layer (umol m-2 s-1)
+    lai_fraction: Fraction         // fraction of total LAI in this layer
+}
+
+node CanopyRadiation<const L: usize> {
+    layers: [CanopyLayer; L]
+    total_lai: PositiveScalar
+
+    constraint lai_sums_to_one:
+        sum(layers[i].lai_fraction for i in 0..L) = 1
+}
+
+
+// ============================================================================
+// Nodes: Soil
+//
+// Each soil layer IS a conducting element (van Genuchten), plus geometry
+// and root distribution. The ConductingElement provides the pressure-
+// conductance relationship; the SoilLayer adds spatial structure.
+// ============================================================================
+
+node SoilLayer {
+    element: ConductingElement<VanGenuchtenVC>
+    thickness: Scalar<m>           // layer depth
+    root_fraction: Fraction        // fraction of root biomass in this layer
+
+    constraint thickness_positive: thickness > 0 m
+}
+
+node Soil<const M: usize> {
+    layers: [SoilLayer; M]
+
+    // Inter-layer flow (Darcy's law between adjacent layers)
+    interlayer_flow: [TranspirationRate; M-1]   // flow from layer j to j+1
+    interlayer_conductance: [HydraulicConductance; M-1]
+
+    // Drainage from the bottom layer
+    drainage: TranspirationRate
+    drainage_conductance: HydraulicConductance
+
+    constraint root_fractions_sum:
+        sum(layers[j].root_fraction for j in 0..M) = 1
+}
+
+
+// ============================================================================
+// Nodes: Leaf Properties (physical constants per species)
+// ============================================================================
+
+node LeafProperties {
+    emissivity: Fraction           // longwave emissivity (~0.97)
+    width: Scalar<m>              // leaf width, for boundary layer calc
+    latent_heat: Scalar<J_mol>    // latent heat of vaporization (~44100)
+
+    constraint width_positive: width > 0 m
+    constraint latent_heat_positive: latent_heat > 0 J_mol
+}
+
+
+// ============================================================================
+// Nodes: Leaf Gas Exchange (per canopy layer)
+//
+// Generic over Photosynthesis contract — FarquharC3, C4, etc.
+// The photosynthesis implementation encapsulates temperature adjustment,
+// biochemistry, and the A-Ci algebraic loop internally.
+// ============================================================================
+
+node LeafGasExchange<P: Photosynthesis> {
+    photo: P
+    leaf_temperature: Temperature
+    leaf_vpd: Scalar<kPa>
+    g_w: Conductance               // diffusive conductance to water vapour
+    g_w_max: Conductance           // maximum stomatal + boundary layer
+
+    constraint co2_conductance:
+        photo.g_c = g_w / 1.6
+
+    constraint within_capacity:
+        g_w <= g_w_max
+}
+
+
+// ============================================================================
+// Nodes: Plant Hydraulics
+//
+// Uses XylemSegment (ConductingElement + cavitation) for all plant tissue.
+// The pathway is a series/parallel network where the planner discovers
+// flow-pressure-conductance SCCs automatically.
+// ============================================================================
+
+node HydraulicPathway<V: VulnerabilityCurve, const M: usize> {
+    root: [XylemSegment<V>; M]     // one root segment per soil layer
+    stem: XylemSegment<V>
+    leaf: XylemSegment<V>
+
+    // Internal junction pressures (solved by the planner's SCC detection)
+    rhizosphere_pressure: [WaterPotential; M]
+    root_junction_pressure: WaterPotential
+    stem_pressure: WaterPotential
+    gravity_drop: WaterPotential   // height * 0.01 MPa/m
+
+    // Flow through the pathway
+    flow: TranspirationRate        // total E through the pathway
+    layer_flow: [TranspirationRate; M]  // per-layer root flow
+}
+
+
+// ============================================================================
+// Top-level model
+// ============================================================================
+
+pub root node SperryTree<
+    V: VulnerabilityCurve,
+    P: Photosynthesis,
+    const N_SOIL: usize,
+    const N_CANOPY: usize,         // canopy layers (2 = sun/shade)
+> {
+    atm: Atmosphere
+    radiation: CanopyRadiation<N_CANOPY>
+    soil: Soil<N_SOIL>
+    pathway: HydraulicPathway<V, N_SOIL>
+    canopy_layers: [LeafGasExchange<P>; N_CANOPY]
+    leaf_props: LeafProperties
+
+    // Simulation timestep — a normal quantity, not a magic name
+    dt: Scalar<s>
+
+    // Aggregate quantities
+    total_transpiration: TranspirationRate
+    total_assimilation: CarbonFlux
+
+    // Canopy-aggregate transpiration is LAI-weighted sum
+    constraint aggregate_transpiration:
+        total_transpiration = sum(
+            radiation.layers[i].lai_fraction
+            * canopy_layers[i].g_w
+            * canopy_layers[i].leaf_vpd
+            / atm.pressure
+            for i in 0..N_CANOPY
+        )
+
+    // Canopy-aggregate assimilation is LAI-weighted sum
+    constraint aggregate_assimilation:
+        total_assimilation = sum(
+            radiation.layers[i].lai_fraction
+            * canopy_layers[i].photo.assimilation
+            for i in 0..N_CANOPY
+        )
+}
+
+
+// ============================================================================
+// Relations: Soil Redistribution
+//
+// Water moves between adjacent soil layers driven by pressure gradients
+// (Darcy's law). Inter-layer conductance is the harmonic mean of adjacent
+// layers' unsaturated conductivities. This creates a tridiagonal coupling
+// pattern that the compiler can recognize and optimize.
+// ============================================================================
+
+// Inter-layer conductance: harmonic mean of adjacent layers
+relation interlayer_k[j in 0..(N_SOIL-1)]:
+    soil.interlayer_conductance[j] =
+        2.0 * soil.layers[j].element.conductance * soil.layers[j+1].element.conductance
+        / (soil.layers[j].element.conductance + soil.layers[j+1].element.conductance)
+
+// Inter-layer Darcy flow (positive = downward, from j to j+1)
+relation soil_redistribution[j in 0..(N_SOIL-1)]:
+    soil.interlayer_flow[j] =
+        soil.interlayer_conductance[j]
+        * (soil.layers[j].element.water_potential
+           - soil.layers[j+1].element.water_potential)
+        / ((soil.layers[j].thickness + soil.layers[j+1].thickness) / 2.0)
+
+// Bottom drainage (gravitational, using bottom layer conductance)
+relation bottom_drainage:
+    soil.drainage = soil.drainage_conductance * soil.layers[N_SOIL-1].element.water_potential
+
+
+// ============================================================================
+// Relations: Hydraulics (flat — the planner finds the SCCs)
+//
+// These equations form an implicit system. The planner will discover that
+// flow, pressures, and conductances are mutually dependent and emit a solver.
+// ============================================================================
+
+// Rhizosphere flow: soil to rhizosphere boundary
+// Uses SOIL conducting element (van Genuchten) — not xylem VC
+relation rhizosphere_flow[j in 0..N_SOIL]:
+    pathway.layer_flow[j] =
+        soil.layers[j].element.conductance
+        * (soil.layers[j].element.water_potential - pathway.rhizosphere_pressure[j])
+
+// Root xylem flow: rhizosphere to root junction
+// Uses ROOT XYLEM conducting element (Weibull/sigmoid VC)
+relation root_flow[j in 0..N_SOIL]:
+    pathway.layer_flow[j] =
+        pathway.root[j].core.conductance
+        * (pathway.rhizosphere_pressure[j] - pathway.root_junction_pressure)
+
+// Total flow is sum of per-layer root flows
+relation total_root_flow:
+    pathway.flow = sum(pathway.layer_flow[j] for j in 0..N_SOIL)
+
+// Stem flow
+relation stem_flow:
+    pathway.flow =
+        pathway.stem.core.conductance
+        * (pathway.root_junction_pressure - pathway.stem_pressure - pathway.gravity_drop)
+
+// Leaf flow
+relation leaf_flow:
+    pathway.flow =
+        pathway.leaf.core.conductance
+        * (pathway.stem_pressure - pathway.leaf.core.water_potential)
+
+// Transpiration from demand (per canopy layer)
+// VPD is in kPa; divide by atmospheric pressure to get mole fraction deficit
+relation demand_transpiration[i in 0..N_CANOPY]:
+    canopy_layers[i].g_w * canopy_layers[i].leaf_vpd / atm.pressure =
+        radiation.layers[i].lai_fraction * pathway.flow
+
+
+// ============================================================================
+// Relations: Photosynthesis inputs (connect canopy layer to contract)
+//
+// The Photosynthesis contract declares inputs; we connect them to the
+// model's atmospheric and canopy state.
+// ============================================================================
+
+relation photo_temperature[i in 0..N_CANOPY]:
+    canopy_layers[i].photo.temperature = canopy_layers[i].leaf_temperature
+
+relation photo_par[i in 0..N_CANOPY]:
+    canopy_layers[i].photo.par = radiation.layers[i].par
+
+relation photo_co2[i in 0..N_CANOPY]:
+    canopy_layers[i].photo.co2 = atm.co2
+
+relation photo_o2[i in 0..N_CANOPY]:
+    canopy_layers[i].photo.o2 = atm.o2
+
+relation photo_pressure[i in 0..N_CANOPY]:
+    canopy_layers[i].photo.atm_pressure = atm.pressure
+
+
+// ============================================================================
+// Relations: Leaf Energy Balance (per canopy layer)
+//
+// T_leaf depends on E, but E depends on D_leaf, which depends on T_leaf.
+// This is another algebraic loop. The planner discovers and handles it.
+// ============================================================================
+
+relation energy_balance[i in 0..N_CANOPY]:
+    // Boundary layer heat conductance (Nobel): empirical, calibrated to m/s and m
+    let u = atm.wind_speed.value_in(m_s)
+    let d = leaf_props.width.value_in(m)
+    let g_ha = (1.4 * 0.135 * sqrt(u / (d * 0.72))) mol_m2_s
+    // Radiative conductance: empirical polynomial, calibrated to degC
+    let T_c = atm.temperature.value_in(degC)
+    let g_r = (0.1579 + 0.0017 * T_c + 7.17e-6 * T_c ** 2) mol_m2_s
+    let e_layer = radiation.layers[i].lai_fraction * pathway.flow
+    // Compiler handles degC → K for Stefan-Boltzmann term (affine unit transform)
+    canopy_layers[i].leaf_temperature =
+        atm.temperature
+        + (atm.r_abs
+           - leaf_props.emissivity * stefan_boltzmann * atm.temperature ** 4
+           - leaf_props.latent_heat * e_layer)
+          / (specific_heat_air * (g_r + g_ha))
+
+// Leaf VPD from saturated vapor pressure (nonlinear, physically correct)
+relation leaf_vpd[i in 0..N_CANOPY]:
+    let e_sat_leaf = saturated_vapor_pressure(canopy_layers[i].leaf_temperature)
+    let e_sat_air = saturated_vapor_pressure(atm.temperature)
+    let e_air = e_sat_air - atm.vpd
+    canopy_layers[i].leaf_vpd = e_sat_leaf - e_air
+
+
+// ============================================================================
+// Slot: Stomatal Controller (per canopy layer)
+//
+// The world model declares WHAT stomata depend on. The HOW is pluggable.
+// The slot provides per-layer g_w — sun and shade leaves get different
+// stomatal conductance because they see different PAR and have different
+// gain curves. The slot joins the hydraulic SCC if its outputs feed the loop.
+// ============================================================================
+
+slot stomatal_control provides [canopy_layers[*].g_w]:
+    inputs = [*]
+
+
+// ============================================================================
+// Temporal: State Evolution
+// ============================================================================
+
+// Soil water balance: extraction by roots + redistribution + rain + drainage
+// NOTE: This is a simplification — the equation updates water potential directly
+// from flow rates. A production model would track volumetric water content and
+// use the moisture retention curve (dθ/dψ) to convert. This approximation is
+// adequate for the mock's purpose of stress-testing the language spec.
+temporal soil_water_step[j in 0..N_SOIL]:
+    let extraction = pathway.layer_flow[j]
+    let inflow_above = if j > 0 then soil.interlayer_flow[j-1] else 0 mmol_m2_s
+    let outflow_below = if j < N_SOIL-1 then soil.interlayer_flow[j] else 0 mmol_m2_s
+    let infiltration = if j = 0 then atm.precipitation else 0 mmol_m2_s
+    let drain = if j = N_SOIL-1 then soil.drainage else 0 mmol_m2_s
+    soil.layers[j].element.water_potential[t+1] =
+        soil.layers[j].element.water_potential[t]
+        + dt * (inflow_above - outflow_below + infiltration - extraction - drain)
+        / soil.layers[j].thickness
+
+// Irreversible cavitation: track the worst pressure ever experienced.
+// Uses structural introspection to generate one temporal block per XylemSegment
+// in the pathway, rather than writing them out individually.
+initial cavitation_init[seg in pathway where seg is XylemSegment]:
+    seg.min_historical_pressure = seg.core.water_potential
+
+temporal cavitation[seg in pathway where seg is XylemSegment]:
+    seg.min_historical_pressure[t+1] =
+        min(seg.min_historical_pressure[t], seg.core.water_potential[t])
+
+================================================================================
+DOCUMENT 5: MOCK POTKAY IMPLEMENTATION
+================================================================================
+
+// ============================================================================
+// Potkay & Feng (2023) Growth-Optimizing Stomatal Model (GOSM)
+// Mock v2 Myco implementation for spec stress-testing
+//
+// "Do stomata optimize turgor-driven growth?"
+// New Phytologist (2023) 238: 506–528
+//
+// Design principles:
+// - Carbon-water coupling through turgor and osmotic potential
+// - NSC dynamics as temporal state with substrate limitation
+// - Turgor-driven Lockhart growth equation
+// - Stomatal control as a slot (the GOH criterion = training objective)
+// - Library reuse: imports VulnerabilityCurve, Photosynthesis from Sperry
+// - Simpler hydraulic catena than Sperry (single soil, no canopy layers)
+// - Different temperature responses (Q10 for respiration, peaked for growth)
+// - Tests carbon-water-turgor algebraic coupling across timesteps
+// ============================================================================
+
+module plant::potkay_gosm
+
+// ============================================================================
+// Imports: shared library modules
+//
+// In a real setup, these come from library packages. The Sperry mock and
+// this mock both use the same contracts and implementations, demonstrating
+// the library reuse story.
+// ============================================================================
+
+use plant::hydraulics::{
+    VulnerabilityCurve,
+    SigmoidVC,
+    ConductingElement,
+    XylemSegment,
+}
+
+use plant::photosynthesis::{
+    Photosynthesis,
+    FarquharC3,
+    rubisco_limited,
+    electron_transport_limited,
+    electron_transport_rate,
+    collatz_smooth_min,
+    arrhenius,
+    peaked_arrhenius,
+    saturated_vapor_pressure,
+}
+
+use physics::constants::{
+    stefan_boltzmann,
+    specific_heat_air,
+    gas_constant,           // R = 8.314 J mol⁻¹ K⁻¹
+    gravity,                // g = 9.81 m s⁻²
+    water_density,          // ρ = 998 kg m⁻³
+}
+
+use units::si::{
+    megapascal as MPa,
+    kilopascal as kPa,
+    pascal as Pa,
+    celsius as degC,
+    kelvin as K,
+    watt_per_square_meter as W_m2,
+    mole_per_square_meter_second as mol_m2_s,
+    micromole_per_square_meter_second as umol_m2_s,
+    mole_per_second as mol_s,
+    mole_carbon as mol_C,
+    mole_carbon_per_second as mol_C_s,
+    joule_per_mole as J_mol,
+    joule_per_mole_kelvin as J_mol_K,
+    meter as m,
+    meter_squared as m2,
+    meter_per_second as m_s,
+    seconds as s,
+    ratio,
+    inverse_kelvin as K_inv,
+    inverse_megapascal_per_second as inv_MPa_s,
+    mole_per_joule as mol_J,
+    mole_per_kilogram as mol_kg,
+    kilogram_per_mole as kg_mol,
+}
+
+
+// ============================================================================
+// Types (new types specific to this model)
+// ============================================================================
+
+use plant::hydraulics::{
+    WaterPotential,
+    HydraulicConductance,
+    TranspirationRate,
+}
+
+use plant::photosynthesis::{
+    CarbonFlux,
+    Temperature,
+    Pressure,
+    Conductance,
+    Fraction,
+    PositiveScalar,
+}
+
+pub type GrowthRate : Scalar<mol_C_s> {
+    self >= 0
+}
+
+pub type CarbonPool : Scalar<mol_C> {
+    self >= 0
+}
+
+pub type LeafArea : Scalar<m2> {
+    self > 0
+}
+
+pub type Height : Scalar<m> {
+    self > 0
+}
+
+pub type Extensibility : Scalar<inv_MPa_s> {
+    self >= 0
+}
+
+
+// ============================================================================
+// Registered functions (new for this model)
+// ============================================================================
+
+// NSC substrate limitation (Eqn 5, 6)
+// Smooth sigmoid: approaches 0 when C is small, 1 when C is large.
+// γ controls the half-saturation point relative to structural biomass.
+pub fn substrate_limitation(
+    C: CarbonPool,
+    gamma: PositiveScalar,
+    C_struct: CarbonPool,
+) -> Fraction {
+    invertibility: injective_restricted
+    differentiability: smooth
+    domain: C >= 0 and C_struct > 0
+
+    C / (C + gamma * C_struct)
+}
+
+// Q10 temperature response for maintenance respiration
+// Simpler than Arrhenius — appropriate when empirical Q10 is available.
+// Temperature difference is purely multiplicative (affine offsets cancel),
+// so dividing by 10 K produces a dimensionless exponent natively.
+pub fn q10_response<U: Unit>(
+    value_ref: Scalar<U>,
+    q10: PositiveScalar,
+    temperature: Temperature,
+    T_ref: Temperature,
+) -> Scalar<U> {
+    invertibility: bijective
+    differentiability: smooth
+
+    value_ref * q10 ** ((temperature - T_ref) / 10 K)
+}
+
+// Temperature-dependent cell wall extensibility (Table 3, φ̄)
+// Following Johnson et al. (1942) / Parent et al. (2010),
+// modified so extensibility → 0 as temperature → 5°C.
+pub fn extensibility_temperature(
+    phi_25: Extensibility,
+    temperature: Temperature,
+) -> Extensibility {
+    invertibility: lossy
+    differentiability: smooth
+
+    // Compiler handles degC → K via affine conversion
+    let T_opt = 298.15 K                     // optimal temperature for growth
+    let H_a = 63000 J_mol                    // activation energy
+    let H_d = 200000 J_mol                   // deactivation energy
+    let S_v = 650 J_mol_K                    // entropy factor
+    let R = 8.314 J_mol_K
+    let cold_limit = 278.15 K               // 5°C — growth ceases below this
+
+    let arrhenius_factor = exp(H_a * (temperature - T_opt) / (R * T_opt * temperature))
+    let high_T_inhibition = (1 + exp((S_v * T_opt - H_d) / (R * T_opt)))
+        / (1 + exp((S_v * temperature - H_d) / (R * temperature)))
+
+    // Smooth ramp to zero below 5°C (2 K⁻¹ steepness)
+    let cold_factor = 1 / (1 + exp(-2 K_inv * (temperature - cold_limit)))
+
+    phi_25 * arrhenius_factor * high_T_inhibition * cold_factor
+}
+
+// Mean turgor excess along the stem (Eqn 7 integral)
+// Integrates max(P₀(z̄) - Γ, 0) from z̄=0 (apex) to z̄=1 (base),
+// where P₀ varies linearly with z̄ due to the gravity gradient.
+// Analytical solution of the piecewise-linear integral.
+pub fn mean_turgor_excess(
+    P_base: WaterPotential,     // turgor at base of stem (z̄ = 1)
+    P_apex: WaterPotential,     // turgor at apex of stem (z̄ = 0)
+    turgor_threshold: WaterPotential,   // Γ
+) -> WaterPotential {
+    invertibility: lossy
+    differentiability: subgradient
+
+    // P₀(z̄) = P_apex + (P_base - P_apex) · z̄  (linear gradient)
+    // Integral of max(P₀ - Γ, 0) from 0 to 1
+    if P_apex >= turgor_threshold and P_base >= turgor_threshold then
+        // Entire stem above threshold
+        (P_apex + P_base) / 2 - turgor_threshold
+    else if P_apex >= turgor_threshold and P_base < turgor_threshold then
+        // Partial — only upper portion growing
+        let z_crit = (turgor_threshold - P_apex) / (P_base - P_apex)
+        (P_apex - turgor_threshold) ** 2 / (2 * (P_apex - P_base))
+    else if P_apex < turgor_threshold and P_base >= turgor_threshold then
+        // Partial — only lower portion growing
+        let z_crit = (turgor_threshold - P_apex) / (P_base - P_apex)
+        (P_base - turgor_threshold) ** 2 / (2 * (P_base - P_apex))
+    else
+        // No growth — entire stem below threshold
+        0 MPa
+}
+
+
+// ============================================================================
+// Nodes: Atmosphere
+// ============================================================================
+
+node Atmosphere {
+    co2: Pressure                      // atmospheric CO2 (~40 Pa)
+    o2: Pressure                       // atmospheric O2 (~21000 Pa)
+    temperature: Temperature           // air temperature
+    rh: Fraction                       // relative humidity
+    pressure: Scalar<kPa>             // atmospheric pressure (~101.3)
+    insolation: Scalar<W_m2>          // incoming solar radiation
+    wind_speed: Scalar<m_s>           // wind speed
+    solar_elevation: Scalar<ratio>     // solar elevation angle (rad) (Table 3: Phi)
+    psi_soil: WaterPotential           // soil water potential (single layer)
+    min_psi_soil: WaterPotential       // drought memory: worst soil ψ experienced
+}
+
+
+// ============================================================================
+// Nodes: Tree Structure (allometric parameters)
+//
+// These are treated as rollout-stable or slowly-varying parameters.
+// In a full growth model they would be temporal state; here they are
+// assumed constant following the paper's "large, mature tree" assumption.
+// ============================================================================
+
+node TreeStructure {
+    leaf_area: LeafArea                // a_t — total leaf area (m²)
+    height: Height                     // H — stem height (m)
+    rooting_depth: Height              // Z — rooting depth (m)
+    canopy_width: Height               // W — canopy width (m)
+    C_struct: CarbonPool               // whole-tree structural biomass (mol C)
+    C_wood: CarbonPool                 // aboveground stem wood biomass (mol C)
+
+    // Gravity-induced water potential drop along the stem
+    // ρgH ≈ 0.01 MPa per meter of height
+    gravity_drop: WaterPotential
+    gravity_drop = water_density * gravity * height
+}
+
+
+// ============================================================================
+// Nodes: Leaf Properties
+// ============================================================================
+
+node LeafProperties {
+    emissivity: Fraction               // longwave emissivity (~0.97)
+    absorptance: Fraction              // shortwave absorptance (~0.5)
+    width: Scalar<m>                  // leaf width, for boundary layer
+    kappa: Scalar<mol_J>              // quantum yield (Table 3: 6.9e-7 mol J⁻¹)
+
+    constraint width_positive: width > 0 m
+    constraint kappa_positive: kappa > 0 mol_J
+}
+
+
+// ============================================================================
+// Nodes: Hydraulic Catena
+//
+// Soil → Root → Stem → Leaf, each segment with its own SigmoidVC.
+// Uses ConductingElement<SigmoidVC> for the conductance computation.
+// Junction water potentials are solved by the planner's SCC detection.
+//
+// Compared to Sperry mock: single soil layer, no multi-layer roots,
+// but each segment has distinct VC parameters (different P50, slope).
+// ============================================================================
+
+node HydraulicCatena {
+    // Three conducting segments, each with SigmoidVC
+    // The VC parameters (p50, slope) differ per segment
+    root_soil: ConductingElement<SigmoidVC>     // k_R, vc at ψ_soil
+    stem: XylemSegment<SigmoidVC>               // k_S, vc at ψ_S, with cavitation
+    leaf: XylemSegment<SigmoidVC>               // k_L, vc at ψ_L, with cavitation
+
+    // Internal junction pressure (solved by planner)
+    psi_root_junction: WaterPotential
+
+    // Whole-tree transpiration rate
+    transpiration: TranspirationRate
+}
+
+
+// ============================================================================
+// Nodes: Gas Exchange
+//
+// Stomatal and boundary layer conductance, Farquhar photosynthesis.
+// The Photosynthesis contract is imported from the library — same
+// FarquharC3 implementation used in the Sperry mock.
+// ============================================================================
+
+node GasExchange<P: Photosynthesis> {
+    photo: P
+
+    g_s: Conductance                   // stomatal conductance (from slot)
+    g_b: Conductance                   // boundary layer conductance
+    g_c: Conductance                   // total CO2 conductance (series)
+    g_w: Conductance                   // water vapor conductance
+    atm_pressure: Scalar<kPa>         // atmospheric pressure (for VPD → mole fraction)
+
+    leaf_temperature: Temperature
+    leaf_vpd: Scalar<kPa>
+    leaf_water_potential: WaterPotential // downstream endpoint of leaf hydraulic segment
+
+    // Transpiration per unit leaf area
+    E_leaf: TranspirationRate
+
+    // Series conductance: stomata + boundary layer
+    g_c = g_s * g_b / (g_s + g_b)
+
+    // Water vapor conductance (1.6× CO2 for diffusivity ratio)
+    g_w = 1.6 * g_c
+
+    // Leaf-area-specific transpiration (VPD / P_atm = mole fraction deficit)
+    E_leaf = g_w * leaf_vpd / atm_pressure
+
+    // CO2 conductance wired to photosynthesis contract input
+    constraint co2_conductance:
+        photo.g_c = g_c
+}
+
+
+// ============================================================================
+// Nodes: Carbon Balance
+//
+// Whole-tree NSC pool with source-sink dynamics.
+// Carbon in = photosynthetic assimilation.
+// Carbon out = maintenance respiration + growth + growth respiration.
+// NSC substrate limitation throttles both growth and respiration when
+// reserves are low.
+//
+// Eqn 2: dC/dt = a_t · A_n - R_M - R_G - G
+// ============================================================================
+
+node CarbonBalance {
+    // NSC storage — the key temporal state variable
+    C: CarbonPool
+
+    // Carbon fluxes
+    assimilation_total: GrowthRate     // a_t · A_n (whole-tree GPP)
+    R_M: GrowthRate                    // maintenance respiration
+    R_G: GrowthRate                    // growth respiration
+    growth: GrowthRate                 // G (structural growth rate)
+
+    // Substrate limitation
+    sigma_g: Fraction                  // σ_g(C) — growth limitation
+    sigma_r: Fraction                  // σ_r(C) — respiration limitation
+    gamma_g: PositiveScalar            // shape parameter for σ_g (~0.26)
+    gamma_r: PositiveScalar            // shape parameter for σ_r (~0.38)
+
+    // Maintenance respiration parameters
+    R_M_25: GrowthRate                 // R_M,0 at 25°C
+    q10_respiration: PositiveScalar    // Q10 for maintenance respiration
+
+    // Growth respiration fraction
+    f_c: Fraction                      // fraction of GPP to growth resp (~0.28)
+
+    // Growth respiration is proportional to growth (Eqn 2 text)
+    R_G = growth * f_c / (1 - f_c)
+}
+
+
+// ============================================================================
+// Nodes: Turgor-Driven Growth
+//
+// The Lockhart equation: growth depends on turgor excess above a
+// threshold, modulated by cell wall extensibility and NSC substrate
+// limitation.
+//
+// Eqn 3: G = σ_g(C) · G_0
+// Eqn 7: G_0 = φ̄ · (C_W / w_S) · ∫max(P₀(z̄) - Γ, 0) dz̄
+// ============================================================================
+
+node TurgorGrowth {
+    // Turgor computation
+    psi_stem: WaterPotential           // stem water potential (from hydraulics)
+    osmotic_potential: WaterPotential   // π (from phloem sap molality)
+
+    // Phloem sap molality parameters (Table 3, Paljakka et al. 2017)
+    c_m1: Scalar<mol_kg>              // intercept (~0.48 mol kg⁻¹)
+    c_m2: Scalar<mol_kg>              // slope (~0.13 mol kg⁻¹ MPa⁻¹, calibrated to MPa)
+    c_pi1: PositiveScalar              // linear osmotic coefficient (~0.998, dimensionless)
+    c_pi2: Scalar<kg_mol>             // quadratic osmotic coefficient (~0.089 kg mol⁻¹)
+
+    constraint c_m1_positive: c_m1 > 0 mol_kg
+    constraint c_m2_positive: c_m2 > 0 mol_kg
+    constraint c_pi2_positive: c_pi2 > 0 kg_mol
+
+    // Phloem sap molality: m_p = c_m1 - c_m2 · ψ_S
+    // c_m2 is calibrated to MPa inputs — use value_in to extract dimensionless pressure
+    phloem_molality: Scalar<mol_kg>
+    let psi_MPa = psi_stem.value_in(MPa)
+    phloem_molality = c_m1 - c_m2 * psi_MPa
+
+    // Osmotic potential from phloem molality (van't Hoff equation)
+    // π = -ρ · R · T · (c_Π1 · m_p + c_Π2 · m_p²)
+    // Units: kg/m³ · J/(mol·K) · K · mol/kg = J/m³ = Pa.
+    // c_pi1 · m_p has units mol/kg; c_pi2 · m_p² has units (kg/mol)·(mol/kg)² = mol/kg.
+    // The compiler converts the Pa result to MPa for WaterPotential automatically.
+    osmotic_potential = -water_density * gas_constant * temperature
+        * (c_pi1 * phloem_molality + c_pi2 * phloem_molality ** 2)
+
+    temperature: Temperature           // for osmotic potential and extensibility
+
+    // Turgor at stem base and apex
+    turgor_base: WaterPotential        // P at base = ψ_stem - π
+    turgor_apex: WaterPotential        // P at apex = ψ_stem - gravity_drop - π
+
+    turgor_base = psi_stem - osmotic_potential
+    turgor_apex = psi_stem - gravity_drop - osmotic_potential
+
+    gravity_drop: WaterPotential       // from tree structure
+
+    // Growth threshold and extensibility
+    turgor_threshold: WaterPotential   // Γ (~0.75 MPa)
+    phi_25: Extensibility              // φ̄ at 25°C
+    phi: Extensibility                 // temperature-adjusted φ̄
+
+    phi = extensibility_temperature(phi_25, temperature)
+
+    // Potential growth rate G_0 (Eqn 7)
+    // G_0 = φ̄ · (C_W / w_S) · mean_turgor_excess
+    // where w_S = stem carbon density per unit normalized height
+    G_0: GrowthRate
+    C_wood: CarbonPool                 // from tree structure
+    u_s: Fraction                      // fraction of new growth to stems (~0.25)
+
+    G_0 = phi * (C_wood / u_s) * mean_turgor_excess(turgor_base, turgor_apex, turgor_threshold)
+}
+
+
+// ============================================================================
+// Top-level model
+// ============================================================================
+
+pub root node PotkayTree<P: Photosynthesis> {
+    atm: Atmosphere
+    structure: TreeStructure
+    leaf_props: LeafProperties
+    hydraulics: HydraulicCatena
+    gas: GasExchange<P>
+    carbon: CarbonBalance
+    turgor: TurgorGrowth
+
+    // Simulation timestep
+    dt: Scalar<s>
+}
+
+
+// ============================================================================
+// Relations: Hydraulics (the planner finds the SCC)
+//
+// The flow-pressure-conductance system forms an algebraic loop:
+// flow depends on conductance, conductance depends on pressure,
+// pressure depends on flow. Same structure as Sperry, simpler catena.
+//
+// Potkay uses per-leaf-area k_L but whole-tree k_R, k_S.
+// Total E = k_R·(ψ_soil - ψ_R) = k_S·(ψ_R - ψ_S - ρgH) = a_t·k_L·(ψ_S - ψ_L)
+// ============================================================================
+
+// Root-soil segment VC evaluated at soil water potential
+relation root_vc_pressure:
+    hydraulics.root_soil.water_potential = atm.psi_soil
+
+// Stem VC evaluated at stem water potential
+relation stem_vc_pressure:
+    hydraulics.stem.core.water_potential = turgor.psi_stem
+
+// Leaf VC evaluated at leaf water potential
+relation leaf_vc_pressure:
+    hydraulics.leaf.core.water_potential = gas.leaf_water_potential
+
+// Where leaf water potential lives on the gas exchange node
+// (it's the downstream endpoint of the leaf segment)
+
+// Root-soil flow: soil to root junction
+relation root_flow:
+    hydraulics.transpiration =
+        hydraulics.root_soil.conductance
+        * (atm.psi_soil - hydraulics.psi_root_junction)
+
+// Stem flow: root junction to stem
+relation stem_flow:
+    hydraulics.transpiration =
+        hydraulics.stem.core.conductance
+        * (hydraulics.psi_root_junction - turgor.psi_stem - structure.gravity_drop)
+
+// Leaf flow: stem to leaf (scaled by leaf area)
+relation leaf_flow:
+    hydraulics.transpiration =
+        structure.leaf_area * hydraulics.leaf.core.conductance
+        * (turgor.psi_stem - hydraulics.leaf.core.water_potential)
+
+// Whole-tree transpiration = leaf-area × leaf-specific transpiration
+relation transpiration_scaling:
+    hydraulics.transpiration = structure.leaf_area * gas.E_leaf
+
+
+// ============================================================================
+// Relations: Photosynthesis inputs
+//
+// Wire the Photosynthesis contract inputs via the wiring pattern.
+// FarquharC3 is imported from the library — same implementation as Sperry.
+// ============================================================================
+
+relation photo_temperature:
+    gas.photo.temperature = gas.leaf_temperature
+
+relation photo_par:
+    gas.photo.par = leaf_props.kappa * atm.insolation * leaf_props.absorptance
+
+relation photo_co2:
+    gas.photo.co2 = atm.co2
+
+relation photo_o2:
+    gas.photo.o2 = atm.o2
+
+relation photo_pressure:
+    gas.photo.atm_pressure = atm.pressure
+
+relation gas_atm_pressure:
+    gas.atm_pressure = atm.pressure
+
+
+// ============================================================================
+// Relations: Leaf Energy Balance
+//
+// T_leaf depends on E (latent heat), E depends on D_leaf (leaf VPD),
+// D_leaf depends on T_leaf (saturation vapor pressure).
+// The planner discovers this SCC and emits a solver.
+// Same structure as Sperry, simplified for single canopy.
+// ============================================================================
+
+relation energy_balance:
+    // Boundary layer heat conductance (Nobel): empirical, calibrated to m/s and m
+    let u = atm.wind_speed.value_in(m_s)
+    let d = leaf_props.width.value_in(m)
+    let g_ha = (1.4 * 0.135 * sqrt(u / (d * 0.72))) mol_m2_s
+    // Radiative conductance: empirical polynomial, calibrated to degC
+    let T_c = atm.temperature.value_in(degC)
+    let g_r = (0.1579 + 0.0017 * T_c + 7.17e-6 * T_c ** 2) mol_m2_s
+    let latent_heat = 44100 J_mol              // latent heat of vaporization
+    gas.leaf_temperature =
+        atm.temperature
+        + (atm.insolation * leaf_props.absorptance
+           - leaf_props.emissivity * stefan_boltzmann * atm.temperature ** 4
+           - latent_heat * gas.E_leaf)
+          / (specific_heat_air * (g_r + g_ha))
+
+relation leaf_vpd:
+    let e_sat_leaf = saturated_vapor_pressure(gas.leaf_temperature)
+    let e_sat_air = saturated_vapor_pressure(atm.temperature)
+    let e_air = e_sat_air * atm.rh
+    gas.leaf_vpd = e_sat_leaf - e_air
+
+// Boundary layer conductance (Table 3: g_b = 2.4 mol m⁻² s⁻¹, treated as constant)
+relation boundary_layer:
+    gas.g_b = 2.4 mol_m2_s
+
+
+// ============================================================================
+// Relations: Carbon-Turgor Coupling
+//
+// Connects the carbon balance to the turgor growth computation.
+// This is the key new coupling that doesn't exist in the Sperry mock.
+// ============================================================================
+
+// Substrate limitation from NSC pool (Eqn 5, 6)
+relation growth_limitation:
+    carbon.sigma_g = substrate_limitation(carbon.C, carbon.gamma_g, structure.C_struct)
+
+relation respiration_limitation:
+    carbon.sigma_r = substrate_limitation(carbon.C, carbon.gamma_r, structure.C_struct)
+
+// Wire turgor growth inputs
+relation turgor_stem_pressure:
+    turgor.psi_stem = hydraulics.stem.core.water_potential
+
+relation turgor_temperature:
+    turgor.temperature = atm.temperature
+
+relation turgor_gravity:
+    turgor.gravity_drop = structure.gravity_drop
+
+relation turgor_wood:
+    turgor.C_wood = structure.C_wood
+
+// Actual growth = potential growth × substrate limitation (Eqn 3)
+relation actual_growth:
+    carbon.growth = carbon.sigma_g * turgor.G_0
+
+// NSC-limited maintenance respiration with Q10 temperature response (Eqn 4)
+relation maintenance_respiration:
+    carbon.R_M = carbon.sigma_r
+        * q10_response(carbon.R_M_25, carbon.q10_respiration, atm.temperature, 25 degC)
+
+// Total assimilation = leaf area × leaf-specific A_n
+relation total_assimilation:
+    carbon.assimilation_total = structure.leaf_area * gas.photo.assimilation
+
+
+// ============================================================================
+// Slot: Stomatal Control
+//
+// The world model declares WHAT stomata depend on. The HOW is pluggable.
+// Under the GOH, the optimal g_s maximizes ∫G dt (Eqn 1).
+// In Myco, this means training the slot to maximize cumulative growth —
+// the GOH criterion becomes the training objective in the workflow layer.
+// ============================================================================
+
+slot stomatal_control provides [gas.g_s]:
+    inputs = [*]
+
+
+// ============================================================================
+// Temporal: State Evolution
+// ============================================================================
+
+// NSC dynamics: the core carbon balance equation (Eqn 2)
+// dC/dt = a_t · A_n - R_M - R_G - G
+temporal nsc_dynamics:
+    carbon.C[t+1] = carbon.C[t]
+        + dt * (carbon.assimilation_total[t]
+                - carbon.R_M[t]
+                - carbon.R_G[t]
+                - carbon.growth[t])
+
+// Irreversible cavitation: track worst pressure for stem and leaf
+initial stem_cavitation_init:
+    hydraulics.stem.min_historical_pressure = hydraulics.stem.core.water_potential
+
+initial leaf_cavitation_init:
+    hydraulics.leaf.min_historical_pressure = hydraulics.leaf.core.water_potential
+
+temporal stem_cavitation:
+    hydraulics.stem.min_historical_pressure[t+1] =
+        min(hydraulics.stem.min_historical_pressure[t],
+            hydraulics.stem.core.water_potential[t])
+
+temporal leaf_cavitation:
+    hydraulics.leaf.min_historical_pressure[t+1] =
+        min(hydraulics.leaf.min_historical_pressure[t],
+            hydraulics.leaf.core.water_potential[t])
+
+// Track minimum soil water potential for root-soil conductance hysteresis
+// (the paper uses this for drought legacy effects, Fig 5)
+initial soil_drought_init:
+    atm.min_psi_soil = atm.psi_soil
+
+temporal soil_drought_memory:
+    atm.min_psi_soil[t+1] =
+        min(atm.min_psi_soil[t], atm.psi_soil[t])
+
+================================================================================
+DOCUMENT 6: AUTHOR'S PROJECT NOTE
+================================================================================
+
+let's worry less about "what we can implement now" and worry more about "what's the right thing for myco". i find that if I take shortcuts to    
+  get to products faster with LLMs it becomes harder, not easier, to build the right thing later on. so let's try to get it right. if we disregard  
+  tiers, what's the right version of this look like? i think from my perspective, the ux i want is to be able to add data and assumptions on the    
+  python side in stages or steps -- like i might take my .myco -> add a python script that furnishes my data and computes it -> it returns me       
+  another myco graph i can add some assumptions to etc. so symbolics and proof-like semantics would be useful here. for training, i actually think  
+  it's very important how we determine how to handle unobserved/underdetermined nodes. let me tell you more about my exact use case so i can make   
+  this clear. i'm a plant ecophysiologist. for decades, we've basically been following farquhar's insight: some systems, like stomata (also         
+  extends to carbon allocation, phenology, etc) are too complex to model mechanistically from how they're built, perhaps those things are           
+  regulated by stuff that happens at a cellular level and we can't build a tree from scratch out of its genes or molecule. so you have to have      
+  some compression to describe the stuff that you can't see. farquhar's approach was teleology: he said the *purpose* of stomata is to maximize     
+  carbon gain relative to water loss. the field has been running with heuristics like that for decades: sperry extends his optimization criterion   
+  to operate on a mechanistic body of a plant, with descriptions of hydraulics and photosynthesis. potkay moved the optimization criterion to       
+  growth, which lets you integrate some carbon dynamics etc. but we're still governed by a behavioral heuristic, which is basically imposing a few  
+  assumptions: 1.) plants have some purpose 2.) we, the observers, are capable of determining exactly what it is and 3.) plants are perfectly       
+  optimized in pursuit of that purpose. all of those assumptions are weak. think rubisco, recurrent laryngeal nerve, and so on. i see evolution as  
+  more a process of "whatever is reachable and whatever persists" not one of optimization. and while you can get your hueristics to behave          
+  realistically in typical conditions for a few timesteps, it doesn't allow us to simulate a tree over long timescales, especially in non-standard  
+  or weird conditions, and it doesn't generalize well across plant diversity and environmental conditions etc. you end up with these weird hacks    
+  in the literature where you ask 'what's going to happen to trees under future climates' and you restart the simulation every year so it doesn't   
+  accumulate error. seems like it defeats the point to me? and in models that do run over long time scales, think zoomed out ones like earth        
+  systems etc, you lose all of the complexity and dynamism of plants. my view is that the different components of a complex organism may be net     
+  synergetic or net (whatever the opposite of synergy is), and you can get things like rapid crashes to death with slight disturbance or            
+  surprising resilience, where the whole system is more than the sum of its parts, and you lose that resolution when you zoom out. so with myco,    
+  here's what i want to do: i want to learn the unobservable stuff from data, no assumptions. i want to have a mechanistic graph that describes     
+  how plants work. i want a neural controller that outputs "decisions" about anything we don't have a mechanistic model for -- stomata,             
+  allocation, phenology, aquaporins, etc. and the mechanistic graph should constrain the decision space to realistic ranges, and because we have    
+  some of the key systems represented outside of the neural net that drastically reduces the space of things the model has to learn -- e.g. it      
+  doesn't have to learn hydraulic physics or anything. but here's the thing: this kind of approach requires lots and lots of data, and plant        
+  ecophysiology has lots of field study, but it's all pretty sparse, irregular, and not organized well. so here's my thought: basically i want to   
+  take one mechanistic model -> scrape many papers for many of these small irregular datasets -> and train on the whole set. each dataset might     
+  require me to configure the model with different inputs and outputs. but if i can get all of the training runs to live in the same space at the   
+  same time, i think i can get identifiability of the control parameters to emerge from each indiviudal study's unmeasured parameters. like if      
+  study 24 says here's this dataset on non-structral carbohydrate concentrations and canopy dieback, i can use that, leave the rest symbolic,       
+  constrain with what i can from the types, mechanisms, constraints, etc, and for that particular study you might not be able to tell stomatal      
+  control from root depth, but as long as i have more papers that have root depth in them, i can still get to identifiability. does that make       
+  sense? so i see my path here as follows: 1.) build myco, properly. 2.) use myco to implement the sperry model, potkay model, etc. 3.) use those   
+  to generate synthetic datasets. 4.) remove the optimization crtierion from those models and replace them with neural net, train on the synthetic  
+  data, see if i can recover the controller. good test. 5.) start systematically removing data from my synthesized experiments. see if i can        
+  still train and recover the controller. 6.) ideally i should be able to delete so much data that each indivudal synthetic "study" doesn't         
+  contain sufficient information to make the controller identifiable on its own, but across the synthetic studies, we can recover the known         
+  controller. this would be evidence to me that the idea works. 7.) use LLMs to scrape both phyisogical and community level data on trees, build a  
+  training run, try to recover a controller that both A.) describes plant behavior B.) diverges from the heuristics. should recover more stuff      
+  than a heuristic can specify. i expect this one to be maybe worse at describing plants than a heuristic at first, and then i see it as my job to  
+  scale the shit out of the data to make my method win on scale. 8.) other notes: i see it that i need to do my training runs in an ecosystem       
+  simulation, not just a single tree simulation. if i train a tree where it's the only tree in the universe, it's not going to learn realistic      
+  things about like competition for light etc. another thing is that i need to figure out how to handle species etc. with things like traits that   
+  vary, i see that as data inputs to a generic mechanistic model, where we have these broadly applicable compressions like a vulnerability curve    
+  and a jmax and vmax and that stuff. I think we might want to use something like FiLM to do taxonomic embeddings on top of a foundation/base       
+  model that just knows everything about trees broadly, and then you can specify to something like "conifer" or "loblolly pine" if you want. and    
+  some of those will be better identified than others. this is what a different claude and a gemini instance said about film in this context:       
+  [Pasted text #2 +4 lines] . one more thing, is i want to be clear that i see this project as a consumer of myco, not something to throw in this   
+  repo for the tool. does all that make sense to you? do you see the vision?        
