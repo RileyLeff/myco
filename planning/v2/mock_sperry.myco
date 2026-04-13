@@ -342,9 +342,11 @@ pub node ConductingElement<V: VulnerabilityCurve> {
     k_max: HydraulicConductance
     vc: V
     water_potential: WaterPotential
+    vc_conductance: HydraulicConductance
     conductance: HydraulicConductance
 
-    conductance = k_max * (1.0 - vc(water_potential).plc)
+    // Raw VC-derived conductance (before any clamping)
+    vc_conductance = k_max * (1.0 - vc(water_potential).plc)
 }
 
 // Xylem segment: a conducting element with irreversible cavitation tracking.
@@ -356,13 +358,12 @@ pub node XylemSegment<V: VulnerabilityCurve> {
     min_historical_pressure: WaterPotential
     max_conductance: HydraulicConductance
 
-    // The inequality enforces that conductance cannot exceed its historical
-    // maximum — this is the irreversibility mechanism. The constraint alone
-    // detects and clamps violations; the temporal update of
-    // min_historical_pressure (in the root node's temporal block) is what
-    // ratchets the limit over time.
-    constraint irreversible_cavitation:
-        core.conductance <= max_conductance
+    // Irreversible cavitation: conductance is clamped to the historical maximum.
+    // Uses min() to provide a computational path — the planner can evaluate this
+    // as a normal relation. The temporal update of min_historical_pressure (in
+    // the root node's temporal block) ratchets the limit over time.
+    relation clamped_conductance:
+        core.conductance = min(core.vc_conductance, max_conductance)
 
     constraint max_conductance_from_history:
         max_conductance = core.k_max * (1.0 - core.vc(min_historical_pressure).plc)
@@ -553,6 +554,11 @@ pub root node SperryTree<
 // layers' unsaturated conductivities. This creates a tridiagonal coupling
 // pattern that the compiler can recognize and optimize.
 // ============================================================================
+
+// Soil conductance: for soil layers, conductance = vc_conductance (no cavitation memory).
+// XylemSegment defines its own clamped_conductance relation instead.
+relation soil_conductance[j in 0..N_SOIL]:
+    soil.layers[j].element.conductance = soil.layers[j].element.vc_conductance
 
 // Inter-layer conductance: harmonic mean of adjacent layers
 relation interlayer_k[j in 0..(N_SOIL-1)]:

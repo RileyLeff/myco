@@ -9,7 +9,7 @@
 // - Carbon-water coupling through turgor and osmotic potential
 // - NSC dynamics as temporal state with substrate limitation
 // - Turgor-driven Lockhart growth equation
-// - Stomatal control as a slot (the GOH criterion = training objective)
+// - Stomatal control as a slot (GOH usable as baseline, not training objective)
 // - Library reuse: imports VulnerabilityCurve, Photosynthesis from Sperry
 // - Simpler hydraulic catena than Sperry (single soil, no canopy layers)
 // - Different temperature responses (Q10 for respiration, peaked for growth)
@@ -487,6 +487,10 @@ relation leaf_vc_pressure:
 
 // Where leaf water potential lives on the gas exchange node
 // (it's the downstream endpoint of the leaf segment)
+
+// Soil conductance: no cavitation memory (desaturation is reversible)
+relation soil_conductance:
+    hydraulics.root_soil.conductance = hydraulics.root_soil.vc_conductance
 
 // Root-soil flow: soil to root junction
 relation root_flow:

@@ -291,7 +291,7 @@ The user's model module specializes each element to a concrete type:
 
 ```myco
 // Model module — fully concrete
-node MySite {
+pub root node MySite {
     eco: Ecosystem<3> {
         pfts[0]: PFT<FarquharC3, WeibullVC>     // oak tree
         pfts[1]: PFT<C4Photo, SigmoidVC>         // C4 grass
@@ -538,7 +538,7 @@ contract VulnerabilityCurve {
     output plc: Fraction
     output conductance_fraction: Fraction
 
-    property monotone: increasing(pressure -> plc)
+    property monotone: decreasing(pressure -> plc)
 
     // Default: most VCs compute conductance_fraction this way
     default conductance_fraction = 1.0 - plc
@@ -570,7 +570,7 @@ contract VulnerabilityCurve {
     input pressure: WaterPotential
     output plc: Fraction
 
-    property monotone: increasing(pressure -> plc)
+    property monotone: decreasing(pressure -> plc)
 }
 ```
 
@@ -1262,15 +1262,16 @@ contract VulnerabilityCurve {
     input pressure: WaterPotential
     output plc: Fraction
 
-    property monotone: increasing(pressure -> plc)
+    property monotone: decreasing(pressure -> plc)
 }
 ```
 
 **Quantification scope.** A property is an obligation over the full admissible
 domain induced by the node's declared fields and constraints. For example,
-`increasing(pressure -> plc)` on `VulnerabilityCurve` means "for all values of
+`decreasing(pressure -> plc)` on `VulnerabilityCurve` means "for all values of
 `pressure` and for all parameter values satisfying the node's own constraints,
-`plc` is increasing in `pressure`." Property satisfaction must not depend on
+`plc` is decreasing in `pressure`" — as water potential becomes more negative
+(pressure decreases), PLC increases. Property satisfaction must not depend on
 workflow bindings — it is a structural guarantee of the implementation.
 
 Properties are verified by the compiler where possible:
@@ -1283,7 +1284,7 @@ Properties are verified by the compiler where possible:
 The user may explicitly acknowledge an unverifiable property:
 
 ```myco
-property monotone: increasing(pressure -> plc) #[verified_externally]
+property monotone: decreasing(pressure -> plc) #[verified_externally]
 ```
 
 The `#[verified_externally]` annotation suppresses the error and records the
@@ -1431,7 +1432,11 @@ the previous step and is no longer an SCC unknown.
 
 `initial` blocks complement the workflow-layer `assume_initial` and
 `learn_initial` verbs. The three mechanisms are mutually exclusive for a given
-temporal quantity — the compiler errors if more than one is provided:
+temporal quantity — the compiler errors if more than one is provided.
+Additionally, each temporal quantity may have at most one `initial` block
+equation, even after structural introspection expansion. If two `initial`
+blocks (or two expansions of the same pattern) produce equations for the same
+quantity, the compiler errors with a diagnostic identifying the duplicate:
 
 - `initial` block in `.myco`: value determined algebraically from the model
   graph at t=0
@@ -1549,9 +1554,20 @@ concrete types, same const generics). If experiment A uses
 be shared. The compiler detects interface mismatches across experiments in a
 study and errors with the differing input sets.
 
-The slot's outputs then extend the computable set and planning continues. This
-is order-dependent (the slot sees everything computed before it), but the
-planner's topological ordering makes this deterministic.
+**Slot runtime contract.** A slot has a fixed, ordered structural interface
+determined at model load time. At each evaluation, the runtime supplies a value
+for every input path. The *source* of each value — whether it was precomputed
+by a prior planning step, backed by a latent owner, or is the current iterate
+of an SCC solver — is determined by the planner and is not visible to the slot
+or its author. If the planner discovers that the slot participates in an SCC
+(section 7.3), the slot is called as part of the solver residual; its interface
+is unchanged, only the calling pattern differs. This is the core invariant:
+the slot's structural interface is a static property of the model graph; value
+sourcing and execution placement are compiler-internal decisions.
+
+This design follows from the soul: "if you have to think about execution order
+while writing the model, the abstraction is leaking." The slot author declares
+what the slot provides and what it can see. The compiler handles the rest.
 
 **Multiple slots.** When a model has multiple slots (e.g., stomatal control and
 carbon allocation), the planner resolves their ordering via topological
@@ -1579,7 +1595,13 @@ slot controller provides [canopy.leaves[*].stomata]:
 ```
 
 Path wildcards (`[*]`) indicate that the slot operates over all instances of a
-repeated structure.
+repeated structure. **Elementwise semantics**: a wildcard slot is called
+once per element. The controller receives one element's inputs and returns one
+element's outputs. The compiler emits `vmap` over the element dimension,
+giving the controller a batched `[N, D_in]` → `[N, D_out]` signature at the
+JAX level without the controller author writing vectorization code. This means
+the controller's input dimensionality `D_in` is per-element (e.g., one canopy
+layer's quantities), not the full model's flattened vector.
 
 #### 7.2 Slot binding modes
 
@@ -1594,10 +1616,27 @@ binding time via one of three modes:
   planned like any other relations.
 - **Assumed**: raw data supplied directly for the slot's output quantities.
 
-Controllers are not a special file format. A controller is just a `.myco` module
-that provides relations for the right quantities. When the compiler merges a
-controller's relations into the host model's graph, it may introduce new
-algebraic loops — the SCC detection (section 12.5) handles this naturally.
+**Authoring transparent controllers.** A transparent controller is a `.myco`
+module that provides relations for the slot's `provides` quantities. The
+controller module's relations are written in terms of the slot's structural
+interface — the same named paths that `[*]` resolves to. When the compiler
+merges a controller into the host model, it rebases the controller's path
+references into the host graph's namespace. Concretely:
+
+1. The controller module declares a root node whose fields correspond to the
+   slot's provides and inputs paths.
+2. The controller's relations define the control policy as equalities using
+   those fields.
+3. At merge time, the compiler substitutes the controller's field references
+   with the corresponding host-model paths. The result is a set of equalities
+   in the host graph, planned like any other relations.
+4. Merging may introduce new algebraic loops — the SCC detection (section
+   12.5) handles this naturally.
+
+The controller does not need to know the host model's full structure. It sees
+only the slot's structural interface — the same paths a learned controller
+would receive as its input vector. This keeps controllers portable across
+host models that share the same slot interface.
 
 Example package layout:
 
@@ -1670,6 +1709,48 @@ print(interface.resolved_inputs)
 
 This allows users to inspect what the learned controller will see without
 manually listing every input.
+
+#### 7.5 Trained slot serialization and rebinding
+
+After training, a learned slot's parameters can be saved and later rebound in
+simulate mode. The compiled artifact provides serialization:
+
+```python
+# After training:
+artifact.save_slot("stomatal_control", "path/to/trained_controller")
+```
+
+The saved artifact contains:
+
+- **Interface manifest**: the slot's ordered structural interface — input path
+  names, output path names, and their dimensions. This is the identity of the
+  controller: two controllers are compatible if and only if their manifests
+  match exactly.
+- **Parameters**: the learned weights, serialized in the backend's native format
+  (e.g., JAX pytree checkpoint). Parameters are backend-specific and not
+  portable across backends.
+- **Architecture metadata**: the neural network architecture specification
+  (layer sizes, activation functions) needed to reconstruct the callable.
+- **Provenance**: the model instantiation, training study, and compiler version
+  used to produce the checkpoint.
+
+Rebinding a trained controller:
+
+```python
+experiment.bind_slot("stomatal_control", "path/to/trained_controller")
+```
+
+The compiler loads the interface manifest and verifies that the current model's
+structural interface for the named slot matches the saved manifest exactly. A
+mismatch (different input paths, different ordering, different dimensions) is a
+compile error with a diagnostic showing the differing paths. This prevents
+silently using a controller trained on a different model structure.
+
+Trained controllers and transparent `.myco` controllers use the same
+`bind_slot` verb. The compiler distinguishes them by inspecting the path: if
+it contains a serialized checkpoint, the slot is bound as an opaque callable;
+if it points to a `.myco` module, the slot is bound transparently and its
+relations are merged into the graph.
 
 ---
 
@@ -1893,15 +1974,26 @@ allocation_leaves = dA_dgs / (dA_dgs + dG_dk_root)
 The compiler resolves `deriv` by walking the expression graph from
 `quantity_a` back to `quantity_b` and applying the chain rule symbolically.
 Because all registered functions have transparent expression bodies (section
-9.2), the compiler always has the full expression chain. No numerical fallback
-is needed for `deriv` within the world model — symbolic differentiation is
-mechanical (the chain rule always works on a known expression graph).
+9.2), the compiler always has the full expression chain for acyclic paths.
+
+`deriv` is a semantic derivative operator that lowers to one of two
+implementations depending on graph structure:
+
+- **Acyclic paths**: the compiler resolves the derivative to a concrete
+  symbolic expression at compile time using the chain rule. The emitted code
+  evaluates this expression directly — there is no AD overhead at runtime.
+- **Paths through SCCs**: the implicit function theorem requires the Jacobian
+  of the SCC's equation system. For small SCCs (e.g., the 2×2 Farquhar A-Ci
+  system), the compiler may invert the Jacobian symbolically and produce a
+  compile-time expression. For larger SCCs, symbolic Jacobian inversion is
+  intractable and the compiler emits a runtime autodiff call (`jax.jacfwd`
+  over the `custom_root` solver). The compilation plan (section 14.5) reports
+  which `deriv` expressions were resolved symbolically and which require
+  runtime AD.
 
 `deriv` produces a new expression that the planner treats like any other
 relation. It participates in SCC detection, path selection, and code emission
-normally. The emitted code evaluates the derivative expression directly — there
-is no AD overhead at runtime because the derivative has been resolved to a
-concrete expression at compile time.
+normally.
 
 **`integrate(expr, var, lower, upper)`** — the definite integral of `expr` with
 respect to `var` over the interval `[lower, upper]`.
@@ -1941,19 +2033,8 @@ world model's expression graph.
 
 - `deriv` can differentiate through **contract invocations** (which have
   transparent expression bodies) and through **square implicit components**
-  (SCCs) via the implicit function theorem. For example,
-  `deriv(photo.assimilation, gas.g_s)` differentiates through the Farquhar
-  A-Ci SCC, which the compiler handles by applying the implicit function
-  theorem to the SCC's equation system.
-- **`deriv` through SCCs is not fully symbolic.** The implicit function theorem
-  requires the Jacobian of the SCC's equation system. For small SCCs (e.g.,
-  the 2×2 Farquhar A-Ci system), the compiler can invert the Jacobian
-  symbolically and produce a compile-time expression. For larger SCCs (e.g.,
-  an N-segment hydraulic network), symbolic Jacobian inversion is
-  intractable. In these cases, the compiler emits a runtime autodiff call
-  (`jax.jacfwd` over the `custom_root` solver) rather than a symbolic
-  expression. The compilation plan (section 14.5) reports which `deriv`
-  expressions were resolved symbolically and which require runtime AD.
+  (SCCs) via the implicit function theorem. The two-tier lowering (symbolic
+  for acyclic paths, runtime AD for SCC-bound paths) is described above.
 - `deriv` **cannot** differentiate through slots (slots are opaque) or through
   underdetermined residual blocks (where the system is not closed).
 - **`deriv` output must not feed back into the SCC it differentiates through.**
@@ -2926,6 +3007,12 @@ experiment.assume_constant("dt", value=1800.0)      # value inline
 artifact.run({"hydraulic_cond": 0.5, ...})
 ```
 
+The `artifact.run()` method is a Python convenience wrapper over the emitted
+`rollout()` function (section 13.2). It maps the user-facing input dictionary
+to the emitted module's pytree structure, calls `rollout()`, and maps the
+output back. The emitted module is the product (soul principle 5); `run()` is
+a thin API layer.
+
 The compiler validates that every assumed quantity without an inline value has
 an entry in the runtime input dictionary. Missing entries are a runtime error.
 
@@ -3431,11 +3518,14 @@ See `mock_sperry.myco` for the full mock implementation. Key features exercised:
   XylemSegment]` — type-filtered subtree iteration
 - **Conditional expressions**: `if j > 0 then ... else 0` in soil water step
 - **Coupled supply-demand transpiration**: with the stomatal slot in the SCC,
-  supply and demand transpiration form a square implicit system (2 equations,
-  2 unknowns: transpiration and water potential). The system becomes
-  overconstrained only if both transpiration and water potential are externally
-  assumed, leaving two equations for zero unknowns. Closure policies (section
-  14.6) apply only in the overconstrained case.
+  supply and demand transpiration form a square implicit system. Schematically,
+  this is "2 equations, 2 unknowns: transpiration and water potential," though
+  the actual Sperry SCC is much larger (multi-layer soil pressures, interlayer
+  redistribution, per-layer root flows, junction pressures, root/stem/leaf
+  conductances, canopy-layer gas exchange, and leaf energy balance). The
+  system becomes overconstrained only if both transpiration and water
+  potential are externally assumed, leaving two equations for zero unknowns.
+  Closure policies (section 14.6) apply only in the overconstrained case.
 - **Full-graph slot inputs**: `inputs = [*]` for the stomatal controller, with
   the slot joining the hydraulic SCC when its output feeds the loop
 - **Pluggable controllers**: slot can be filled by gain-risk optimization,
@@ -3485,9 +3575,12 @@ beyond those exercised by the Sperry mock:
 - **Phloem osmotic potential**: computed from stem water potential via an
   empirical phloem molality relation, creating an additional algebraic coupling
   path between water status and turgor.
-- **GOH as slot training objective**: stomatal control is a slot; the growth
-  optimization hypothesis (maximize integral of G over lifetime) becomes the
-  training objective in the workflow layer, not a hardcoded optimality condition.
+- **GOH as slot baseline**: stomatal control is a slot; the growth optimization
+  hypothesis can serve as a baseline controller (via a hand-coded Python
+  function or transparent `.myco` controller in simulate mode) for generating
+  synthetic training data, but the slot itself is trained on observations via
+  supervised loss, not by implementing the GOH criterion as a training
+  objective.
 
 **Candidate use of `integrate` (section 9.5):** The `mean_turgor_excess`
 registered function (Eqn 7 of the paper) hardcodes the analytical solution to a
@@ -3741,10 +3834,11 @@ Items earlier in the list are prerequisites for items later.
     structural expansion
 14. **Planning with SCC detection** (section 12) — causal ordering + loop
     discovery
-15. **JAX emitter with solver emission** (section 13) — code generation
-16. **Compiler configuration** (section 14) — solver strategy, closure policies
-17. **Constraint analysis** (section 11) — static reasoning, property
-    verification, no-trust enforcement
+15. **Constraint analysis** (section 11) — static reasoning, property
+    verification, no-trust enforcement (needed by emitter for admissibility
+    projections and proven bounds)
+16. **JAX emitter with solver emission** (section 13) — code generation
+17. **Compiler configuration** (section 14) — solver strategy, closure policies
 
 **Workflow layer:**
 
