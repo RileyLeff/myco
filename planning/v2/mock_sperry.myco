@@ -114,7 +114,7 @@ pub contract Photosynthesis {
 // ============================================================================
 
 // Weibull VC (the standard Sperry parameterization for xylem)
-pub node WeibullVC : VulnerabilityCurve {
+pub type WeibullVC : VulnerabilityCurve {
     b: Scalar<MPa>          // Weibull scale (related to P50 magnitude)
     c: PositiveScalar       // Weibull shape (>1 sigmoidal, =1 exponential)
 
@@ -124,7 +124,7 @@ pub node WeibullVC : VulnerabilityCurve {
 }
 
 // P50-slope sigmoid VC (cleaner parameterization, trivially invertible)
-pub node SigmoidVC : VulnerabilityCurve {
+pub type SigmoidVC : VulnerabilityCurve {
     p50: WaterPotential     // pressure at 50% loss of conductivity
     slope: PositiveScalar   // steepness of the transition
 
@@ -134,7 +134,7 @@ pub node SigmoidVC : VulnerabilityCurve {
 // Van Genuchten VC (for soil — same contract, different physics)
 // Soil desaturation follows the same interface as xylem cavitation:
 // both map water potential to fractional loss of conductivity.
-pub node VanGenuchtenVC : VulnerabilityCurve {
+pub type VanGenuchtenVC : VulnerabilityCurve {
     vg_alpha: Scalar<MPa>       // air-entry pressure scale parameter
     vg_n: PositiveScalar        // pore size distribution parameter
 
@@ -159,7 +159,7 @@ pub node VanGenuchtenVC : VulnerabilityCurve {
 // Encapsulates temperature adjustment, biochemistry, and the A-Ci algebraic
 // loop. The planner discovers the loop (assimilation depends on c_i via
 // biochemistry, c_i depends on assimilation via diffusion) and emits a solver.
-pub node FarquharC3 : Photosynthesis {
+pub type FarquharC3 : Photosynthesis {
     // Parameters at 25C (assumable, learnable via workflow)
     v_max_25: CarbonFlux
     j_max_25: CarbonFlux
@@ -171,7 +171,7 @@ pub node FarquharC3 : Photosynthesis {
     constraint coordinated_capacity:
         j_max_25 = 1.67 * v_max_25
 
-    // Arrhenius activation energies — nodes, so they can be assumed or learned
+    // Arrhenius activation energies — fields, so they can be assumed or learned
     ha_vmax: Scalar<J_mol>
     hd_vmax: Scalar<J_mol>
     sv_vmax: Scalar<J_mol_K>
@@ -283,6 +283,11 @@ pub fn collatz_smooth_min(
     (x - sqrt(x * x - 4.0 * curvature * j_c * j_e)) / (2.0 * curvature)
 }
 
+// Physical constants used by temperature response functions
+universal R: Scalar<J_mol_K> = 8.314           // gas constant
+universal T_ref: Scalar<K> = 298.15            // reference temperature (25C)
+universal svp_a: Scalar<kPa> = 0.61121         // Buck equation coefficient
+
 // Arrhenius temperature response (generic over unit of value_25)
 pub fn arrhenius<U: Unit>(
     value_25: Scalar<U>,
@@ -292,9 +297,8 @@ pub fn arrhenius<U: Unit>(
     invertibility: bijective
     differentiability: smooth
 
-    let R = 8.314 J_mol_K
     // Compiler handles degC → K conversion automatically (affine unit transform)
-    value_25 * exp(activation_energy * (temperature - 298.15 K) / (298.15 K * R * temperature))
+    value_25 * exp(activation_energy * (temperature - T_ref) / (T_ref * R * temperature))
 }
 
 // Peaked Arrhenius (Leuning 2002) for Vmax, Jmax (generic over unit)
@@ -308,10 +312,9 @@ pub fn peaked_arrhenius<U: Unit>(
     invertibility: lossy    // peaked, so not injective over full range
     differentiability: smooth
 
-    let R = 8.314 J_mol_K
     // Compiler handles degC → K conversion automatically (affine unit transform)
-    let numerator = (1.0 + exp((sv * 298.15 K - hd) / (R * 298.15 K)))
-        * exp((ha / (R * 298.15 K)) * (1.0 - 298.15 K / temperature))
+    let numerator = (1.0 + exp((sv * T_ref - hd) / (R * T_ref)))
+        * exp((ha / (R * T_ref)) * (1.0 - T_ref / temperature))
     let denominator = 1.0 + exp((sv * temperature - hd) / (R * temperature))
     value_25 * numerator / denominator
 }
@@ -326,19 +329,19 @@ pub fn saturated_vapor_pressure(
     differentiability: smooth
 
     let T = temperature.value_in(degC)
-    0.61121 kPa * exp((18.678 - T / 234.5) * T / (257.14 + T))
+    svp_a * exp((18.678 - T / 234.5) * T / (257.14 + T))
 }
 
 
 // ============================================================================
-// Nodes: Generic Conducting Element
+// Types: Generic Conducting Element
 //
 // The fundamental building block shared by soil and plant hydraulics.
 // Both soil desaturation and xylem cavitation follow the same interface:
 // conductance = k_max * (1 - vc(pressure).plc)
 // ============================================================================
 
-pub node ConductingElement<V: VulnerabilityCurve> {
+pub type ConductingElement<V: VulnerabilityCurve> {
     k_max: HydraulicConductance
     vc: V
     water_potential: WaterPotential
@@ -351,7 +354,7 @@ pub node ConductingElement<V: VulnerabilityCurve> {
 
 // Xylem segment: a conducting element with irreversible cavitation tracking.
 // Soil elements use ConductingElement directly (desaturation is reversible).
-pub node XylemSegment<V: VulnerabilityCurve> {
+pub type XylemSegment<V: VulnerabilityCurve> {
     core: ConductingElement<V>
 
     // Cavitation tracking
@@ -361,7 +364,7 @@ pub node XylemSegment<V: VulnerabilityCurve> {
     // Irreversible cavitation: conductance is clamped to the historical maximum.
     // Uses min() to provide a computational path — the planner can evaluate this
     // as a normal relation. The temporal update of min_historical_pressure (in
-    // the root node's temporal block) ratchets the limit over time.
+    // the module-scope temporal block) ratchets the limit over time.
     relation clamped_conductance:
         core.conductance = min(core.vc_conductance, max_conductance)
 
@@ -371,10 +374,10 @@ pub node XylemSegment<V: VulnerabilityCurve> {
 
 
 // ============================================================================
-// Nodes: Atmosphere
+// Types: Atmosphere
 // ============================================================================
 
-node Atmosphere {
+type Atmosphere {
     co2: Pressure                  // atmospheric CO2 (~40 Pa)
     o2: Pressure                   // atmospheric O2 (~21000 Pa)
     vpd: Scalar<kPa>              // vapour pressure deficit
@@ -387,15 +390,15 @@ node Atmosphere {
 
 
 // ============================================================================
-// Nodes: Canopy Radiation
+// Types: Canopy Radiation
 // ============================================================================
 
-node CanopyLayer {
+type CanopyLayer {
     par: CarbonFlux                // PAR for this layer (umol m-2 s-1)
     lai_fraction: Fraction         // fraction of total LAI in this layer
 }
 
-node CanopyRadiation<const L: usize> {
+type CanopyRadiation<const L: usize> {
     layers: [CanopyLayer; L]
     total_lai: PositiveScalar
 
@@ -405,14 +408,14 @@ node CanopyRadiation<const L: usize> {
 
 
 // ============================================================================
-// Nodes: Soil
+// Types: Soil
 //
 // Each soil layer IS a conducting element (van Genuchten), plus geometry
 // and root distribution. The ConductingElement provides the pressure-
 // conductance relationship; the SoilLayer adds spatial structure.
 // ============================================================================
 
-node SoilLayer {
+type SoilLayer {
     element: ConductingElement<VanGenuchtenVC>
     thickness: Scalar<m>           // layer depth
     root_fraction: Fraction        // fraction of root biomass in this layer
@@ -426,7 +429,7 @@ node SoilLayer {
     constraint thickness_positive: thickness > 0 m
 }
 
-node Soil<const M: usize> {
+type Soil<const M: usize> {
     layers: [SoilLayer; M]
 
     // Inter-layer flow (Darcy's law between adjacent layers)
@@ -443,10 +446,10 @@ node Soil<const M: usize> {
 
 
 // ============================================================================
-// Nodes: Leaf Properties (physical constants per species)
+// Types: Leaf Properties (physical constants per species)
 // ============================================================================
 
-node LeafProperties {
+type LeafProperties {
     emissivity: Fraction           // longwave emissivity (~0.97)
     width: Scalar<m>              // leaf width, for boundary layer calc
     latent_heat: Scalar<J_mol>    // latent heat of vaporization (~44100)
@@ -457,14 +460,14 @@ node LeafProperties {
 
 
 // ============================================================================
-// Nodes: Leaf Gas Exchange (per canopy layer)
+// Types: Leaf Gas Exchange (per canopy layer)
 //
 // Generic over Photosynthesis contract — FarquharC3, C4, etc.
 // The photosynthesis implementation encapsulates temperature adjustment,
 // biochemistry, and the A-Ci algebraic loop internally.
 // ============================================================================
 
-node LeafGasExchange<P: Photosynthesis> {
+type LeafGasExchange<P: Photosynthesis> {
     photo: P
     leaf_temperature: Temperature
     leaf_vpd: Scalar<kPa>
@@ -481,14 +484,14 @@ node LeafGasExchange<P: Photosynthesis> {
 
 
 // ============================================================================
-// Nodes: Plant Hydraulics
+// Types: Plant Hydraulics
 //
 // Uses XylemSegment (ConductingElement + cavitation) for all plant tissue.
 // The pathway is a series/parallel network where the planner discovers
 // flow-pressure-conductance SCCs automatically.
 // ============================================================================
 
-node HydraulicPathway<V: VulnerabilityCurve, const M: usize> {
+type HydraulicPathway<V: VulnerabilityCurve, const M: usize> {
     root: [XylemSegment<V>; M]     // one root segment per soil layer
     stem: XylemSegment<V>
     leaf: XylemSegment<V>
@@ -509,7 +512,7 @@ node HydraulicPathway<V: VulnerabilityCurve, const M: usize> {
 // Top-level model
 // ============================================================================
 
-pub root node SperryTree<
+pub type SperryTree<
     V: VulnerabilityCurve,
     P: Photosynthesis,
     const N_SOIL: usize,

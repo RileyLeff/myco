@@ -142,7 +142,10 @@ pub fn substrate_limitation(
 // Q10 temperature response for maintenance respiration
 // Simpler than Arrhenius — appropriate when empirical Q10 is available.
 // Temperature difference is purely multiplicative (affine offsets cancel),
-// so dividing by 10 K produces a dimensionless exponent natively.
+// so dividing by q10_interval produces a dimensionless exponent natively.
+universal q10_interval: Scalar<K> = 10      // Q10 temperature interval
+universal T_ref_degC: Temperature = 25      // reference temperature for Q10 (25C)
+
 pub fn q10_response<U: Unit>(
     value_ref: Scalar<U>,
     q10: PositiveScalar,
@@ -152,12 +155,21 @@ pub fn q10_response<U: Unit>(
     invertibility: bijective
     differentiability: smooth
 
-    value_ref * q10 ** ((temperature - T_ref) / 10 K)
+    value_ref * q10 ** ((temperature - T_ref) / q10_interval)
 }
 
 // Temperature-dependent cell wall extensibility (Table 3, φ̄)
 // Following Johnson et al. (1942) / Parent et al. (2010),
 // modified so extensibility → 0 as temperature → 5°C.
+
+// Extensibility temperature response constants
+universal ext_T_opt: Scalar<K> = 298.15             // optimal temperature for growth
+universal ext_H_a: Scalar<J_mol> = 63000            // activation energy
+universal ext_H_d: Scalar<J_mol> = 200000           // deactivation energy
+universal ext_S_v: Scalar<J_mol_K> = 650            // entropy factor
+universal ext_cold_limit: Scalar<K> = 278.15        // 5°C — growth ceases below this
+universal ext_cold_steepness: Scalar<K_inv> = 2     // steepness of cold ramp
+
 pub fn extensibility_temperature(
     phi_25: Extensibility,
     temperature: Temperature,
@@ -166,19 +178,12 @@ pub fn extensibility_temperature(
     differentiability: smooth
 
     // Compiler handles degC → K via affine conversion
-    let T_opt = 298.15 K                     // optimal temperature for growth
-    let H_a = 63000 J_mol                    // activation energy
-    let H_d = 200000 J_mol                   // deactivation energy
-    let S_v = 650 J_mol_K                    // entropy factor
-    let R = 8.314 J_mol_K
-    let cold_limit = 278.15 K               // 5°C — growth ceases below this
+    let arrhenius_factor = exp(ext_H_a * (temperature - ext_T_opt) / (gas_constant * ext_T_opt * temperature))
+    let high_T_inhibition = (1 + exp((ext_S_v * ext_T_opt - ext_H_d) / (gas_constant * ext_T_opt)))
+        / (1 + exp((ext_S_v * temperature - ext_H_d) / (gas_constant * temperature)))
 
-    let arrhenius_factor = exp(H_a * (temperature - T_opt) / (R * T_opt * temperature))
-    let high_T_inhibition = (1 + exp((S_v * T_opt - H_d) / (R * T_opt)))
-        / (1 + exp((S_v * temperature - H_d) / (R * temperature)))
-
-    // Smooth ramp to zero below 5°C (2 K⁻¹ steepness)
-    let cold_factor = 1 / (1 + exp(-2 K_inv * (temperature - cold_limit)))
+    // Smooth ramp to zero below 5°C
+    let cold_factor = 1 / (1 + exp(-ext_cold_steepness * (temperature - ext_cold_limit)))
 
     phi_25 * arrhenius_factor * high_T_inhibition * cold_factor
 }
@@ -215,10 +220,10 @@ pub fn mean_turgor_excess(
 
 
 // ============================================================================
-// Nodes: Atmosphere
+// Types: Atmosphere
 // ============================================================================
 
-node Atmosphere {
+type Atmosphere {
     co2: Pressure                      // atmospheric CO2 (~40 Pa)
     o2: Pressure                       // atmospheric O2 (~21000 Pa)
     temperature: Temperature           // air temperature
@@ -233,14 +238,14 @@ node Atmosphere {
 
 
 // ============================================================================
-// Nodes: Tree Structure (allometric parameters)
+// Types: Tree Structure (allometric parameters)
 //
 // These are treated as rollout-stable or slowly-varying parameters.
 // In a full growth model they would be temporal state; here they are
 // assumed constant following the paper's "large, mature tree" assumption.
 // ============================================================================
 
-node TreeStructure {
+type TreeStructure {
     leaf_area: LeafArea                // a_t — total leaf area (m²)
     height: Height                     // H — stem height (m)
     rooting_depth: Height              // Z — rooting depth (m)
@@ -256,10 +261,10 @@ node TreeStructure {
 
 
 // ============================================================================
-// Nodes: Leaf Properties
+// Types: Leaf Properties
 // ============================================================================
 
-node LeafProperties {
+type LeafProperties {
     emissivity: Fraction               // longwave emissivity (~0.97)
     absorptance: Fraction              // shortwave absorptance (~0.5)
     width: Scalar<m>                  // leaf width, for boundary layer
@@ -271,7 +276,7 @@ node LeafProperties {
 
 
 // ============================================================================
-// Nodes: Hydraulic Catena
+// Types: Hydraulic Catena
 //
 // Soil → Root → Stem → Leaf, each segment with its own SigmoidVC.
 // Uses ConductingElement<SigmoidVC> for the conductance computation.
@@ -281,7 +286,7 @@ node LeafProperties {
 // but each segment has distinct VC parameters (different P50, slope).
 // ============================================================================
 
-node HydraulicCatena {
+type HydraulicCatena {
     // Three conducting segments, each with SigmoidVC
     // The VC parameters (p50, slope) differ per segment
     root_soil: ConductingElement<SigmoidVC>     // k_R, vc at ψ_soil
@@ -297,14 +302,14 @@ node HydraulicCatena {
 
 
 // ============================================================================
-// Nodes: Gas Exchange
+// Types: Gas Exchange
 //
 // Stomatal and boundary layer conductance, Farquhar photosynthesis.
 // The Photosynthesis contract is imported from the library — same
 // FarquharC3 implementation used in the Sperry mock.
 // ============================================================================
 
-node GasExchange<P: Photosynthesis> {
+type GasExchange<P: Photosynthesis> {
     photo: P
 
     g_s: Conductance                   // stomatal conductance (from slot)
@@ -336,7 +341,7 @@ node GasExchange<P: Photosynthesis> {
 
 
 // ============================================================================
-// Nodes: Carbon Balance
+// Types: Carbon Balance
 //
 // Whole-tree NSC pool with source-sink dynamics.
 // Carbon in = photosynthetic assimilation.
@@ -347,7 +352,7 @@ node GasExchange<P: Photosynthesis> {
 // Eqn 2: dC/dt = a_t · A_n - R_M - R_G - G
 // ============================================================================
 
-node CarbonBalance {
+type CarbonBalance {
     // NSC storage — the key temporal state variable
     C: CarbonPool
 
@@ -376,7 +381,7 @@ node CarbonBalance {
 
 
 // ============================================================================
-// Nodes: Turgor-Driven Growth
+// Types: Turgor-Driven Growth
 //
 // The Lockhart equation: growth depends on turgor excess above a
 // threshold, modulated by cell wall extensibility and NSC substrate
@@ -386,7 +391,7 @@ node CarbonBalance {
 // Eqn 7: G_0 = φ̄ · (C_W / w_S) · ∫max(P₀(z̄) - Γ, 0) dz̄
 // ============================================================================
 
-node TurgorGrowth {
+type TurgorGrowth {
     // Turgor computation
     psi_stem: WaterPotential           // stem water potential (from hydraulics)
     osmotic_potential: WaterPotential   // π (from phloem sap molality)
@@ -448,7 +453,7 @@ node TurgorGrowth {
 // Top-level model
 // ============================================================================
 
-pub root node PotkayTree<P: Photosynthesis> {
+pub type PotkayTree<P: Photosynthesis> {
     atm: Atmosphere
     structure: TreeStructure
     leaf_props: LeafProperties
@@ -550,6 +555,8 @@ relation gas_atm_pressure:
 // Same structure as Sperry, simplified for single canopy.
 // ============================================================================
 
+universal latent_heat_vap: Scalar<J_mol> = 44100  // latent heat of vaporization
+
 relation energy_balance:
     // Boundary layer heat conductance (Nobel): empirical, calibrated to m/s and m
     let u = atm.wind_speed.value_in(m_s)
@@ -558,12 +565,11 @@ relation energy_balance:
     // Radiative conductance: empirical polynomial, calibrated to degC
     let T_c = atm.temperature.value_in(degC)
     let g_r = (0.1579 + 0.0017 * T_c + 7.17e-6 * T_c ** 2) mol_m2_s
-    let latent_heat = 44100 J_mol              // latent heat of vaporization
     gas.leaf_temperature =
         atm.temperature
         + (atm.insolation * leaf_props.absorptance
            - leaf_props.emissivity * stefan_boltzmann * atm.temperature ** 4
-           - latent_heat * gas.E_leaf)
+           - latent_heat_vap * gas.E_leaf)
           / (specific_heat_air * (g_r + g_ha))
 
 relation leaf_vpd:
@@ -572,9 +578,11 @@ relation leaf_vpd:
     let e_air = e_sat_air * atm.rh
     gas.leaf_vpd = e_sat_leaf - e_air
 
-// Boundary layer conductance (Table 3: g_b = 2.4 mol m⁻² s⁻¹, treated as constant)
+// Boundary layer conductance (Table 3, treated as constant)
+universal g_b_const: Scalar<mol_m2_s> = 2.4   // boundary layer conductance
+
 relation boundary_layer:
-    gas.g_b = 2.4 mol_m2_s
+    gas.g_b = g_b_const
 
 
 // ============================================================================
@@ -611,7 +619,7 @@ relation actual_growth:
 // NSC-limited maintenance respiration with Q10 temperature response (Eqn 4)
 relation maintenance_respiration:
     carbon.R_M = carbon.sigma_r
-        * q10_response(carbon.R_M_25, carbon.q10_respiration, atm.temperature, 25 degC)
+        * q10_response(carbon.R_M_25, carbon.q10_respiration, atm.temperature, T_ref_degC)
 
 // Total assimilation = leaf area × leaf-specific A_n
 relation total_assimilation:
