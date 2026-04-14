@@ -490,7 +490,7 @@ relation stem_vc_pressure:
 relation leaf_vc_pressure:
     hydraulics.leaf.core.water_potential = gas.leaf_water_potential
 
-// Where leaf water potential lives on the gas exchange node
+// Where leaf water potential lives in the GasExchange type
 // (it's the downstream endpoint of the leaf segment)
 
 // Soil conductance: no cavitation memory (desaturation is reversible)

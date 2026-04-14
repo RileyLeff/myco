@@ -126,7 +126,7 @@ marked private is invisible to other `.myco` modules but fully accessible to
 Circular imports are disallowed. The module dependency graph must be a DAG. The
 compiler reports a cycle with the full import chain if one is detected.
 
-### 2. Types and Nodes
+### 2. Types
 
 A **type declaration** (`type Foo { ... }`) defines a reusable structural
 schema — analogous to a struct definition. The `type` keyword is used for all
@@ -198,7 +198,7 @@ declared field, and sibling field names are in scope. For example,
 
 #### 2.3 Containment model
 
-Containment is a tree. Each node has exactly one structural parent. This makes
+Containment is a tree. Each instance has exactly one structural parent. This makes
 paths unambiguous:
 
 ```myco
@@ -244,7 +244,7 @@ different pressure-volume behavior.
 
 #### 2.5 Heterogeneous collections with `dyn`
 
-Arrays of nodes are normally homogeneous:
+Arrays are normally homogeneous:
 
 ```myco
 leaves: [Leaf<FarquharC3>; N]      // all leaves use C3 photosynthesis
@@ -300,7 +300,7 @@ refinement block (`{ ... }`) for the containing type. The syntax rules:
   instantiates the array must provide its own ascriptions.
 
 The compiler verifies completeness: after processing the model module, every
-`dyn` reference in the transitive containment tree of each instantiated node
+`dyn` reference in the transitive containment tree of each concrete instance
 must be resolved to a concrete type. If any `dyn` slot remains unresolved, the
 compiler errors with the path to the unresolved element.
 
@@ -336,7 +336,7 @@ resolved. The flattener never sees it. No runtime dispatch is emitted.
 
 #### 2.6 Repeated structure
 
-Arrays of nodes use fixed-size syntax:
+Arrays use fixed-size syntax:
 
 ```myco
 leaves: [Leaf<P>; N]
@@ -1439,7 +1439,7 @@ inherited by implementations (see section 3.4.1).
 
 ### 6. Relations
 
-Relations connect quantities across nodes. They are the equations of the world.
+Relations connect quantities across types. They are the equations of the world.
 
 All relations must hold simultaneously. The user does not annotate which
 equations form coupled systems — the compiler discovers this automatically (see
@@ -3800,7 +3800,7 @@ type FarquharParams {
     #[arrhenius(ha=arrhenius_ha_jmax)]
     j_max_25: CarbonFlux
 
-    // Arrhenius energy parameters — nodes, so they can be assumed or learned
+    // Arrhenius energy parameters — fields, so they can be assumed or learned
     arrhenius_ha_vmax: Scalar<J_mol>
     arrhenius_ha_jmax: Scalar<J_mol>
 }
@@ -4158,7 +4158,7 @@ Items earlier in the list are prerequisites for items later.
 1. **Types** (sections 2, 3) — the structural core
 2. **Units and dimensions** (section 4) — needed by types, including affine
    transforms
-3. **Constraint language** (section 5) — needed by types and nodes
+3. **Constraint language** (section 5) — needed by types
 4. **Relations and temporal** (section 6) — the equation layer
 5. **Contracts with function-like invocation** (section 3.4) — trait system
 6. **Generics and `dyn`** (sections 2.4, 2.5) — parameterized structure
