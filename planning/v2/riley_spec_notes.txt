@@ -1,0 +1,12 @@
+we should treat this as a greenfield project. i do not care about v1. let's remove mentions of v1 from the spec and make v2 fully standalone.
+
+for library vs model module, a helpful analogy might be a rust source with or without a pub fn main(). it's still rust, compiling it just means something different. in general i like the distinction between description and "here's my thing let's do it". yeah agree lib vs bin reference there. 
+
+no inline instantiation whatsoever. nuke that from the spec. one way to do things. this is an antipattern.
+
+nuke myco.load("lib.myco", root=..., params=...) inline instantiation (section 1.1, lines 98-111). if you want a model, write a model module. no sugar.
+
+no bare magic numbers in .myco. every literal must be attached to a named declaration: `universal` (physics constant, valued inline, overridable from python) or `param` (value comes from workflow). dimensionless integers (0, 1, 2) in mathematical structure are the only exception. compiler rejects bare dimensioned literals in relations. python side can enumerate and override universals, must bind params.
+
+node vs type terminology is confused. intent: `type` defines a structural pattern (like a struct), `node` is an instance of a type on the graph. currently the spec uses `node` for both definitions and instances. `type` is only used for scalar newtypes. fix: use `type` for all composite definitions too, reserve `node` for instances. big terminological change across the whole spec. CONFIRMED: `type Stem { ... }` for definitions, `pub root node my_tree: Stem` for instantiation. library modules are all `type`, model module is where `node` appears.
+

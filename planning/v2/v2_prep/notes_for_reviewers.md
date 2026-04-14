@@ -77,10 +77,11 @@ vector has the same structure across experiments without requiring the compiler
 to prove equivalence of resolved input sets. Relaxing it is an optimization,
 not a correctness fix.
 
-For the stated research plan, the workaround is straightforward: use explicit
-`inputs = [list]` instead of `inputs = [*]`, choosing inputs that are
-structurally invariant across sites (e.g., leaf-level quantities rather than
-soil-layer arrays).
+Note: using explicit `inputs = [list]` does not bypass the structural identity
+requirement. Even with explicit inputs, all experiments sharing a controller
+must use the same model instantiation (same concrete types, same const
+generics, same `dyn` resolution map). Explicit inputs narrow the slot's
+interface but do not change the structural identity check.
 
 ## 4. Dimensional analysis through the unit system
 
