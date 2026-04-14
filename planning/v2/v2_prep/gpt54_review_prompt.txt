@@ -93,10 +93,11 @@ vector has the same structure across experiments without requiring the compiler
 to prove equivalence of resolved input sets. Relaxing it is an optimization,
 not a correctness fix.
 
-For the stated research plan, the workaround is straightforward: use explicit
-`inputs = [list]` instead of `inputs = [*]`, choosing inputs that are
-structurally invariant across sites (e.g., leaf-level quantities rather than
-soil-layer arrays).
+Note: using explicit `inputs = [list]` does not bypass the structural identity
+requirement. Even with explicit inputs, all experiments sharing a controller
+must use the same model instantiation (same concrete types, same const
+generics, same `dyn` resolution map). Explicit inputs narrow the slot's
+interface but do not change the structural identity check.
 
 ## 4. Dimensional analysis through the unit system
 
@@ -1167,6 +1168,16 @@ dimensionless.
 same dimension. If both sides have the same dimension but different units, the
 compiler converts both to base units before comparison.
 
+**Named-type compatibility for equality and comparison.** The named-type rules
+that apply to addition and subtraction (section 4.7) also apply to equality
+and comparison operators. Both sides of `=`, `>=`, `<=`, `>`, `<` must be
+named-type-compatible: either the same named type, or one side is anonymous
+with matching dimensions. `CarbonPool = WaterPool` is a compile error even
+though both have dimension `Amount` — they are semantically distinct types.
+This is critical in an acausal language where `=` is the central connective:
+without this rule, the type system would catch `CarbonPool + WaterPool` in
+arithmetic but silently allow equating them in a relation.
+
 **Literal numbers**: bare numeric literals (e.g., `1.6`, `0.01`) are
 dimensionless. To give a literal a unit, annotate it: `298.15 K`, `0.75 MPa`.
 Annotated literals are converted to base units at compile time. `0 degC`,
@@ -1709,19 +1720,25 @@ subsequent timesteps (t > 0), the temporal accumulator's value is known from
 the previous step and is no longer an SCC unknown.
 
 `initial` blocks complement the workflow-layer `assume_initial` and
-`learn_initial` verbs. The three mechanisms are mutually exclusive for a given
-temporal quantity — the compiler errors if more than one is provided.
-Additionally, each temporal quantity may have at most one `initial` block
-equation, even after structural introspection expansion. If two `initial`
-blocks (or two expansions of the same pattern) produce equations for the same
-quantity, the compiler errors with a diagnostic identifying the duplicate:
+`learn_initial` verbs. The four initialization mechanisms are mutually
+exclusive for a given temporal quantity — the compiler errors if more than one
+is provided. Additionally, each temporal quantity may have at most one
+`initial` block equation, even after structural introspection expansion. If
+two `initial` blocks (or two expansions of the same pattern) produce equations
+for the same quantity, the compiler errors with a diagnostic identifying the
+duplicate:
 
 - `initial` block in `.myco`: value determined algebraically from the model
   graph at t=0
 - `assume_initial` in Python: value supplied externally as data
 - `learn_initial` in Python: value optimized during training
+- `learn_trajectory` in Python (section 16): the trajectory owns *all*
+  timesteps including t=0. When `learn_trajectory` is declared for a temporal
+  quantity, it subsumes initialization — the trajectory's t=0 value is part of
+  the learned representation. Declaring `assume_initial` or `learn_initial`
+  alongside `learn_trajectory` for the same quantity is a compile error.
 
-If none of the three is provided for a temporal quantity, the planner adds it
+If none of the four is provided for a temporal quantity, the planner adds it
 to the resolution frontier as an unresolved initial condition. The compiler
 errors with a diagnostic listing the temporal quantities that lack
 initialization and the available mechanisms to provide it.
@@ -1974,6 +1991,37 @@ The controller does not need to know the host model's full structure. It sees
 only the slot's structural interface — the same paths a learned controller
 would receive as its input vector. This keeps controllers portable across
 host models that share the same slot interface.
+
+**Transparent controllers for wildcard slots.** When a transparent controller
+is bound to a wildcard slot (`provides [array[*].output]`), the compiler
+applies the same element-local/global input partition as for learned
+controllers:
+
+1. The controller's relations are written in terms of a single element's paths
+   (e.g., `leaf_temperature`, `vpd`) plus global paths (e.g., `pathway.flow`).
+2. At merge time, the compiler replicates the controller's relations for each
+   element in the array, substituting the element-local paths with the
+   concrete element's paths (`canopy_layers[0].leaf_temperature`,
+   `canopy_layers[1].leaf_temperature`, etc.) and sharing the global paths
+   across all copies.
+3. The resulting per-element relation sets are planned independently by the
+   planner. If the element-level relations are identical in structure (as they
+   will be for homogeneous arrays), the emitter may fuse them into a `vmap`
+   for efficiency — the same optimization as for learned wildcard controllers.
+
+This means a transparent controller for a wildcard slot is authored as if it
+handles a single element. The compiler handles the replication.
+
+**Metadata for transparent controllers.** Slot metadata (section 7.5) is
+available to transparent controllers as compile-time constants. The metadata
+dictionary entries are accessible as named constants in the controller
+module's scope after path-rebasing. For example, if the slot declares
+`metadata = {"species": "string", "pft_index": "int"}`, the controller
+module can reference `metadata.species` and `metadata.pft_index` in
+`where` clauses or conditional relations. Because metadata is compile-time
+(it is fixed per model instantiation, not per timestep), it cannot appear in
+temporal equations or learned expressions — only in structural guards and
+static relation selection.
 
 Example package layout:
 
@@ -3431,6 +3479,41 @@ fn my_blend(
 Because policies are `.myco` relations, they participate in dimensional
 checking, are differentiable when needed, and are backend-agnostic.
 
+**Policy semantic interface.** When the planner converts an overconstrained
+residual block into a closure policy invocation, it constructs the policy
+arguments as follows:
+
+An overconstrained component has N equations and M unknowns where N > M. The
+planner identifies the **target quantity** — the unknown the policy must
+produce a forward value for — and the **candidate paths** — each a distinct
+expression that computes the target from the component's equations. Each
+candidate is named by the relation that produces it (e.g.,
+`"demand_transpiration"`, `"supply_transpiration"`).
+
+For the common case (N = M + 1, one extra equation, one target unknown):
+the planner produces exactly two candidate paths. Each candidate is the
+expression that would determine the target if the other equation were dropped.
+The policy receives these two values and returns the forward value.
+
+For the general case (N > M + 1, multiple extra equations or multiple
+unknowns): the planner enumerates all maximal square subsystems (each
+containing M equations from the N available). Each subsystem produces a
+candidate solution for all M unknowns. The policy receives the set of
+candidate solution vectors and returns the forward values. The number of
+candidates is C(N, M) — combinatorial in the excess. The plan inspection
+(section 14.5) reports the candidate count; if it exceeds a configurable
+threshold, the compiler warns that the overconstrained block may be too large
+for practical policy application and suggests decomposition.
+
+Candidates are ordered deterministically: by the lexicographic order of the
+relation names included in each subsystem. The `preference` list in
+`soft_select` and `hard_select` refers to relation names, not candidate
+indices, so ordering is stable across compiler versions.
+
+The plan inspection reports for each overconstrained component: the target
+unknowns, the candidate paths with their relation names, which policy was
+applied (if any), and the resulting consistency loss structure.
+
 **Consistency losses.** Regardless of whether a closure policy is applied,
 the extra equations in overconstrained components generate consistency losses.
 In `train` mode, these losses penalize disagreement between world-claims. The
@@ -3699,10 +3782,13 @@ in simulation mode.
 
 If a user declares `learn_trajectory` for a quantity that also has a temporal
 equation (section 6.3), the trajectory is the **latent owner** — it provides
-the values for that quantity at each timestep. The temporal equation becomes a
-**physics residual factor** in the residual graph (section 12.7): a loss term
-penalizing deviation between the trajectory's values and what the temporal
-equation predicts.
+the values for that quantity at all timesteps, including t=0. The trajectory
+subsumes initialization: declaring `assume_initial`, `learn_initial`, or an
+`initial` block alongside `learn_trajectory` for the same quantity is a
+compile error (section 6.3). The temporal equation becomes a **physics
+residual factor** in the residual graph (section 12.7): a loss term penalizing
+deviation between the trajectory's values and what the temporal equation
+predicts.
 
 This is the PINN (physics-informed neural network) pattern and falls out
 naturally from the residual graph design. The temporal equation is a factor,
@@ -5801,4 +5887,4 @@ temporal soil_drought_memory:
 
 ## 6. Project Context Note
 
-This spec has been through multiple rounds of review by Claude, Gemini, GPT 5.4 Pro, and Meta Muse Spark. Previous rounds addressed: ConductingElement split, slot runtime contract unification, wildcard input partition, temporal first-order restriction, deriv two-tier lowering, failed SCC gradient semantics, trained slot serialization, runtime where-clause lowering, affine unit subtraction semantics, VC monotonicity direction, overconstrained canopy demand, soil water dimensional consistency, expression unit syntax, wildcard slots over dyn arrays, affine exception to named type subtraction, trajectory-local property enforcement, dimensionless exponentiation rule, TinyTree dimensional fix, contract satisfaction rewrite, dyn per-element type ascription formalization, const generic where-clause bounds, wildcard stability warning, named-type minus anonymous preservation rule, and MAJOR: replacement of the blanket deriv SCC feedback ban with hierarchical SCC decomposition (inner physics solve + IFT boundary + outer optimality solve). If you find issues that have already been addressed, note them as resolved. Focus on NEW findings.
+This spec has been through multiple rounds of review by Claude, Gemini, GPT 5.4 Pro, and Meta Muse Spark, plus a partial read-through by the author. Previous rounds addressed: ConductingElement split, slot runtime contract unification, wildcard input partition, temporal first-order restriction, deriv two-tier lowering, failed SCC gradient semantics, trained slot serialization, runtime where-clause lowering, affine unit subtraction semantics, VC monotonicity direction, overconstrained canopy demand, soil water dimensional consistency, expression unit syntax, wildcard slots over dyn arrays, affine exception to named type subtraction, trajectory-local property enforcement, dimensionless exponentiation rule, TinyTree dimensional fix, contract satisfaction rewrite, dyn per-element type ascription formalization, const generic where-clause bounds, wildcard stability warning, named-type minus anonymous preservation rule, hierarchical SCC decomposition (replacing deriv SCC ban), named-type rules for equality/comparison, learn_trajectory t=0 initialization semantics, closure policy semantic interface, transparent controller wildcard/metadata ABI, and shared-controller portability note fix. If you find issues that have already been addressed, note them as resolved. Focus on NEW findings.
