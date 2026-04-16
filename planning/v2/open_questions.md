@@ -1,23 +1,25 @@
 # Myco v2.1 — Open Questions
 
-Extracted from v2.1_in_progress.md, geometry_design_report.md, and April 2026
-design sessions. Organized by topic, roughly prioritized within each section.
+Extracted from v2.1_in_progress.md, chunk reports, and April 2026 design
+sessions. Organized by topic, roughly prioritized within each section.
 
 ---
 
 ## Domain Geometry — Remaining Open Questions
 
-The core geometry subsystem is settled (see `geometry_design_report.md`):
-`geometry` keyword, `Domain<G>`, `chart`, `topology`, `metric`, `locus`,
-`requires`, `trace()`, locus-scoped relations with `replaces` obligation keys,
-`normal_grad()`, `identify`, `assume_topology`. What remains:
+The core geometry subsystem is settled (see
+`v2.1_chunk_reports/01_geometry_design_report.md`): `geometry` keyword,
+`Domain<G>`, `chart`, `topology`, `metric`, `locus`, `requires`, `trace()`,
+locus-scoped relations with `replaces` obligation keys, `normal_grad()`,
+`identify`, `bind_topology`. What remains:
 
 ### Manifold boundary conditions for 2D/3D
 The `boundary coord = value:` selector and `normal_grad(field)` work for
 axis-aligned boundaries in any dimension. Open:
 
 - **Non-axis-aligned boundaries:** Circular domains, irregular coastlines,
-  complex 3D surfaces. Need a boundary naming/selection mechanism beyond
+  complex 3D surfaces, microtopographic depressions (in field-ecologist-speak:
+  sunken spots in the mud). Need a boundary naming/selection mechanism beyond
   `coord = value`.
 - **Additional boundary primitives:** `normal()` (vector itself), `jump()`
   (discontinuity across interface), `mean()` (average across interface)?
@@ -26,15 +28,9 @@ axis-aligned boundaries in any dimension. Open:
 - **Internal interfaces between subdomains/materials.**
 - **Tangential/slip conditions for vector fields.**
 
-### Graph neighborhood iteration
-Locus-scoped relations use `for c in children` and
-`sum(e in incident_edges, ...)`. The settled language only has `for i in 0..N`.
-Either geometry needs a dedicated neighborhood-reduction construct, or the
-language settles general dynamic iteration first.
-
-Same design question as `for i in fish` when `fish` is `dyn`-sized. Resolving
-dynamic iteration for events/collections would likely resolve graph-neighborhood
-iteration simultaneously.
+**Deprioritized:** For ecosystem modeling, terrain-as-field on a flat domain
+covers all practical use cases. Irregular boundaries are an elegance/efficiency
+concern, not a correctness concern.
 
 ### Compiler internals for custom metrics
 - **Basis-aware tensor IR:** Custom coordinate-dependent metrics require the
@@ -70,14 +66,39 @@ for specific PDE classes.
 
 ---
 
+## Collections & Iteration — Remaining Open Questions
+
+Core design settled (see
+`v2.1_chunk_reports/02_collections_iteration_report.md`): `impl` for
+heterogeneous types, `some` for dynamic sizing, `impl` + `some` composition
+via per-type pool desugaring, `for x in collection` syntax, aggregation
+primitives including `argmin`/`argmax`. What remains:
+
+### Event type specification for heterogeneous dynamic collections
+When an event creates an entity in a `[Tree<impl Photosynthesis>; some]`
+collection, how is the concrete type specified? Three options:
+1. Concrete type in event output: `event oak_recruit: -> Tree<FarquharC3>`
+2. Generic event: `event recruit<S: Photosynthesis>: -> Tree<S>`
+3. Workflow-layer selection: event creates generic Tree, species from Python
+
+### Restricting the type set
+Default is all in-scope implementations. If a user wants to restrict which
+implementations appear in a specific collection, needs a constraint mechanism.
+Deferred until there's demand.
+
+### `softmax` as a primitive
+Appeared in the `argmax` smooth-selection example. Stdlib candidate — standard
+mathematical operation, compiler could optimize (numerically stable
+log-sum-exp). Low priority.
+
+---
+
 ## Events (Dynamic Topology)
 
 - Can events be generic?
 - Can events span multiple container types? (Currently: events live on the
-  container that owns the `dyn` collection. Revisit if cross-container events
-  prove necessary.)
-- How does `for i in fish` iteration work when the collection is `dyn`-sized?
-  (Same design question as graph neighborhood iteration above.)
+  container that owns the `some`-sized collection. Revisit if cross-container
+  events prove necessary.)
 - Within-event conflict tiebreaking — index order is the default, but should
   the user be able to specify a tiebreak function?
 
@@ -125,3 +146,6 @@ for specific PDE classes.
   enumeration). Tracked in deferred_review_findings.md.
 - `deriv` primitive needs to handle matrix/tensor expressions for non-Euclidean
   spatial operators.
+- **Spec `dyn` keyword** needs updating to `impl` (heterogeneous types) and
+  `some` (dynamic sizing) throughout.
+- **Spec `assume_*` methods** need renaming to `bind_*` throughout.
