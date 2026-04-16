@@ -132,6 +132,23 @@ log-sum-exp). Low priority.
 - `where` on runtime values (e.g., `where mass > threshold`) is piecewise
   function behavior. How does this interact with differentiability? Does the
   compiler need to know about discontinuities?
+- **Named-type rules for equality and comparison.** Spec section 4.7 defines
+  named-type rules for arithmetic but not for `=`, `<`, `<=`, `>`, `>=`.
+  `CarbonPool = WaterPool` should be a compile error (same dimension, different
+  semantic type). Extend named-type rules to cover relations and comparisons.
+
+---
+
+## Slots & Controllers
+
+- **Transparent controller ABI for wildcard/metadata.** Learned wildcard slots
+  have a precise ABI (element-local/global partition, vmap, metadata).
+  Transparent controllers (`.myco` files imported as relations) just "get
+  path-rebased." Need to define how wildcard partitioning and metadata work
+  for transparent controllers.
+- **Shared-controller portability.** Reviewer notes suggest explicit `inputs` as
+  a workaround for different sites, but spec section 7.1 requires identical
+  model instantiation. These conflict — needs resolution.
 
 ---
 
@@ -140,9 +157,9 @@ log-sum-exp). Low priority.
 - **Spec section 6.3 temporal relations** needs updating. Currently shows
   explicit Forward Euler (`x[t+1] = x[t] + dt * rate`). Should use the v2.1
   `d(x) = expr` syntax where the compiler owns the integration scheme.
-- Add lib/bin analogy framing to the spec prose (tracked in riley_spec_notes.txt).
+- Add lib/bin analogy framing to the spec prose.
 - Closure policy semantic interface — what a policy receives (candidates,
-  enumeration). Tracked in deferred_review_findings.md.
+  enumeration).
 - `deriv` primitive needs to handle matrix/tensor expressions for non-Euclidean
   spatial operators.
 - **Spec `dyn` keyword** needs updating to `impl` (heterogeneous types) and
