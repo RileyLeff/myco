@@ -1484,87 +1484,94 @@ relation demand_transpiration[i in 0..N]:
 
 #### 6.3 Temporal relations
 
-Temporal relations describe how state evolves:
+Temporal relations describe how state evolves. Myco provides two surface forms
+with distinct semantics:
+
+- **`d(x) = expr`** — continuous ODE. `expr` is the instantaneous rate of
+  change of `x`. The compiler owns the integration scheme (Euler, RK4,
+  implicit, adaptive) and the internal step size. The user declares the
+  physics; the compiler chooses the numerics.
+
+- **`step(x) = expr`** — discrete update. At each tick, `x` is replaced by
+  `expr`. The compiler applies the RHS verbatim — there is no integration
+  scheme to choose. Use `step(·)` for accumulators, counters, ratchets, and
+  any quantity whose update has no continuous analog.
+
+A quantity that appears on the LHS of `d(·)` or `step(·)` is automatically
+inferred as persistent (requires initialization — see below).
+
+**Continuous: `d(x) = expr`.**
 
 ```myco
-temporal water_step[i in 0..N]:
-    canopy.leaves[i].water[t+1] =
-        canopy.leaves[i].water[t] - config.dt * canopy.leaves[i].transpiration[t]
+temporal carbon_dynamics:
+    d(carbon.NSC) = total_assimilation - carbon.R_M - carbon.R_G
 ```
 
-A quantity that appears on the left-hand side of a temporal relation is
-automatically inferred as persistent (requires initial state in the workflow
-binding).
+No `dt` appears in the RHS. The user describes the rate; the compiler is free
+to pick any integration scheme consistent with the declared dynamics. This
+upholds soul principle #3 ("the compiler does the work") — the integration
+scheme is a numerical concern, not a scientific one.
 
-**First-order only.** Temporal relations are restricted to first-order recurrences:
-only the subscripts `[t]` and `[t+1]` are permitted. Higher-order references
-like `[t-1]` or `[t+2]` are compile-time errors. If a model needs
-second-order state (e.g., acceleration), it must introduce an explicit auxiliary
-variable (e.g., `velocity[t+1] = velocity[t] + dt * acceleration`).
-
-**Implicit `[t]` indexing.** Within a `temporal` block, unsubscripted
-references to quantities default to `[t]`. That is, writing
-`canopy.leaves[i].transpiration` inside a temporal block is equivalent to
-`canopy.leaves[i].transpiration[t]`. Explicit subscripts (`[t]`, `[t+1]`) are
-always allowed and override the default. This avoids verbose `[t]` annotations
-on every right-hand-side quantity while keeping the temporal semantics
-unambiguous. For quantities that are constant (not temporal state), the implicit
-`[t]` is a no-op — the compiler recognizes that the quantity has no temporal
-dimension and ignores the subscript.
-
-**`dt` is a normal quantity.** The timestep is not a magic name or built-in.
-It is a quantity in the world model, assumed or learned through the normal binding
-vocabulary:
+**Discrete: `step(x) = expr`.**
 
 ```myco
-type SimulationConfig {
-    dt: Scalar<seconds>
-}
+temporal cavitation for seg in pathway where seg is XylemSegment:
+    step(seg.min_historical_pressure) =
+        min(seg.min_historical_pressure, seg.core.water_potential)
 ```
+
+The canonical use case is a monotone ratchet: `min_historical_pressure` has no
+continuous derivative — it is defined as "the min over all history so far."
+Any attempt to write `d(min_historical_pressure)` would be nonsensical. Other
+natural `step(·)` cases: counters, phenology stage transitions, event logs,
+and quantities with "memory of extremum" semantics.
+
+**Read/write semantics of `step(·)`.** Within a `step(·)` equation,
+unsubscripted RHS references read the *previous tick's* value, and the LHS
+writes the *current tick's* value. This is enforced by the semantics of the
+construct — users do not write explicit `[t]` or `[t+1]` subscripts. The rule
+makes simultaneous updates unambiguous: `step(a) = b` and `step(b) = a`
+together form a swap, not a cycle, because both RHSs read pre-tick values.
+
+**Mixing `d(·)` and `step(·)`.** Both forms may appear in the same model.
+They live in different semantic worlds: `d(·)` variables are advanced by the
+integrator between ticks; `step(·)` variables update at tick boundaries. The
+compiler composes them correctly — no user-level coordination is needed.
+
+**`dt` at the workflow layer.** Because `d(·)` does not mention `dt` in its
+RHS, the integration step size is a compiler concern (possibly adaptive, often
+finer than the user-visible output cadence). For `step(·)`, the tick cadence
+is set at the workflow layer:
 
 ```python
 experiment.assume_constant("config.dt", value=1800.0)
+# or
+experiment.assume_series("config.dt", values=variable_timesteps)
 ```
 
-This means `dt` participates in dimensional analysis, can have constraints
-(`dt > 0`, `dt <= max_safe_timestep`), and is visible in the model structure.
-The compiler recognizes the `[t+1]` / `[t]` pattern as temporal and handles
-rollout generation, but the timestep scalar itself is just a quantity.
+`dt` remains a normal quantity in the world model when it appears in the
+physics (e.g., a flux over an interval); it participates in dimensional
+analysis and may have constraints. It is not a reserved name, and any quantity
+may serve as the tick cadence. The planner handles constant and per-step `dt`
+identically.
 
-Any quantity name may serve as the timestep — there is no reserved name.
-
-`dt` may be rollout-stable (constant via `assume_constant`) or may vary per
-timestep (via `assume_series`). The planner handles both — a per-step `dt` is
-treated identically to any other per-step forcing. This enables variable
-time-stepping driven by external schedules.
-
-Temporal relations may use any function from the registry. In particular,
-accumulator patterns with `min` and `max` are supported:
+**Initial conditions from graph quantities.** Some temporal state has an
+initial value that is algebraically determined by other quantities at t=0,
+rather than supplied externally. For example, `min_historical_pressure` at
+t=0 should equal `water_potential` at t=0, but `water_potential` at t=0 is
+solved inside the hydraulic SCC — the user cannot provide it via
+`assume_initial`. The `initial` block declares this relationship:
 
 ```myco
-temporal cavitation_tracking[i in 0..N]:
-    pathway.segments[i].min_historical_pressure[t+1] =
-        min(pathway.segments[i].min_historical_pressure[t],
-            pathway.segments[i].water_potential[t])
-```
-
-**Initial conditions from graph quantities.** Some temporal state has an initial
-value that is algebraically determined by other quantities at t=0, rather than
-supplied externally. For example, `min_historical_pressure[0]` should equal
-`water_potential[0]`, but `water_potential[0]` is solved inside the hydraulic
-SCC — the user cannot provide it via `assume_initial`. The `initial` block
-declares this relationship:
-
-```myco
-initial cavitation[seg in pathway where seg is XylemSegment]:
+initial cavitation for seg in pathway where seg is XylemSegment:
     seg.min_historical_pressure = seg.core.water_potential
 ```
 
 The `initial` block establishes an equality at t=0 only. The compiler adds
 initial equations to the dependency graph for the first timestep, and SCC
 detection handles them naturally. If the initialized quantity participates in
-an SCC (e.g., `min_historical_pressure` affects `conductance` which is part of
-the hydraulic SCC), the initial equation becomes part of that SCC at t=0 —
+an SCC (e.g., `min_historical_pressure` affects `conductance` which is part
+of the hydraulic SCC), the initial equation becomes part of that SCC at t=0 —
 adding one equation and one unknown, keeping the system square. The solver
 resolves all SCC quantities simultaneously, including the initial value. For
 subsequent timesteps (t > 0), the temporal accumulator's value is known from
@@ -1572,12 +1579,12 @@ the previous step and is no longer an SCC unknown.
 
 `initial` blocks complement the workflow-layer `assume_initial` and
 `learn_initial` verbs. The four initialization mechanisms are mutually
-exclusive for a given temporal quantity — the compiler errors if more than one
-is provided. Additionally, each temporal quantity may have at most one
+exclusive for a given temporal quantity — the compiler errors if more than
+one is provided. Additionally, each temporal quantity may have at most one
 `initial` block equation, even after structural introspection expansion. If
-two `initial` blocks (or two expansions of the same pattern) produce equations
-for the same quantity, the compiler errors with a diagnostic identifying the
-duplicate:
+two `initial` blocks (or two expansions of the same pattern) produce
+equations for the same quantity, the compiler errors with a diagnostic
+identifying the duplicate:
 
 - `initial` block in `.myco`: value determined algebraically from the model
   graph at t=0
@@ -1585,8 +1592,8 @@ duplicate:
 - `learn_initial` in Python: value optimized during training
 - `learn_trajectory` in Python (section 16): the trajectory owns *all*
   timesteps including t=0. When `learn_trajectory` is declared for a temporal
-  quantity, it subsumes initialization — the trajectory's t=0 value is part of
-  the learned representation. Declaring `assume_initial` or `learn_initial`
+  quantity, it subsumes initialization — the trajectory's t=0 value is part
+  of the learned representation. Declaring `assume_initial` or `learn_initial`
   alongside `learn_trajectory` for the same quantity is a compile error.
 
 If none of the four is provided for a temporal quantity, the planner adds it
@@ -1594,35 +1601,23 @@ to the resolution frontier as an unresolved initial condition. The compiler
 errors with a diagnostic listing the temporal quantities that lack
 initialization and the available mechanisms to provide it.
 
-This pattern enables irreversible cavitation tracking: the worst pressure ever
-experienced becomes a permanent ceiling on future conductance, enforced via
-a constraint:
+This pattern enables irreversible cavitation tracking: the worst pressure
+ever experienced becomes a permanent ceiling on future conductance, enforced
+via a constraint:
 
 ```myco
-constraint irreversible_cavitation[i in 0..N]:
-    pathway.segments[i].conductance <=
-        k_max * (1.0 - vc(pathway.segments[i].min_historical_pressure).plc)
+constraint irreversible_cavitation for j in 0..N:
+    pathway.segments[j].conductance <=
+        k_max * (1.0 - vc(pathway.segments[j].min_historical_pressure).plc)
 ```
 
-**Future direction: first-class ODE declaration.** The current temporal syntax
-(`[t+1] = [t] + dt * rate`) hardcodes the forward Euler integration scheme
-into the world model. This is a mild violation of the soul principle "the
-compiler does the work" — the integration scheme is a numerical concern, not
-a scientific one. A future version could introduce a `rate()` operator:
-
-```myco
-temporal nsc_dynamics:
-    rate(carbon.C) = carbon.assimilation - carbon.R_M - carbon.R_G
-```
-
-This would let the compiler own the integration scheme (Euler, RK4, implicit)
-via compiler configuration, keeping the `.myco` file purely scientific. The
-current explicit syntax is retained for v2 because: (1) not all temporal
-updates are ODEs — discrete accumulators like `min(...)` are genuinely
-discrete; (2) the explicit form is simple and familiar; (3) for training via
-BPTT, the integration scheme matters less since gradients flow through whatever
-scheme is used. The `rate()` form is a natural upgrade path for stiff systems
-or when the compiler gains adaptive time-stepping capabilities.
+**Why two surface forms.** Collapsing the two into a single explicit-Euler
+form (`x[t+1] = x[t] + dt * rate`) would (1) hardcode the integration scheme
+into the model, violating soul principle #3, and (2) make discrete ratchets
+like `min_historical_pressure` read as if they were Euler steps of a
+nonexistent rate. Collapsing into `d(·)` alone would force users to invent
+pseudo-rates for genuinely discrete phenomena and fight the integrator. Two
+forms with sharply different semantics keep each case honest.
 
 #### 6.4 Multiple relations for the same quantity
 

@@ -1,0 +1,744 @@
+// ============================================================================
+// Sperry et al. (2017) Gain-Risk Hydraulic-Stomatal Model
+// Mock v2 Myco implementation for spec stress-testing
+//
+// Design principles:
+// - Represent the actual physics, not the numerical algorithms
+// - Let the compiler discover algebraic loops and choose solvers
+// - Vulnerability curves are a contract — soil and plant share the interface
+// - Photosynthesis is a contract — FarquharC3 encapsulates all biochemistry
+// - Stomatal control is a slot — pluggable (per canopy layer)
+// - Sun/shade canopy decomposition via val generics
+// - Irreversible cavitation via temporal min accumulator
+// - Generic ConductingElement shared by soil and xylem
+// - dt is a normal quantity, not a magic name
+// - All relations use = (equality), contracts invoked as functions
+// ============================================================================
+
+module plant::sperry
+
+use units::si::{
+    megapascal as MPa,
+    kilopascal as kPa,
+    kelvin as K,
+    celsius as degC,
+    pascal as Pa,
+    watt_per_square_meter as W_m2,
+    micromole_per_square_meter_second as umol_m2_s,
+    millimole_per_square_meter_second as mmol_m2_s,
+    mole_per_square_meter_second as mol_m2_s,
+    millimole_per_square_meter_second_per_megapascal as mmol_m2_s_MPa,
+    joule_per_mole as J_mol,
+    joule_per_mole_kelvin as J_mol_K,
+    meter as m,
+    meter_per_second as m_s,
+    seconds as s,
+    megapascal_cubic_meter_per_millimole as MPa_m3_mmol,
+    ratio,
+}
+
+use physics::constants::{stefan_boltzmann, specific_heat_air}
+
+
+// ============================================================================
+// Types
+// ============================================================================
+
+pub type WaterPotential : Scalar<U = MPa>
+
+pub type Conductance : Scalar<U = mmol_m2_s> {
+    self >= 0
+}
+
+pub type HydraulicConductance : Scalar<U = mmol_m2_s_MPa> {
+    self >= 0
+}
+
+pub type CarbonFlux : Scalar<U = umol_m2_s> {
+    self >= 0
+}
+
+pub type TranspirationRate : Scalar<U = mmol_m2_s> {
+    self >= 0
+}
+
+pub type Temperature : Scalar<U = degC>
+
+pub type Pressure : Scalar<U = Pa> {
+    self >= 0
+}
+
+pub type Fraction : Scalar<U = ratio> {
+    0 <= self <= 1
+}
+
+pub type PositiveScalar : Scalar<U = ratio> {
+    self > 0
+}
+
+
+// ============================================================================
+// Contracts
+// ============================================================================
+
+// Vulnerability curve: any function mapping water potential to fractional
+// loss of hydraulic conductivity. Shared by soil (van Genuchten) and plant
+// (Weibull, sigmoid). The unifying insight: both are pressure-dependent
+// conductance curves with the same mathematical shape.
+pub contract VulnerabilityCurve {
+    input pressure: WaterPotential
+    output plc: Fraction
+
+    property monotone: decreasing(pressure -> plc)
+}
+
+// Photosynthesis: any model mapping environmental inputs + CO2 conductance
+// to net assimilation and internal CO2. Implementations may contain internal
+// algebraic loops (e.g., A-Ci coupling) — the compiler discovers and handles
+// them via SCC detection.
+pub contract Photosynthesis {
+    input temperature: Temperature
+    input par: CarbonFlux
+    input g_c: Conductance
+    input co2: Pressure
+    input o2: Pressure
+    input atm_pressure: Scalar<U = kPa>
+
+    output assimilation: CarbonFlux
+    output c_i: Pressure
+}
+
+
+// ============================================================================
+// Vulnerability curve implementations
+// ============================================================================
+
+// Weibull VC (the standard Sperry parameterization for xylem)
+pub type WeibullVC : VulnerabilityCurve {
+    b: Scalar<U = MPa>          // Weibull scale (related to P50 magnitude)
+    c: PositiveScalar       // Weibull shape (>1 sigmoidal, =1 exponential)
+
+    constraint b_positive: b > 0 MPa
+
+    plc = 1.0 - exp(-(-pressure / b) ** c)
+}
+
+// P50-slope sigmoid VC (cleaner parameterization, trivially invertible)
+pub type SigmoidVC : VulnerabilityCurve {
+    p50: WaterPotential     // pressure at 50% loss of conductivity
+    slope: PositiveScalar   // steepness of the transition
+
+    plc = 1.0 / (1.0 + exp(slope * (pressure - p50)))
+}
+
+// Van Genuchten VC (for soil — same contract, different physics)
+// Soil desaturation follows the same interface as xylem cavitation:
+// both map water potential to fractional loss of conductivity.
+pub type VanGenuchtenVC : VulnerabilityCurve {
+    vg_alpha: Scalar<U = MPa>       // air-entry pressure scale parameter
+    vg_n: PositiveScalar        // pore size distribution parameter
+
+    constraint vg_alpha_positive: vg_alpha > 0 MPa
+
+    constraint valid_n:
+        vg_n > 1
+
+    let m = 1.0 - 1.0 / vg_n
+    let h = abs(pressure) / vg_alpha
+    let se = (1.0 + h ** vg_n) ** (-m)
+    let k_r = sqrt(se) * (1.0 - (1.0 - se ** (1.0 / m)) ** m) ** 2
+    plc = 1.0 - k_r
+}
+
+
+// ============================================================================
+// Photosynthesis implementations
+// ============================================================================
+
+// Farquhar-von Caemmerer-Berry C3 photosynthesis.
+// Encapsulates temperature adjustment, biochemistry, and the A-Ci algebraic
+// loop. The planner discovers the loop (assimilation depends on c_i via
+// biochemistry, c_i depends on assimilation via diffusion) and emits a solver.
+pub type FarquharC3 : Photosynthesis {
+    // Parameters at 25C (assumable, learnable via workflow)
+    v_max_25: CarbonFlux
+    j_max_25: CarbonFlux
+    r_day_25: CarbonFlux
+    k_c_25: Pressure               // Michaelis-Menten for CO2 (~41 Pa)
+    k_o_25: Pressure               // Michaelis-Menten for O2 (~28202 Pa)
+    gamma_star_25: Pressure        // CO2 compensation point (~4.36 Pa)
+
+    constraint coordinated_capacity:
+        j_max_25 = 1.67 * v_max_25
+
+    // Arrhenius activation energies — fields, so they can be assumed or learned
+    ha_vmax: Scalar<U = J_mol>
+    hd_vmax: Scalar<U = J_mol>
+    sv_vmax: Scalar<U = J_mol_K>
+    ha_jmax: Scalar<U = J_mol>
+    hd_jmax: Scalar<U = J_mol>
+    sv_jmax: Scalar<U = J_mol_K>
+    ha_rday: Scalar<U = J_mol>
+    ha_kc: Scalar<U = J_mol>
+    ha_ko: Scalar<U = J_mol>
+    ha_gamma: Scalar<U = J_mol>
+
+    // Fixed parameters
+    alpha: Fraction                // quantum yield (~0.3)
+    curvature_light: Fraction      // light response curvature (~0.9)
+    curvature_collab: Fraction     // Jc/Je curvature (~0.98)
+
+    // Temperature-adjusted values (internal, computed from contract input)
+    v_max: CarbonFlux
+    j_max: CarbonFlux
+    k_c: Pressure
+    k_o: Pressure
+    gamma_star: Pressure
+    r_day: CarbonFlux
+
+    v_max = peaked_arrhenius(v_max_25, ha_vmax, hd_vmax, sv_vmax, temperature)
+    j_max = peaked_arrhenius(j_max_25, ha_jmax, hd_jmax, sv_jmax, temperature)
+    k_c = arrhenius(k_c_25, ha_kc, temperature)
+    k_o = arrhenius(k_o_25, ha_ko, temperature)
+    gamma_star = arrhenius(gamma_star_25, ha_gamma, temperature)
+    r_day = arrhenius(r_day_25, ha_rday, temperature)
+
+    // Intermediate photosynthesis quantities
+    j_c: CarbonFlux
+    j_e: CarbonFlux
+    a_gross: CarbonFlux
+
+    j_c = rubisco_limited(v_max, c_i, gamma_star, k_c, k_o, o2)
+    j_e = electron_transport_limited(
+        electron_transport_rate(j_max, par, alpha, curvature_light),
+        c_i, gamma_star,
+    )
+    a_gross = collatz_smooth_min(j_c, j_e, curvature_collab)
+    assimilation = a_gross - r_day
+
+    // CO2 diffusion: creates the A-Ci algebraic loop
+    // The planner discovers that assimilation and c_i are mutually dependent
+    // and emits a solver for this 2-equation system.
+    assimilation = g_c * (co2 - c_i) / atm_pressure
+}
+
+
+// ============================================================================
+// Registered functions
+// ============================================================================
+
+// Farquhar Rubisco-limited assimilation
+pub fn rubisco_limited(
+    v_max: CarbonFlux,
+    c_i: Pressure,
+    gamma_star: Pressure,
+    k_c: Pressure,
+    k_o: Pressure,
+    o_a: Pressure,
+) -> CarbonFlux {
+    invertibility: injective_restricted
+    differentiability: smooth
+    domain: c_i > gamma_star
+
+    v_max * (c_i - gamma_star) / (c_i + k_c * (1.0 + o_a / k_o))
+}
+
+// Farquhar electron-transport-limited assimilation
+pub fn electron_transport_limited(
+    j: CarbonFlux,
+    c_i: Pressure,
+    gamma_star: Pressure,
+) -> CarbonFlux {
+    invertibility: injective_restricted
+    differentiability: smooth
+    domain: c_i > gamma_star
+
+    0.25 * j * (c_i - gamma_star) / (c_i + 2.0 * gamma_star)
+}
+
+// Electron transport rate (hyperbolic response to PAR)
+pub fn electron_transport_rate(
+    j_max: CarbonFlux,
+    q: CarbonFlux,
+    alpha: Fraction,
+    curvature: Fraction,
+) -> CarbonFlux {
+    invertibility: lossy
+    differentiability: smooth
+
+    let x = alpha * q + j_max
+    (x - sqrt(x * x - 4.0 * curvature * alpha * q * j_max)) / (2.0 * curvature)
+}
+
+// Collatz smooth minimum of Rubisco and electron-transport limited rates
+pub fn collatz_smooth_min(
+    j_c: CarbonFlux,
+    j_e: CarbonFlux,
+    curvature: Fraction,
+) -> CarbonFlux {
+    invertibility: lossy
+    differentiability: smooth
+
+    let x = j_c + j_e
+    (x - sqrt(x * x - 4.0 * curvature * j_c * j_e)) / (2.0 * curvature)
+}
+
+// Physical constants used by temperature response functions
+universal R: Scalar<U = J_mol_K> = 8.314           // gas constant
+universal T_ref: Scalar<U = K> = 298.15            // reference temperature (25C)
+universal svp_a: Scalar<U = kPa> = 0.61121         // Buck equation coefficient
+
+// Arrhenius temperature response (generic over unit of value_25)
+pub fn arrhenius<U: Unit>(
+    value_25: Scalar<U>,
+    activation_energy: Scalar<U = J_mol>,
+    temperature: Temperature,
+) -> Scalar<U> {
+    invertibility: bijective
+    differentiability: smooth
+
+    // Compiler handles degC → K conversion automatically (affine unit transform)
+    value_25 * exp(activation_energy * (temperature - T_ref) / (T_ref * R * temperature))
+}
+
+// Peaked Arrhenius (Leuning 2002) for Vmax, Jmax (generic over unit)
+pub fn peaked_arrhenius<U: Unit>(
+    value_25: Scalar<U>,
+    ha: Scalar<U = J_mol>,
+    hd: Scalar<U = J_mol>,
+    sv: Scalar<U = J_mol_K>,
+    temperature: Temperature,
+) -> Scalar<U> {
+    invertibility: lossy    // peaked, so not injective over full range
+    differentiability: smooth
+
+    // Compiler handles degC → K conversion automatically (affine unit transform)
+    let numerator = (1.0 + exp((sv * T_ref - hd) / (R * T_ref)))
+        * exp((ha / (R * T_ref)) * (1.0 - T_ref / temperature))
+    let denominator = 1.0 + exp((sv * temperature - hd) / (R * temperature))
+    value_25 * numerator / denominator
+}
+
+// Saturated vapor pressure (Buck equation)
+// Empirical equation calibrated to Celsius values — uses value_in to extract
+// raw float, then attaches kPa to the result.
+pub fn saturated_vapor_pressure(
+    temperature: Temperature,
+) -> Scalar<U = kPa> {
+    invertibility: injective_restricted
+    differentiability: smooth
+
+    let T = temperature.value_in(degC)
+    svp_a * exp((18.678 - T / 234.5) * T / (257.14 + T))
+}
+
+
+// ============================================================================
+// Types: Generic Conducting Element
+//
+// The fundamental building block shared by soil and plant hydraulics.
+// Both soil desaturation and xylem cavitation follow the same interface:
+// conductance = k_max * (1 - vc(pressure).plc)
+// ============================================================================
+
+pub type ConductingElement<V: VulnerabilityCurve> {
+    k_max: HydraulicConductance
+    vc: V
+    water_potential: WaterPotential
+    vc_conductance: HydraulicConductance
+    conductance: HydraulicConductance
+
+    // Raw VC-derived conductance (before any clamping)
+    vc_conductance = k_max * (1.0 - vc(water_potential).plc)
+}
+
+// Xylem segment: a conducting element with irreversible cavitation tracking.
+// Soil elements use ConductingElement directly (desaturation is reversible).
+pub type XylemSegment<V: VulnerabilityCurve> {
+    core: ConductingElement<V = V>
+
+    // Cavitation tracking
+    min_historical_pressure: WaterPotential
+    max_conductance: HydraulicConductance
+
+    // Irreversible cavitation: conductance is clamped to the historical maximum.
+    // Uses min() to provide a computational path — the planner can evaluate this
+    // as a normal relation. The temporal update of min_historical_pressure (in
+    // the module-scope temporal block) ratchets the limit over time.
+    relation clamped_conductance:
+        core.conductance = min(core.vc_conductance, max_conductance)
+
+    constraint max_conductance_from_history:
+        max_conductance = core.k_max * (1.0 - core.vc(min_historical_pressure).plc)
+}
+
+
+// ============================================================================
+// Types: Atmosphere
+// ============================================================================
+
+type Atmosphere {
+    co2: Pressure                  // atmospheric CO2 (~40 Pa)
+    o2: Pressure                   // atmospheric O2 (~21000 Pa)
+    vpd: Scalar<U = kPa>              // vapour pressure deficit
+    temperature: Temperature       // air temperature
+    pressure: Scalar<U = kPa>         // atmospheric pressure (~101.3)
+    wind_speed: Scalar<U = m_s>       // wind speed
+    r_abs: Scalar<U = W_m2>           // absorbed radiation
+    precipitation: TranspirationRate  // rainfall rate (for infiltration)
+}
+
+
+// ============================================================================
+// Types: Canopy Radiation
+// ============================================================================
+
+type CanopyLayer {
+    par: CarbonFlux                // PAR for this layer (umol m-2 s-1)
+    lai_fraction: Fraction         // fraction of total LAI in this layer
+}
+
+type CanopyRadiation<L: val> {
+    layers: [CanopyLayer; L]
+    total_lai: PositiveScalar
+
+    constraint lai_sums_to_one:
+        sum(layers[i].lai_fraction for i in 0..L) = 1
+}
+
+
+// ============================================================================
+// Types: Soil
+//
+// Each soil layer IS a conducting element (van Genuchten), plus geometry
+// and root distribution. The ConductingElement provides the pressure-
+// conductance relationship; the SoilLayer adds spatial structure.
+// ============================================================================
+
+type SoilLayer {
+    element: ConductingElement<V = VanGenuchtenVC>
+    thickness: Scalar<U = m>           // layer depth
+    root_fraction: Fraction        // fraction of root biomass in this layer
+
+    // Soil water storage capacity: converts molar flux divergence (mmol m⁻³ s⁻¹)
+    // to water potential change rate (MPa s⁻¹). This lumps the moisture retention
+    // slope dθ/dψ and the molar volume of water into a single parameter.
+    // A production model would compute this from the van Genuchten curve directly.
+    water_capacity: Scalar<U = MPa_m3_mmol>
+
+    constraint thickness_positive: thickness > 0 m
+}
+
+type Soil<M: val> {
+    layers: [SoilLayer; M]
+
+    // Inter-layer flow (Darcy's law between adjacent layers)
+    interlayer_flow: [TranspirationRate; M-1]   // flow from layer j to j+1
+    interlayer_conductance: [HydraulicConductance; M-1]
+
+    // Drainage from the bottom layer
+    drainage: TranspirationRate
+    drainage_conductance: HydraulicConductance
+
+    constraint root_fractions_sum:
+        sum(layers[j].root_fraction for j in 0..M) = 1
+}
+
+
+// ============================================================================
+// Types: Leaf Properties (physical constants per species)
+// ============================================================================
+
+type LeafProperties {
+    emissivity: Fraction           // longwave emissivity (~0.97)
+    width: Scalar<U = m>              // leaf width, for boundary layer calc
+    latent_heat: Scalar<U = J_mol>    // latent heat of vaporization (~44100)
+
+    constraint width_positive: width > 0 m
+    constraint latent_heat_positive: latent_heat > 0 J_mol
+}
+
+
+// ============================================================================
+// Types: Leaf Gas Exchange (per canopy layer)
+//
+// Generic over Photosynthesis contract — FarquharC3, C4, etc.
+// The photosynthesis implementation encapsulates temperature adjustment,
+// biochemistry, and the A-Ci algebraic loop internally.
+// ============================================================================
+
+type LeafGasExchange<P: Photosynthesis> {
+    photo: P
+    leaf_temperature: Temperature
+    leaf_vpd: Scalar<U = kPa>
+    transpiration: TranspirationRate
+    g_w: Conductance               // diffusive conductance to water vapour
+    g_w_max: Conductance           // maximum stomatal + boundary layer
+
+    constraint co2_conductance:
+        photo.g_c = g_w / 1.6
+
+    constraint within_capacity:
+        g_w <= g_w_max
+}
+
+
+// ============================================================================
+// Types: Plant Hydraulics
+//
+// Uses XylemSegment (ConductingElement + cavitation) for all plant tissue.
+// The pathway is a series/parallel network where the planner discovers
+// flow-pressure-conductance SCCs automatically.
+// ============================================================================
+
+type HydraulicPathway<V: VulnerabilityCurve, M: val> {
+    root: [XylemSegment<V = V>; M]     // one root segment per soil layer
+    stem: XylemSegment<V = V>
+    leaf: XylemSegment<V = V>
+
+    // Internal junction pressures (solved by the planner's SCC detection)
+    rhizosphere_pressure: [WaterPotential; M]
+    root_junction_pressure: WaterPotential
+    stem_pressure: WaterPotential
+    gravity_drop: WaterPotential   // height * 0.01 MPa/m
+
+    // Flow through the pathway
+    flow: TranspirationRate        // total E through the pathway
+    layer_flow: [TranspirationRate; M]  // per-layer root flow
+}
+
+
+// ============================================================================
+// Top-level model
+// ============================================================================
+
+pub type SperryTree<
+    V: VulnerabilityCurve,
+    P: Photosynthesis,
+    N_SOIL: val,
+    N_CANOPY: val,                 // canopy layers (2 = sun/shade)
+> {
+    atm: Atmosphere
+    radiation: CanopyRadiation<L = N_CANOPY>
+    soil: Soil<M = N_SOIL>
+    pathway: HydraulicPathway<V = V, M = N_SOIL>
+    canopy_layers: [LeafGasExchange<P = P>; N_CANOPY]
+    leaf_props: LeafProperties
+
+    // Simulation timestep — a normal quantity, not a magic name
+    dt: Scalar<U = s>
+
+    // Aggregate quantities
+    total_transpiration: TranspirationRate
+    total_assimilation: CarbonFlux
+
+    // Canopy-aggregate transpiration
+    constraint aggregate_transpiration:
+        total_transpiration = sum(
+            canopy_layers[i].transpiration
+            for i in 0..N_CANOPY
+        )
+
+    // Canopy-aggregate assimilation is LAI-weighted sum
+    constraint aggregate_assimilation:
+        total_assimilation = sum(
+            radiation.layers[i].lai_fraction
+            * canopy_layers[i].photo.assimilation
+            for i in 0..N_CANOPY
+        )
+}
+
+
+// ============================================================================
+// Relations: Soil Redistribution
+//
+// Water moves between adjacent soil layers driven by pressure gradients
+// (Darcy's law). Inter-layer conductance is the harmonic mean of adjacent
+// layers' unsaturated conductivities. This creates a tridiagonal coupling
+// pattern that the compiler can recognize and optimize.
+// ============================================================================
+
+// Soil conductance: for soil layers, conductance = vc_conductance (no cavitation memory).
+// XylemSegment defines its own clamped_conductance relation instead.
+relation soil_conductance for j in 0..N_SOIL:
+    soil.layers[j].element.conductance = soil.layers[j].element.vc_conductance
+
+// Inter-layer conductance: harmonic mean of adjacent layers
+relation interlayer_k for j in 0..(N_SOIL-1):
+    soil.interlayer_conductance[j] =
+        2.0 * soil.layers[j].element.conductance * soil.layers[j+1].element.conductance
+        / (soil.layers[j].element.conductance + soil.layers[j+1].element.conductance)
+
+// Inter-layer Darcy flow (positive = downward, from j to j+1)
+relation soil_redistribution for j in 0..(N_SOIL-1):
+    soil.interlayer_flow[j] =
+        soil.interlayer_conductance[j]
+        * (soil.layers[j].element.water_potential
+           - soil.layers[j+1].element.water_potential)
+        / ((soil.layers[j].thickness + soil.layers[j+1].thickness) / 2.0)
+
+// Bottom drainage (gravitational, using bottom layer conductance)
+relation bottom_drainage:
+    soil.drainage = soil.drainage_conductance * soil.layers[N_SOIL-1].element.water_potential
+
+
+// ============================================================================
+// Relations: Hydraulics (flat — the planner finds the SCCs)
+//
+// These equations form an implicit system. The planner will discover that
+// flow, pressures, and conductances are mutually dependent and emit a solver.
+// ============================================================================
+
+// VC evaluation pressures: wire each segment's water_potential to the network
+// pressure where it is evaluated. Without these, core.water_potential is
+// underdetermined and the planner will error.
+relation root_vc_pressure for j in 0..N_SOIL:
+    pathway.root[j].core.water_potential = pathway.rhizosphere_pressure[j]
+
+relation stem_vc_pressure:
+    pathway.stem.core.water_potential = pathway.stem_pressure
+
+// Leaf VC is already constrained: pathway.leaf.core.water_potential appears
+// as the downstream endpoint in the leaf_flow equation, so it is determined
+// by the SCC. No additional wiring needed.
+
+// Rhizosphere flow: soil to rhizosphere boundary
+// Uses SOIL conducting element (van Genuchten) — not xylem VC
+relation rhizosphere_flow for j in 0..N_SOIL:
+    pathway.layer_flow[j] =
+        soil.layers[j].element.conductance
+        * (soil.layers[j].element.water_potential - pathway.rhizosphere_pressure[j])
+
+// Root xylem flow: rhizosphere to root junction
+// Uses ROOT XYLEM conducting element (Weibull/sigmoid VC)
+relation root_flow for j in 0..N_SOIL:
+    pathway.layer_flow[j] =
+        pathway.root[j].core.conductance
+        * (pathway.rhizosphere_pressure[j] - pathway.root_junction_pressure)
+
+// Total flow is sum of per-layer root flows
+relation total_root_flow:
+    pathway.flow = sum(pathway.layer_flow[j] for j in 0..N_SOIL)
+
+// Stem flow
+relation stem_flow:
+    pathway.flow =
+        pathway.stem.core.conductance
+        * (pathway.root_junction_pressure - pathway.stem_pressure - pathway.gravity_drop)
+
+// Leaf flow
+relation leaf_flow:
+    pathway.flow =
+        pathway.leaf.core.conductance
+        * (pathway.stem_pressure - pathway.leaf.core.water_potential)
+
+// Per-layer transpiration demand
+// VPD is in kPa; divide by atmospheric pressure to get mole fraction deficit
+relation layer_transpiration for i in 0..N_CANOPY:
+    canopy_layers[i].transpiration =
+        canopy_layers[i].g_w * canopy_layers[i].leaf_vpd / atm.pressure
+
+// Aggregate transpiration: total demand across canopy layers equals total flow
+relation aggregate_transpiration:
+    pathway.flow = sum(canopy_layers[i].transpiration for i in 0..N_CANOPY)
+
+
+// ============================================================================
+// Relations: Photosynthesis inputs (connect canopy layer to contract)
+//
+// The Photosynthesis contract declares inputs; we connect them to the
+// model's atmospheric and canopy state.
+// ============================================================================
+
+relation photo_temperature for i in 0..N_CANOPY:
+    canopy_layers[i].photo.temperature = canopy_layers[i].leaf_temperature
+
+relation photo_par for i in 0..N_CANOPY:
+    canopy_layers[i].photo.par = radiation.layers[i].par
+
+relation photo_co2 for i in 0..N_CANOPY:
+    canopy_layers[i].photo.co2 = atm.co2
+
+relation photo_o2 for i in 0..N_CANOPY:
+    canopy_layers[i].photo.o2 = atm.o2
+
+relation photo_pressure for i in 0..N_CANOPY:
+    canopy_layers[i].photo.atm_pressure = atm.pressure
+
+
+// ============================================================================
+// Relations: Leaf Energy Balance (per canopy layer)
+//
+// T_leaf depends on E, but E depends on D_leaf, which depends on T_leaf.
+// This is another algebraic loop. The planner discovers and handles it.
+// ============================================================================
+
+relation energy_balance for i in 0..N_CANOPY:
+    // Boundary layer heat conductance (Nobel): empirical, calibrated to m/s and m
+    let u = atm.wind_speed.value_in(m_s)
+    let d = leaf_props.width.value_in(m)
+    let g_ha = (1.4 * 0.135 * sqrt(u / (d * 0.72))) mol_m2_s
+    // Radiative conductance: empirical polynomial, calibrated to degC
+    let T_c = atm.temperature.value_in(degC)
+    let g_r = (0.1579 + 0.0017 * T_c + 7.17e-6 * T_c ** 2) mol_m2_s
+    let e_layer = canopy_layers[i].transpiration
+    // Compiler handles degC → K for Stefan-Boltzmann term (affine unit transform)
+    canopy_layers[i].leaf_temperature =
+        atm.temperature
+        + (atm.r_abs
+           - leaf_props.emissivity * stefan_boltzmann * atm.temperature ** 4
+           - leaf_props.latent_heat * e_layer)
+          / (specific_heat_air * (g_r + g_ha))
+
+// Leaf VPD from saturated vapor pressure (nonlinear, physically correct)
+relation leaf_vpd for i in 0..N_CANOPY:
+    let e_sat_leaf = saturated_vapor_pressure(canopy_layers[i].leaf_temperature)
+    let e_sat_air = saturated_vapor_pressure(atm.temperature)
+    let e_air = e_sat_air - atm.vpd
+    canopy_layers[i].leaf_vpd = e_sat_leaf - e_air
+
+
+// ============================================================================
+// Slot: Stomatal Controller (per canopy layer)
+//
+// The world model declares WHAT stomata depend on. The HOW is pluggable.
+// The slot provides per-layer g_w — sun and shade leaves get different
+// stomatal conductance because they see different PAR and have different
+// gain curves. The slot joins the hydraulic SCC if its outputs feed the loop.
+// ============================================================================
+
+slot stomatal_control provides [canopy_layers[*].g_w]:
+    inputs = [*]
+
+
+// ============================================================================
+// Temporal: State Evolution
+// ============================================================================
+
+// Soil water balance: extraction by roots + redistribution + rain + drainage
+// NOTE: This is a simplification — the equation updates water potential directly
+// from flow rates. A production model would track volumetric water content and
+// use the moisture retention curve (dθ/dψ) to convert. This approximation is
+// adequate for the mock's purpose of stress-testing the language spec.
+temporal soil_water_step for j in 0..N_SOIL:
+    let extraction = pathway.layer_flow[j]
+    let inflow_above = if j > 0 then soil.interlayer_flow[j-1] else 0 mmol_m2_s
+    let outflow_below = if j < N_SOIL-1 then soil.interlayer_flow[j] else 0 mmol_m2_s
+    let infiltration = if j = 0 then atm.precipitation else 0 mmol_m2_s
+    let drain = if j = N_SOIL-1 then soil.drainage else 0 mmol_m2_s
+    d(soil.layers[j].element.water_potential) =
+        (inflow_above - outflow_below + infiltration - extraction - drain)
+        * soil.layers[j].water_capacity / soil.layers[j].thickness
+
+// Irreversible cavitation: track the worst pressure ever experienced.
+// Uses structural introspection to generate one temporal block per XylemSegment
+// in the pathway, rather than writing them out individually.
+initial cavitation_init for seg in pathway where seg is XylemSegment:
+    seg.min_historical_pressure = seg.core.water_potential
+
+// Irreversible cavitation: min_historical_pressure ratchets downward over
+// time. This is a discrete update, not an ODE — step(·) applies the RHS
+// verbatim at each tick rather than asking the compiler to integrate.
+temporal cavitation for seg in pathway where seg is XylemSegment:
+    step(seg.min_historical_pressure) =
+        min(seg.min_historical_pressure, seg.core.water_potential)
