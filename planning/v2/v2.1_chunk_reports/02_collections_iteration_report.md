@@ -2,6 +2,7 @@
 
 **Date:** 2026-04-16
 **Authors:** Riley Leff, Claude (Opus 4.6)
+**Reviewers:** Gemini 2.5 Pro (one review round)
 **Status:** Settled decisions. Ready for integration into the v2.1 spec.
 
 ---
@@ -272,9 +273,32 @@ priority_species = driest.photo
   currently-selected element. Discontinuous at switchover points (same
   class as `max(a, b)` at `a = b`). The compiler's existing
   differentiability annotation system handles this — no new machinery.
-- **Lowering:** Standard GPU reduction operation.
-- **Empty collection:** Undefined. Compiler requires a `count > 0` guard
-  or emits a compile-time warning.
+- **Empty collection:** Undefined. Must be guarded (see section 4.4).
+
+**Lowering — homogeneous collections:** Standard GPU reduction. `argmax`
+returns an index into the (possibly masked) array.
+
+**Lowering — heterogeneous collections:** When `argmax` operates across a
+heterogeneous `[T<impl Contract>; some]` collection (desugared to per-type
+pools), the result is a **tagged union** — internally a `(pool_id, index)`
+pair. Field access on the result emits a multiplexed gather across pools:
+
+```python
+# What the emitter generates for: tallest.crown_area
+# where tallest came from argmax over a heterogeneous collection:
+dominant_crown = jax.lax.switch(
+    tallest.pool_id, [
+        lambda: _trees_FarquharC3.crown_area[tallest.index],
+        lambda: _trees_C4Photo.crown_area[tallest.index],
+    ]
+)
+```
+
+This is invisible to the user — `tallest.crown_area` looks like a normal
+field access. But the compiler team must emit multiplexed lookups for any
+field dereference on an element reference from a heterogeneous collection.
+The reduction itself (finding the max) is still a standard GPU reduction
+across all pools; the multiplexing only applies to subsequent field access.
 
 For smooth selection when the discontinuity hurts training, the user writes
 a softmax manually:
@@ -297,8 +321,35 @@ smooth_crown = sum(weights[t] * t.crown_area for t in trees)
 | `any(...)` | `false` |
 | `all(...)` | `true` (vacuous truth) |
 | `count(...)` | `0` |
-| `min(...)` / `max(...)` | undefined — requires `count > 0` guard |
-| `argmin(...)` / `argmax(...)` | undefined — requires `count > 0` guard |
+| `min(...)` / `max(...)` | undefined — requires guard |
+| `argmin(...)` / `argmax(...)` | undefined — requires guard |
+
+**Guard syntax:** Use inline `if/else` (already settled in the language):
+
+```myco
+let max_h = if count(trees) > 0
+    then max(t.height for t in trees)
+    else 0.0 m
+
+let tallest_crown = if count(trees) > 0
+    then argmax(t.height for t in trees).crown_area
+    else 0.0 m2
+```
+
+**Lowering note:** On JAX/PyTorch, `jax.numpy.where` / `torch.where`
+evaluates both branches regardless of the condition. The `max()` or
+`argmax()` still executes on the padded array even when the collection is
+logically empty. The backend emitter must inject safe sentinels into invalid
+mask slots: `-inf` for `max`/`argmax`, `+inf` for `min`/`argmin`. This
+ensures the reduction produces a valid (but unused) result rather than NaN.
+
+### 4.5 `count` semantics
+
+`count(collection)` for a `some`-sized collection means the number of
+**valid** (alive) elements, not the backing array length. On JAX (masked
+lowering): `count(trees)` = `sum(validity_mask)`. On PyTorch (packed
+lowering): `count(trees)` = `len(packed_array)`. The distinction is
+invisible to the user but matters for backend implementors.
 
 ---
 
@@ -360,18 +411,43 @@ different forms.
 
 ## 7. Open Questions (carried forward)
 
-### 7.1 Event type specification for heterogeneous dynamic collections
+### 7.1 Event type specification for heterogeneous dynamic collections — RESOLVED
 
-When an event creates a new entity in a `[Tree<impl Photosynthesis>; some]`
-collection, how is the concrete type specified? Three options discussed,
-not yet settled:
+**Decision: Option 1 (concrete type in event output).** Option 2 (generic
+event) is acceptable as syntactic sugar. Option 3 (workflow-layer selection)
+is rejected.
 
-1. **Concrete type in event output:**
-   `event oak_recruit: -> Tree<FarquharC3> { ... }`
-2. **Generic event parameterized over type set:**
-   `event recruit<S: Photosynthesis>: -> Tree<S> { ... }`
-3. **Workflow-layer selection:**
-   Event creates generic `Tree`, species binding from Python.
+**Why Option 3 fails:** If the event creates a generic `Tree` and relies on
+Python to assign the species at runtime, the compiler cannot determine which
+type pool the entity belongs to. This destroys the static pool desugaring —
+the compiler would need a generic buffer with dynamic dispatch, ruining GPU
+performance.
+
+**Why Option 1 is correct:** The output type is concrete at compile time, so
+the compiler knows exactly which pool to append to. The validity mask for
+that specific pool is incremented. The entire operation remains static and
+vmappable.
+
+```myco
+event oak_recruit: -> Tree<FarquharC3>
+    when oak_seed_bank > threshold
+{
+    new_tree.mass = seed_mass
+}
+
+event grass_recruit: -> Tree<C4Photo>
+    when grass_seed_bank > threshold
+{
+    new_tree.mass = grass_seed_mass
+}
+```
+
+For 50 species, a declarative macro (spec section 18.1) generates the 50
+concrete recruitment events at compile time.
+
+**Option 2 as sugar:** `event recruit<S: Photosynthesis>: -> Tree<S>` is
+syntactic sugar — the compiler monomorphizes it to N concrete events, one
+per in-scope implementation. Same as how generic types are monomorphized.
 
 ### 7.2 Restricting the type set
 

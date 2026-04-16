@@ -74,12 +74,11 @@ heterogeneous types, `some` for dynamic sizing, `impl` + `some` composition
 via per-type pool desugaring, `for x in collection` syntax, aggregation
 primitives including `argmin`/`argmax`. What remains:
 
-### Event type specification for heterogeneous dynamic collections
-When an event creates an entity in a `[Tree<impl Photosynthesis>; some]`
-collection, how is the concrete type specified? Three options:
-1. Concrete type in event output: `event oak_recruit: -> Tree<FarquharC3>`
-2. Generic event: `event recruit<S: Photosynthesis>: -> Tree<S>`
-3. Workflow-layer selection: event creates generic Tree, species from Python
+### ~~Event type specification~~ — RESOLVED
+Concrete type in event output: `event oak_recruit: -> Tree<FarquharC3>`.
+Generic events (`event recruit<S: Photosynthesis>: -> Tree<S>`) are sugar
+(compiler monomorphizes). Workflow-layer selection rejected — breaks pool
+desugaring. For many species, declarative macros generate concrete events.
 
 ### Restricting the type set
 Default is all in-scope implementations. If a user wants to restrict which
