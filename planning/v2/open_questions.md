@@ -101,13 +101,21 @@ for seg in pathway where seg is XylemSegment:` and corresponding
 
 ## Type System
 
-### Named generic argument sugar
-The v2.1 rule requires all generic args to be named (`Scalar<U = kg>`), but
-single-parameter types make this verbose. Options: (a) positional is fine when
-there's exactly one type parameter, (b) always named, update all examples.
-Also: passthrough case `Scalar<U = U>` inside `fn arrhenius<U: Unit>` needs
-sugar (just `Scalar<U>`). Flagged by mock updates — every worked example in
-the design docs uses positional form. Blocks writing correct examples.
+### ~~Named generic argument sugar~~ — RESOLVED
+**Decision:** Positional allowed for exactly-one-parameter types; named
+required for 2+ parameters.
+
+- `Scalar<kg>` — positional, single-parameter, idiomatic
+- `SperryTree<V = WeibullVC, P = FarquharC3, N_SOIL = 4, N_CANOPY = 2>` —
+  named, required for 2+ parameters
+- `fn arrhenius<U: Unit>(x: Scalar<U>) -> Scalar<U>` — passthrough falls
+  out as positional binding to the local generic
+
+No partial-positional form. Adding a second parameter to a previously
+single-parameter type breaks existing positional uses at compile time —
+intended, since adding a generic parameter is already an API break.
+
+See v2.1_in_progress "Named generic arguments."
 
 ---
 
