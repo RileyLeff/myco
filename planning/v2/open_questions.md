@@ -83,15 +83,19 @@ at workflow bind time (any of `assume_*`, `learn_*`, `bind_controller`,
 
 ## Iteration — Compile-Time Structural Introspection
 
-### Structural introspection iteration
-`for seg in pathway where seg is XylemSegment` — iterating over a type's
-*fields* filtered by contract implementation. This is compile-time structural
-reflection, not runtime collection iteration. The v2.0 spec (§5.5) supports
-this pattern, but the v2.1 iteration design (chunk report 02) only addresses
-runtime collections (`some`-sized, graph neighborhoods). Needs explicit
-confirmation that compile-time field introspection is a supported iteration
-form, or the Sperry mock needs a different way to express "apply this to every
-xylem segment in my hydraulic pathway." Flagged by mock_sperry update.
+### ~~Structural introspection iteration~~ — RESOLVED (not needed)
+**Decision:** Structural introspection is not supported as a language
+feature. It was a symptom of a scoping limitation that shouldn't have
+existed. The motivating use case (per-XylemSegment cavitation tracking in
+mock_sperry) is solved cleanly by declaring `initial` and `temporal`
+blocks inside type bodies — state evolution that is intrinsic to an
+entity lives on that entity, not as module-scope glue reaching in.
+
+See v2.1_in_progress "Scoping for `initial` and `temporal` blocks."
+
+The Sperry mock needs rewriting: the module-scope `initial cavitation_init
+for seg in pathway where seg is XylemSegment:` and corresponding
+`temporal cavitation ...` blocks move into `XylemSegment`'s body.
 
 ---
 
@@ -182,6 +186,16 @@ Specific items:
   `bind_controller(target, fn, input_contract)` at the workflow layer.
 - **Spec contracts section:** Add data contracts (output-only), multi-contract
   satisfaction (`: A + B + C`), supertraits (`contract B : A`).
+- **Spec §2 module-scope declarations:** Retire the "implicit top-level type"
+  mechanism for module-scope `temporal`/`relation`/`initial`. State evolution
+  belongs on types; `initial`/`temporal` are legal inside type bodies. Strike
+  module-scope forms.
+- **Spec §6.3 "at most one initial" rule:** Rephrase as post-expansion,
+  per-fully-qualified-path. Type-body `initial` blocks expand into per-
+  instance equations; the rule catches duplicates across all expansion
+  sources.
+- **Spec locus-scoped declarations:** Extend `on locus:` clause to
+  `temporal` by symmetry with `relation`.
 - Add lib/bin analogy framing to the spec prose.
 
 ---
