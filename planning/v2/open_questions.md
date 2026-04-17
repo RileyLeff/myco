@@ -121,12 +121,23 @@ See v2.1_in_progress "Named generic arguments."
 
 ## Events (Dynamic Topology)
 
-### Generic events — commit to first-class sugar
-Generic events (`event recruit<S: Photosynthesis>: -> Tree<S>`) are currently
-described as sugar over macros. Should be committed to as first-class syntax
-that the compiler monomorphizes. The macro workaround is a fallback, not the
-primary mechanism. For 50 species, source-level generic events with automatic
-monomorphization is the right UX. Flagged by external review.
+### ~~Generic events — commit to first-class sugar~~ — RESOLVED
+**Decision:** Generic events are first-class. The compiler monomorphizes at
+model expansion, emitting one concrete event per type (or const value) in
+scope satisfying the bound. Multi-parameter generic events expand over the
+cartesian product of their bounds. Const generic events are permitted on the
+same footing as type generics. The bound is the sole expansion filter —
+context-dependent group membership is out of scope. Users push such
+distinctions into the type hierarchy or handle them with `when`-guards.
+
+Named/positional generic argument rules follow the type rule: positional for
+a single parameter, named for 2+.
+
+Workflow-layer addressing exposes both the group name (`"recruit"`,
+tiebreak by type declaration order) and per-instantiation names
+(`"recruit<Loblolly>"`) for fine ordering control.
+
+See v2.1_in_progress "Generic events — first-class" under the Events section.
 
 ### Cross-container events
 Can events span multiple container types? Currently: events live on the
@@ -204,6 +215,12 @@ Specific items:
   sources.
 - **Spec locus-scoped declarations:** Extend `on locus:` clause to
   `temporal` by symmetry with `relation`.
+- **Spec generic events section:** Add a "Generic events" subsection under
+  §7 (or wherever events live in v2.1). Cover: declaration syntax over type
+  and const generic parameters, monomorphization at model expansion,
+  cartesian expansion for multi-parameter events, named/positional argument
+  rules matching the type rule, and workflow-layer addressing by group
+  name and per-instantiation name.
 - Add lib/bin analogy framing to the spec prose.
 
 ---
