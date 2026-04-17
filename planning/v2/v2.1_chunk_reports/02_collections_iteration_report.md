@@ -2,8 +2,8 @@
 
 **Date:** 2026-04-16
 **Authors:** Riley Leff, Claude (Opus 4.6)
-**Reviewers:** Gemini 2.5 Pro (one review round)
-**Status:** Settled decisions. Ready for integration into the v2.1 spec.
+**Reviewers:** Gemini 2.5 Pro (one review round), GPT 5.4 Thinking (one review round)
+**Status:** Settled with noted caveats. Ready for integration into the v2.1 spec.
 
 ---
 
@@ -74,6 +74,21 @@ The `.myco` file describes semantics ("this can grow/shrink"). The compiler
 emits the right lowering per backend. No `#feature` flags or backend
 annotations in the language.
 
+**Bind-time vs event-time dynamism:** `some` covers two cases:
+- **Bind-time variable, rollout-static:** Size unknown at compile time but
+  fixed once the workflow layer provides data (e.g., "I have 47 fish, here
+  they are"). No events target this collection — it never resizes.
+- **Event-time variable, rollout-dynamic:** Size changes during rollout as
+  events fire (birth/death). Requires validity mask or packed-array resize.
+
+The language uses `some` for both. The compiler distinguishes them
+mechanically: if no events target a `some`-sized collection, it's
+bind-static. The compiler can optimize accordingly (no validity mask
+updates, static Jacobian after bind). No user annotation needed — this is
+compiler-inferred from the absence of events. Models with truly dynamic
+collections (events present) route through the dynamic topology lowering
+path; bind-static `some` collections do not.
+
 ### 2.3 `impl` + `some` compose
 
 A collection can be both heterogeneous and dynamically sized:
@@ -98,12 +113,14 @@ _trees_NeedlePhoto: [Tree<NeedlePhoto>; some]
 `trees` becomes a virtual handle over all pools. Iteration merges pools.
 Spatial queries merge results. Events route to the correct pool by type.
 
-**The closed set of concrete types is all in-scope implementations of the
-contract.** No explicit listing needed. The compiler does whole-program
-analysis on the model module and can enumerate all implementations. If a
-user wants to restrict which implementations are allowed in a specific
-collection, that's a future refinement (constraint on the type set), not
-the default.
+**The closed set of concrete types is all implementations in scope at the
+model module level, after whole-program assembly.** No explicit listing
+needed. The compiler does whole-program analysis on the model module and
+can enumerate all implementations. "In-scope" means the model module's
+import set — adding an implementation to a library doesn't change anything
+until a model module imports it. If a user wants to restrict which
+implementations are allowed in a specific collection, that's a future
+refinement (constraint on the type set), not the default.
 
 **GPU efficiency:** Within each pool, all elements are structurally identical
 (same equations, same Jacobian structure), enabling vmap. No warp divergence.
@@ -156,7 +173,7 @@ relation flux_balance on junction:
 
 `children` and `incident_edges` are per-vertex iterables. Their size varies
 per vertex (different junctions have different branch counts). The compiler
-knows the maximum degree from `assume_topology` data and pads/masks per
+knows the maximum degree from `bind_topology` data and pads/masks per
 backend.
 
 ### 3.4 Relation-level and nested iteration
@@ -280,7 +297,7 @@ returns an index into the (possibly masked) array.
 
 **Lowering — heterogeneous collections:** When `argmax` operates across a
 heterogeneous `[T<impl Contract>; some]` collection (desugared to per-type
-pools), the result is a **tagged union** — internally a `(pool_id, index)`
+pools), the result is a **tagged handle** — internally a `(pool_id, index)`
 pair. Field access on the result emits a multiplexed gather across pools:
 
 ```python
@@ -300,17 +317,32 @@ field dereference on an element reference from a heterogeneous collection.
 The reduction itself (finding the max) is still a standard GPU reduction
 across all pools; the multiplexing only applies to subsequent field access.
 
-For smooth selection when the discontinuity hurts training, the user writes
-a softmax manually:
+**Important: this introduces a new IR concept.** The v2.0 semantic story is
+"no runtime dispatch — everything monomorphizes before flattening." The
+tagged handle from heterogeneous `argmax` is a genuine IR-level tagged
+union — a runtime sum type that the emitter must dispatch on. This is NOT
+the same as the pre-monomorphization `impl` concept. It's a lightweight
+runtime concept that only arises from element-selecting aggregations over
+heterogeneous collections. The user never sees `pool_id` — the abstraction
+is sound — but the IR must represent it, and the compiler team must know
+it exists. Field access on a tagged handle is multiplexed dispatch, not
+free monomorphization.
+
+For smooth selection when the discontinuity hurts training, the user can
+write a weighted sum instead of hard selection. The exact syntax for this
+depends on aligned-vector / zip semantics for comprehensions (not yet
+designed). Conceptually:
 
 ```myco
 // Hard selection (subgradient):
 let tallest = argmax(t.height for t in trees)
 
-// Soft selection (smooth, user-written):
-let weights = softmax(t.height / temperature for t in trees)
-smooth_crown = sum(weights[t] * t.crown_area for t in trees)
+// Soft selection — conceptual, syntax TBD:
+// smooth_crown = weighted_sum(softmax(t.height / temp), t.crown_area
+//                             for t in trees)
 ```
+
+See open question 7.4 (`softmax` as a primitive) for status.
 
 ### 4.4 Empty collection behavior
 
@@ -336,6 +368,13 @@ let tallest_crown = if count(trees) > 0
     else 0.0 m2
 ```
 
+**Dependency note:** Runtime guards and `where` filtering on `some`-sized
+collections extend the v2.0 spec's existing mask-lowering mechanism (spec
+section 5.4, `where` on fixed index ranges). This design assumes that
+mechanism generalizes to `some` collections — the mask is the same validity
+mask used for dynamic sizing, so the extension is natural but should be
+explicitly confirmed during spec integration.
+
 **Lowering note:** On JAX/PyTorch, `jax.numpy.where` / `torch.where`
 evaluates both branches regardless of the condition. The `max()` or
 `argmax()` still executes on the padded array even when the collection is
@@ -355,20 +394,38 @@ invisible to the user but matters for backend implementors.
 
 ## 5. Workflow-Layer Naming
 
-`assume_*` renamed to `bind_*` across the workflow API:
+### 5.1 `assume_constant`, `assume_series` — KEPT (rename reverted)
 
-| Old | New | Purpose |
-|---|---|---|
-| `assume_constant` | `bind_constant` | Fix a quantity to a scalar value |
-| `assume_series` | `bind_series` | Fix a quantity to a time series |
-| `assume_topology` | `bind_topology` | Provide graph/mesh data for a domain |
+The original proposal renamed `assume_*` to `bind_*` across the board.
+**This rename is reverted.** The existing workflow vocabulary has a clean
+four-way split:
 
-The `bind` terminology better communicates the operation: the workflow layer
-*binds* data to model quantities. `assume` sounded informal; `bind` is
-precise.
+| Verb | Meaning |
+|---|---|
+| `assume` | Provide data values for model quantities |
+| `observe` | Provide evidence for inference |
+| `learn` | Make a quantity trainable |
+| `bind` | Provide a slot implementation (controller) |
 
-Schema validation, unit checking, and tag coverage checking are unchanged —
-only the method names change.
+Collapsing `assume` and `bind` into one word loses the distinction between
+"fix this quantity to a value" and "attach this controller implementation."
+`assume` in the mathematical sense ("assume this quantity takes this value")
+is precise — the informality concern doesn't justify overloading `bind`.
+
+### 5.2 `bind_topology` — NEW (standalone addition)
+
+`bind_topology` is kept as a standalone new API. Topology binding is
+structurally different from assuming a quantity's value — it provides
+graph/mesh structure to a domain, not a scalar or time series. It doesn't
+conflict with slot binding either (topologies aren't controllers).
+
+| Method | Purpose |
+|---|---|
+| `assume_constant` | Fix a quantity to a scalar value |
+| `assume_series` | Fix a quantity to a time series |
+| `bind_topology` | Provide graph/mesh data for a domain |
+
+Schema validation, unit checking, and tag coverage checking are unchanged.
 
 ---
 

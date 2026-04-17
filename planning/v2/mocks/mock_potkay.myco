@@ -1,6 +1,6 @@
 // ============================================================================
 // Potkay & Feng (2023) Growth-Optimizing Stomatal Model (GOSM)
-// Mock v2 Myco implementation for spec stress-testing
+// Mock v2.1 Myco implementation for spec stress-testing
 //
 // "Do stomata optimize turgor-driven growth?"
 // New Phytologist (2023) 238: 506–528
@@ -99,23 +99,23 @@ use plant::photosynthesis::{
     PositiveScalar,
 }
 
-pub type GrowthRate : Scalar<mol_C_s> {
+pub type GrowthRate : Scalar<U = mol_C_s> {
     self >= 0
 }
 
-pub type CarbonPool : Scalar<mol_C> {
+pub type CarbonPool : Scalar<U = mol_C> {
     self >= 0
 }
 
-pub type LeafArea : Scalar<m2> {
+pub type LeafArea : Scalar<U = m2> {
     self > 0
 }
 
-pub type Height : Scalar<m> {
+pub type Height : Scalar<U = m> {
     self > 0
 }
 
-pub type Extensibility : Scalar<inv_MPa_s> {
+pub type Extensibility : Scalar<U = inv_MPa_s> {
     self >= 0
 }
 
@@ -143,7 +143,7 @@ pub fn substrate_limitation(
 // Simpler than Arrhenius — appropriate when empirical Q10 is available.
 // Temperature difference is purely multiplicative (affine offsets cancel),
 // so dividing by q10_interval produces a dimensionless exponent natively.
-universal q10_interval: Scalar<K> = 10      // Q10 temperature interval
+universal q10_interval: Scalar<U = K> = 10      // Q10 temperature interval
 universal T_ref_degC: Temperature = 25      // reference temperature for Q10 (25C)
 
 pub fn q10_response<U: Unit>(
@@ -163,12 +163,12 @@ pub fn q10_response<U: Unit>(
 // modified so extensibility → 0 as temperature → 5°C.
 
 // Extensibility temperature response constants
-universal ext_T_opt: Scalar<K> = 298.15             // optimal temperature for growth
-universal ext_H_a: Scalar<J_mol> = 63000            // activation energy
-universal ext_H_d: Scalar<J_mol> = 200000           // deactivation energy
-universal ext_S_v: Scalar<J_mol_K> = 650            // entropy factor
-universal ext_cold_limit: Scalar<K> = 278.15        // 5°C — growth ceases below this
-universal ext_cold_steepness: Scalar<K_inv> = 2     // steepness of cold ramp
+universal ext_T_opt: Scalar<U = K> = 298.15             // optimal temperature for growth
+universal ext_H_a: Scalar<U = J_mol> = 63000            // activation energy
+universal ext_H_d: Scalar<U = J_mol> = 200000           // deactivation energy
+universal ext_S_v: Scalar<U = J_mol_K> = 650            // entropy factor
+universal ext_cold_limit: Scalar<U = K> = 278.15        // 5°C — growth ceases below this
+universal ext_cold_steepness: Scalar<U = K_inv> = 2     // steepness of cold ramp
 
 pub fn extensibility_temperature(
     phi_25: Extensibility,
@@ -228,10 +228,10 @@ type Atmosphere {
     o2: Pressure                       // atmospheric O2 (~21000 Pa)
     temperature: Temperature           // air temperature
     rh: Fraction                       // relative humidity
-    pressure: Scalar<kPa>             // atmospheric pressure (~101.3)
-    insolation: Scalar<W_m2>          // incoming solar radiation
-    wind_speed: Scalar<m_s>           // wind speed
-    solar_elevation: Scalar<ratio>     // solar elevation angle (rad) (Table 3: Phi)
+    pressure: Scalar<U = kPa>         // atmospheric pressure (~101.3)
+    insolation: Scalar<U = W_m2>      // incoming solar radiation
+    wind_speed: Scalar<U = m_s>       // wind speed
+    solar_elevation: Scalar<U = ratio> // solar elevation angle (rad) (Table 3: Phi)
     psi_soil: WaterPotential           // soil water potential (single layer)
     min_psi_soil: WaterPotential       // drought memory: worst soil ψ experienced
 }
@@ -267,8 +267,8 @@ type TreeStructure {
 type LeafProperties {
     emissivity: Fraction               // longwave emissivity (~0.97)
     absorptance: Fraction              // shortwave absorptance (~0.5)
-    width: Scalar<m>                  // leaf width, for boundary layer
-    kappa: Scalar<mol_J>              // quantum yield (Table 3: 6.9e-7 mol J⁻¹)
+    width: Scalar<U = m>              // leaf width, for boundary layer
+    kappa: Scalar<U = mol_J>          // quantum yield (Table 3: 6.9e-7 mol J⁻¹)
 
     constraint width_positive: width > 0 m
     constraint kappa_positive: kappa > 0 mol_J
@@ -289,9 +289,9 @@ type LeafProperties {
 type HydraulicCatena {
     // Three conducting segments, each with SigmoidVC
     // The VC parameters (p50, slope) differ per segment
-    root_soil: ConductingElement<SigmoidVC>     // k_R, vc at ψ_soil
-    stem: XylemSegment<SigmoidVC>               // k_S, vc at ψ_S, with cavitation
-    leaf: XylemSegment<SigmoidVC>               // k_L, vc at ψ_L, with cavitation
+    root_soil: ConductingElement<V = SigmoidVC>     // k_R, vc at ψ_soil
+    stem: XylemSegment<V = SigmoidVC>               // k_S, vc at ψ_S, with cavitation
+    leaf: XylemSegment<V = SigmoidVC>               // k_L, vc at ψ_L, with cavitation
 
     // Internal junction pressure (solved by planner)
     psi_root_junction: WaterPotential
@@ -316,10 +316,10 @@ type GasExchange<P: Photosynthesis> {
     g_b: Conductance                   // boundary layer conductance
     g_c: Conductance                   // total CO2 conductance (series)
     g_w: Conductance                   // water vapor conductance
-    atm_pressure: Scalar<kPa>         // atmospheric pressure (for VPD → mole fraction)
+    atm_pressure: Scalar<U = kPa>     // atmospheric pressure (for VPD → mole fraction)
 
     leaf_temperature: Temperature
-    leaf_vpd: Scalar<kPa>
+    leaf_vpd: Scalar<U = kPa>
     leaf_water_potential: WaterPotential // downstream endpoint of leaf hydraulic segment
 
     // Transpiration per unit leaf area
@@ -397,10 +397,10 @@ type TurgorGrowth {
     osmotic_potential: WaterPotential   // π (from phloem sap molality)
 
     // Phloem sap molality parameters (Table 3, Paljakka et al. 2017)
-    c_m1: Scalar<mol_kg>              // intercept (~0.48 mol kg⁻¹)
-    c_m2: Scalar<mol_kg>              // slope (~0.13 mol kg⁻¹ MPa⁻¹, calibrated to MPa)
+    c_m1: Scalar<U = mol_kg>          // intercept (~0.48 mol kg⁻¹)
+    c_m2: Scalar<U = mol_kg>          // slope (~0.13 mol kg⁻¹ MPa⁻¹, calibrated to MPa)
     c_pi1: PositiveScalar              // linear osmotic coefficient (~0.998, dimensionless)
-    c_pi2: Scalar<kg_mol>             // quadratic osmotic coefficient (~0.089 kg mol⁻¹)
+    c_pi2: Scalar<U = kg_mol>         // quadratic osmotic coefficient (~0.089 kg mol⁻¹)
 
     constraint c_m1_positive: c_m1 > 0 mol_kg
     constraint c_m2_positive: c_m2 > 0 mol_kg
@@ -408,7 +408,7 @@ type TurgorGrowth {
 
     // Phloem sap molality: m_p = c_m1 - c_m2 · ψ_S
     // c_m2 is calibrated to MPa inputs — use value_in to extract dimensionless pressure
-    phloem_molality: Scalar<mol_kg>
+    phloem_molality: Scalar<U = mol_kg>
     let psi_MPa = psi_stem.value_in(MPa)
     phloem_molality = c_m1 - c_m2 * psi_MPa
 
@@ -458,12 +458,14 @@ pub type PotkayTree<P: Photosynthesis> {
     structure: TreeStructure
     leaf_props: LeafProperties
     hydraulics: HydraulicCatena
-    gas: GasExchange<P>
+    gas: GasExchange<P = P>
     carbon: CarbonBalance
     turgor: TurgorGrowth
 
-    // Simulation timestep
-    dt: Scalar<s>
+    // Simulation timestep — dt is a normal quantity, not a magic name.
+    // The compiler uses it for temporal integration; the workflow layer
+    // provides it via assume_constant or assume_series.
+    dt: Scalar<U = s>
 }
 
 
@@ -555,7 +557,7 @@ relation gas_atm_pressure:
 // Same structure as Sperry, simplified for single canopy.
 // ============================================================================
 
-universal latent_heat_vap: Scalar<J_mol> = 44100  // latent heat of vaporization
+universal latent_heat_vap: Scalar<U = J_mol> = 44100  // latent heat of vaporization
 
 relation energy_balance:
     // Boundary layer heat conductance (Nobel): empirical, calibrated to m/s and m
@@ -579,7 +581,7 @@ relation leaf_vpd:
     gas.leaf_vpd = e_sat_leaf - e_air
 
 // Boundary layer conductance (Table 3, treated as constant)
-universal g_b_const: Scalar<mol_m2_s> = 2.4   // boundary layer conductance
+universal g_b_const: Scalar<U = mol_m2_s> = 2.4   // boundary layer conductance
 
 relation boundary_layer:
     gas.g_b = g_b_const
@@ -649,11 +651,10 @@ slot stomatal_control provides [gas.g_s]:
 // NSC dynamics: the core carbon balance equation (Eqn 2)
 // dC/dt = a_t · A_n - R_M - R_G - G
 temporal nsc_dynamics:
-    carbon.C[t+1] = carbon.C[t]
-        + dt * (carbon.assimilation_total[t]
-                - carbon.R_M[t]
-                - carbon.R_G[t]
-                - carbon.growth[t])
+    d(carbon.C) = carbon.assimilation_total
+        - carbon.R_M
+        - carbon.R_G
+        - carbon.growth
 
 // Irreversible cavitation: track worst pressure for stem and leaf
 initial stem_cavitation_init:
