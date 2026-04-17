@@ -139,16 +139,29 @@ tiebreak by type declaration order) and per-instantiation names
 
 See v2.1_in_progress "Generic events — first-class" under the Events section.
 
-### Cross-container events
-Can events span multiple container types? Currently: events live on the
-container that owns the `some`-sized collection. Revisit if cross-container
-events prove necessary.
+### ~~Cross-container events~~ — RESOLVED
+**Decision:** An event is declared on the smallest container type whose
+scope contains all its input/output participant types. For single-container
+events this is the container itself (the existing rule). For cross-container
+events this is the nearest common ancestor container. When a participant
+type appears as a pool in multiple sibling children, the signature uses
+dotted paths (`pond.fish -> sky.birds`); otherwise the bare type is
+unambiguous. No new syntax — the rule generalizes what was already
+implicit.
 
-### Within-event conflict tiebreaking
-Index order is the default. Should the user be able to specify a tiebreak
-function? Related: ship 2-3 canonical event scheduling policies as stdlib
-Python (declaration-order, shuffled, priority-by-scalar). Custom callable
-stays as power-user escape hatch. Flagged by external review.
+See v2.1_in_progress "Container scoping rule" under the Events section.
+
+### ~~Within-event conflict tiebreaking~~ — RESOLVED (no language decision)
+**Decision:** Scheduling and tiebreaking are entirely workflow-side (Python
+layer), same status as random seed. The `.myco` file commits to nothing
+about ordering, priority, or randomness. Three canonical policies
+(`declaration_order`, `shuffle(seed)`, `priority_by_scalar(quantity_path)`)
+will ship as Python library helpers; a unified policy API
+`policy(pending_firings, state) -> List[Firing]` covers both between-event
+ordering and within-event tiebreaks. Custom callables remain the escape
+hatch. None of this affects language design. Priority hints on event
+declarations (`event predation priority: predator.mass`) were explicitly
+rejected as a workflow-into-model leak.
 
 ---
 
@@ -221,6 +234,10 @@ Specific items:
   cartesian expansion for multi-parameter events, named/positional argument
   rules matching the type rule, and workflow-layer addressing by group
   name and per-instantiation name.
+- **Spec cross-container events:** Clarify that an event is declared on the
+  smallest container type whose scope contains all its participants; cross-
+  container events live on the nearest common ancestor. Signature uses
+  dotted paths when a participant type is ambiguous across sibling children.
 - Add lib/bin analogy framing to the spec prose.
 
 ---
