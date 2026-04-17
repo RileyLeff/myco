@@ -354,6 +354,11 @@ pub type ConductingElement<V: VulnerabilityCurve> {
 
 // Xylem segment: a conducting element with irreversible cavitation tracking.
 // Soil elements use ConductingElement directly (desaturation is reversible).
+//
+// Cavitation is intrinsic to the segment: every XylemSegment tracks its own
+// worst-ever pressure and clamps conductance to that historical maximum. The
+// initial and temporal blocks live on the type — each instance automatically
+// evolves without the containing model needing to wire anything up.
 pub type XylemSegment<V: VulnerabilityCurve> {
     core: ConductingElement<V = V>
 
@@ -362,14 +367,26 @@ pub type XylemSegment<V: VulnerabilityCurve> {
     max_conductance: HydraulicConductance
 
     // Irreversible cavitation: conductance is clamped to the historical maximum.
-    // Uses min() to provide a computational path — the planner can evaluate this
-    // as a normal relation. The temporal update of min_historical_pressure (in
-    // the module-scope temporal block) ratchets the limit over time.
+    // The temporal block below ratchets min_historical_pressure downward over
+    // time; max_conductance follows from the vulnerability curve at that pressure.
     relation clamped_conductance:
         core.conductance = min(core.vc_conductance, max_conductance)
 
     constraint max_conductance_from_history:
         max_conductance = core.k_max * (1.0 - core.vc(min_historical_pressure).plc)
+
+    // Initial pressure: at t=0, no cavitation has occurred yet, so the worst
+    // pressure equals the current pressure. core.water_potential at t=0 is
+    // solved inside the hydraulic SCC; initial attaches an equation to that
+    // SCC at t=0, keeping the system square.
+    initial:
+        min_historical_pressure = core.water_potential
+
+    // Ratchet: min_historical_pressure can only decrease. Discrete update,
+    // not an ODE — step() applies the RHS verbatim each tick.
+    temporal cavitation:
+        step(min_historical_pressure) =
+            min(min_historical_pressure, core.water_potential)
 }
 
 
@@ -730,15 +747,7 @@ temporal soil_water_step for j in 0..N_SOIL:
         (inflow_above - outflow_below + infiltration - extraction - drain)
         * soil.layers[j].water_capacity / soil.layers[j].thickness
 
-// Irreversible cavitation: track the worst pressure ever experienced.
-// Uses structural introspection to generate one temporal block per XylemSegment
-// in the pathway, rather than writing them out individually.
-initial cavitation_init for seg in pathway where seg is XylemSegment:
-    seg.min_historical_pressure = seg.core.water_potential
-
-// Irreversible cavitation: min_historical_pressure ratchets downward over
-// time. This is a discrete update, not an ODE — step(·) applies the RHS
-// verbatim at each tick rather than asking the compiler to integrate.
-temporal cavitation for seg in pathway where seg is XylemSegment:
-    step(seg.min_historical_pressure) =
-        min(seg.min_historical_pressure, seg.core.water_potential)
+// Cavitation tracking is declared on XylemSegment itself — every segment in
+// the pathway (stem, leaf, and each root) automatically gets its own initial
+// equation and temporal ratchet from the type body. No module-scope wiring
+// needed.
