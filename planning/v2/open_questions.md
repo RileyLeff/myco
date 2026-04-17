@@ -37,54 +37,47 @@ constraints. It is not a reserved name. See spec §6.3.
 
 ---
 
-## Slots & Controllers
+## Controllers (formerly "Slots")
 
-### Shared-controller portability — named-port interface
-The spec (§7.1) requires identical model instantiation for shared controllers.
-This directly conflicts with the multi-study training thesis: if study 24 has
-NSC data and study 41 has canopy dieback, you want to share the controller
-across them — but different `N_SOIL` or species sets break structural identity.
+### ~~Shared-controller portability~~ — RESOLVED (data contracts)
+**Decision:** Data contracts (output-only contracts) are the interface a
+controller consumes. Any concrete model that satisfies the contract — via
+direct fields or via internal relations computing the interface fields —
+can be bound to the same controller. `N_SOIL`, VC choice, species sets can
+all vary across studies as long as each concrete model exposes the contract's
+interface. Shared controller weights thread across studies through the
+common contract.
 
-**Options to consider:**
-- **Named-port system:** Slot declares semantic ports ("leaf water potential",
-  "VPD", "soil water at canopy depth"). Model binds ports to paths. Controllers
-  are compatible iff port signatures match. Decouples controller identity from
-  model detail.
-- **Explicit `inputs = [...]` as default** with `[*]` as sugar. Forces the
-  scientist to reason about the controller's input interface once and have it
-  be stable across model revisions.
-- **Semantic interface layer:** Separate the controller's abstract interface
-  (named physical quantities it consumes) from the model instantiation that
-  provides them. Two trees with different `N_SOIL` can both provide "soil water
-  at canopy depth" via a derived quantity.
+Example: a `Tree` data contract enumerates `interface_leaf_water_potential`,
+`interface_vpd`, `interface_soil_water_at_rooting_depth`, etc. SperryTree
+with 3 soil layers and Weibull VC satisfies it; SperryTree with 5 soil
+layers and van Genuchten VC also satisfies it; both bind to the same
+controller at workflow time.
 
-This is the critical path for the science. Prioritize over most other v2.1
-work. Flagged by external review as potentially structural flaw, not just
-conservative constraint.
+Applies no new language primitive — contracts already do this if we accept
+that a contract may have only outputs. See v2.1_in_progress "Data contracts"
+section. Multi-study training threads one controller weight tensor across
+all bound models — a workflow-layer concern, not language.
 
-### `[*]` wildcard resolves to ~everything
-The undirected equality walk from `[*]` will reach nearly every quantity in a
-connected model (atm.temperature → leaf.temperature → photo.assimilation →
-nsc.C → allocation → root_depth...). Structurally correct (NN picks its
-inputs) but practically means enormous input dim, hurting sample efficiency
-on sparse data. Also: adding a soil microbial carbon pool to the mechanistic
-model invalidates every previously trained controller's manifest.
+### ~~`[*]` wildcard resolves to ~everything~~ — RESOLVED (via slot collapse)
+**Decision:** The `slot` keyword has been removed. With slots collapsed
+into "unowned node + workflow binding", there is no wildcard syntax on the
+`.myco` side. The controller's visibility is its input contract, enumerated
+at workflow bind time. No undirected-walk resolution, no exposure-explosion
+problem, no invalidation of trained controllers when the mechanistic model
+grows new parts (unless the controller's data contract itself changes).
 
-Connected to the named-port redesign above. If ports are explicit, `[*]`
-becomes "resolve the default port set" rather than "the controller sees
-everything."
+### ~~Transparent controller ABI~~ — RESOLVED (unified interface)
+**Decision:** Transparent controllers (heuristic `.myco` modules) and
+learned callables (NN/GP/ensemble) share the same binding interface at the
+workflow layer — both are owners for otherwise-unowned nodes, both take
+the same `input_contract` argument. No separate ABI design needed.
 
-### Transparent controller ABI for wildcard/metadata
-Learned wildcard slots have a precise ABI (element-local/global partition,
-vmap, metadata). Transparent controllers (`.myco` files imported as relations)
-just "get path-rebased." Need to define how wildcard partitioning and metadata
-work for transparent controllers.
-
-### Slot declaration syntax
-v2.0 uses `slot stomatal_control provides [...]: inputs = [*]`. v2.1 summary
-mentions `slot name(inputs) -> outputs` but gives no detailed design. These
-are different syntaxes for the same feature. Needs confirmation of which form
-is canonical, or a proper design pass. Flagged by mock_sperry update.
+### ~~Slot declaration syntax~~ — RESOLVED (syntax removed)
+**Decision:** No slot syntax. The `slot` keyword is gone. Nodes declared
+without a relation in the `.myco` are unowned and must receive an owner
+at workflow bind time (any of `assume_*`, `learn_*`, `bind_controller`,
+`bind_topology`). See v2.1_in_progress "Controllers" section.
 
 ---
 
@@ -182,8 +175,13 @@ Specific items:
   Euler. Should use `d(x) = expr` / `step(x) = expr`.~~ — DONE
 - **Spec `dyn` keyword:** Update to `impl` / `some` throughout.
 - **Spec `assume_*` methods:** `assume_constant`/`assume_series` stay.
-  `bind_topology` is a standalone addition. Update accordingly.
+  `bind_topology` and `bind_controller` are standalone additions.
 - **Spec `param` keyword:** Removed in v2.1. Update references.
+- **Spec `slot` keyword:** Removed in v2.1. Collapsed into "unowned node +
+  workflow binding." Strike §7.1 slot syntax; controllers now bind via
+  `bind_controller(target, fn, input_contract)` at the workflow layer.
+- **Spec contracts section:** Add data contracts (output-only), multi-contract
+  satisfaction (`: A + B + C`), supertraits (`contract B : A`).
 - Add lib/bin analogy framing to the spec prose.
 
 ---
