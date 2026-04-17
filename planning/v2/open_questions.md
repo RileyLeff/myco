@@ -190,10 +190,32 @@ training, this is exactly the regime where penalties misbehave. Consider:
   knob, not a sensible default
 Runtime/compilation concern, not language design. Flagged by external review.
 
-### Closure policy semantic interface
-What a policy receives (candidates, enumeration). Spec mentions closure
-policies for overdetermined-but-consistent systems but doesn't specify the
-API.
+### ~~Closure policy semantic interface~~ — RESOLVED
+**Decision:** Spec §14.6 is the authoritative interface. A policy receives
+the target quantity and candidate paths (N = M + 1 common case: two
+candidates; general case: all C(N, M) maximal square subsystems).
+Candidates are named by the producing relation and ordered lexicographically
+for cross-version stability. Policies are ordinary `.myco` functions whose
+arguments are candidate values and user hyperparameters supplied at
+`closure_config` time. Custom policies only operate on values — they do
+not access compiler-internal metadata.
+
+**v2.1 stdlib ships three policies:** `weighted_average`, `soft_select`,
+`hard_select`. All are ordinary `.myco` functions users could replicate.
+
+**`condition_weighted` deferred** beyond v2.1. Conditioning-aware weighting
+requires either a `condition_of(expr)` compiler intrinsic (parallel to
+`deriv`) or a compiler-provided black box — both have real cost. Most
+v2.1 workflows reconcile overdetermined systems via controller plus
+consistency loss rather than via conditioning-aware closure. Revisit
+post-v2.1 if demand emerges.
+
+**Spec §8.5 needs patching:** the phrase "via structural introspection on
+the competing paths" (line ~2073) is stale — structural introspection was
+killed in v2.1. Replace with "custom policies receive only values and
+hyperparameters; compiler-intrinsic policies are a future extension."
+
+See v2.1_in_progress "Closure policies."
 
 ---
 
@@ -238,6 +260,14 @@ Specific items:
   smallest container type whose scope contains all its participants; cross-
   container events live on the nearest common ancestor. Signature uses
   dotted paths when a participant type is ambiguous across sibling children.
+- **Spec §8.5 structural introspection:** Strike the phrase "via structural
+  introspection on the competing paths" (line ~2073). Replace with language
+  that custom closure policies receive only candidate values and user
+  hyperparameters; metadata-aware policies (e.g., `condition_weighted`) are
+  deferred compiler intrinsics, not `.myco`-level features.
+- **Spec §14.6 stdlib list:** Drop `condition_weighted` from the v2.1
+  stdlib policy list. Note it as a deferred compiler intrinsic. Keep
+  `weighted_average`, `soft_select`, `hard_select`.
 - Add lib/bin analogy framing to the spec prose.
 
 ---
