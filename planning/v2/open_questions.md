@@ -412,11 +412,10 @@ becomes common.
   **model claim**: users write the smooth form (`smooth_threshold`,
   `smooth_max`, etc., shipped in stdlib) when they want smooth transitions;
   workflow-configurable sharpness goes in a `universal` parameter. The
-  compiler never silently rewrites semantics based on compile mode. In
-  training mode, the compiler warns (not errors) when a runtime `where`
-  predicate depends on trainable parameters — non-gradient training
-  methods, ablation studies, and non-blocking gradient paths are all legit
-  reasons to keep sharpness. Silencing via `#[allow(sharp_gradient)]`.
+  compiler never silently rewrites semantics based on compile mode.
+  Training diagnostics for sharp predicates depending on learned parameters
+  live at workflow composition (capability layer), not as `.myco`
+  annotations — consistent with the no-`.myco`-annotations principle.
   See v2.1_in_progress "`if/else`, `where` conditionals."
 - **Named-type rules for equality and comparison.** Spec section 4.7 defines
   named-type rules for arithmetic but not for `=`, `<`, `<=`, `>`, `>=`.
@@ -427,21 +426,36 @@ becomes common.
 
 ## Probabilistic Inference
 
-The residual graph is structurally a factor graph. The scientific bet —
-identifying regulatory strategies from sparse data across studies — is
-fundamentally a Bayesian inference problem with hierarchical structure (shared
-controller, per-study latent trajectories). Point-estimate MLE with MSE losses
-leaves uncertainty quantification on the table. A reviewer of the *scientific*
-work will demand UQ on the recovered controller.
+### ~~Probabilistic inference integration~~ — RESOLVED
+**Decision:** Probabilistic programming is a first-class v2.1 language
+feature, not a post-hoc addition.
 
-- Can the residual graph map cleanly to a NumPyro/Pyro program?
-- Does the factor graph structure support hierarchical priors (per-study
-  random effects, shared controller prior)?
-- What changes in the compilation story to support posterior sampling vs
-  point optimization?
+- **`~` as first-class stochastic relational operator.** Used for
+  observation likelihoods, noise models, and stochastic dynamics.
+- **Aleatoric/epistemic split.** Noise models live in `.myco` (world
+  claim). Parameter priors live workflow-side (experimenter claim) via
+  a future `assume_prior` verb.
+- **Stdlib distributions** (unit-parameterized where applicable):
+  `Normal<U>`, `LogNormal<U>`, `Uniform<U>`, `StudentT<U>`, `HalfNormal<U>`,
+  `Exponential<U>`, `Cauchy<U>`, `Beta`, `Dirichlet`, `Gamma<U>`, and
+  discrete distributions (`Bernoulli`, `Categorical`, `Poisson`, etc.).
+- **User-extensibility via `Distribution<U>` contract.** Required:
+  `log_pdf`. Optional: `sample`, `reparameterized_sample`.
+- **Automatic marginalization** of finite-support latent discrete
+  variables. SCC-aware. Zero `.myco` syntax — the compiler does the work.
+- **Truncation via refinement types.** `count: Scalar<dimensionless> where { value <= 100 }`
+  + `count ~ Poisson(rate)` composes automatically. No truncation syntax.
+- **Stochastic dynamics (SDEs)** expressed via `~` on a time derivative.
+  Itô vs Stratonovich interpretation via generics on `~` (`~<Ito>`,
+  `~<Stratonovich>`); required only for multiplicative noise.
+- **Compilation** targets both probabilistic backends (NumPyro: direct
+  HMC/NUTS) and deterministic backends (negative log-likelihood loss
+  terms; log-sum-exp for marginalized discretes). Capability errors at
+  workflow composition, not `.myco` annotations.
+- **No `.myco` annotations.** All tolerance/override decisions are
+  workflow-layer (accept-large-enumeration, backend choice, etc.).
 
-Not blocking v2.1 language design, but the compilation target architecture
-should not preclude it. Flagged by external review.
+See v2.1_in_progress "Probabilistic Programming" and "Refinement types."
 
 ---
 
@@ -449,3 +463,84 @@ should not preclude it. Flagged by external review.
 
 - `deriv` primitive needs to handle matrix/tensor expressions for non-Euclidean
   spatial operators.
+
+---
+---
+
+# Deferred — Revisit After More v2.1 Design Locking
+
+Items explicitly postponed with intent to re-address. These are not
+blocking v2.1 language design but require their own design passes.
+
+---
+
+## Sequential inference for time-varying discrete latents (HMMs)
+
+A latent discrete variable with Markov transitions over time (mode state
+per timestep, phenological stage, regime-switching in SDEs) requires
+forward-backward, Viterbi, or particle filter inference — not compile-
+time marginalization. The v2.1 compiler detects the pattern and errors
+with guidance. Full design covers:
+
+- Syntactic recognition of Markov-structured latent discrete chains.
+- Which inference algorithms to generate (forward-backward for likelihood;
+  Viterbi for MAP sequence; particle filters for continuous-state
+  extensions).
+- Integration with the continuous-parameter inference loop.
+- Whether PPL machinery (Pyro's `markov`, NumPyro's `contrib.funsor`)
+  covers enough to lean on, or whether Myco emits its own forward-backward.
+
+---
+
+## MultivariateNormal and multi-dimensional distributions
+
+Deferred pending vector/matrix/container story lock. The distribution's
+log-pdf is standard; the typing question is how mean vectors and
+covariance matrices are declared in Myco's type system (container types,
+matrix units, positive-definiteness constraints). Revisit once the
+container and collection design is settled.
+
+---
+
+## Workflow-side API for epistemic priors
+
+Parameter priors (Bayesian beliefs about unknown values) live workflow-
+side. The verb name and signature (`assume_prior(path, Distribution)` or
+similar), composition with other `assume_*`/`learn_*` verbs, per-parameter
+vs vectorized priors, and hierarchical-prior construction are workflow
+design questions. Not blocking v2.1 `.myco` language spec.
+
+---
+
+## Workflow-side capability overrides
+
+The no-`.myco`-annotations principle pushes all tolerance / approximation
+/ override decisions to the workflow layer. Concrete verbs still to
+design:
+
+- Accept large enumeration states (override the default compile-time
+  capability error).
+- Choose inference backend (deterministic MLE/MAP, HMC/NUTS, future VI)
+  and surface capability mismatches as errors at workflow composition.
+- Approximate-inference switches when exact methods (full marginalization,
+  HMC on a large model) are infeasible.
+- Per-residual projection flavor (`hard_clip`, `sigmoid`, `soft_clip`)
+  selection — already partly designed under constraint enforcement.
+
+---
+
+## Variational inference backends and reparameterization machinery
+
+ELBO-maximizing VI via pathwise gradients is a future backend, not on the
+v2.1 critical path (HMC/NUTS covers the initial inference target). The
+`Distribution<U>` contract reserves the optional `reparameterized_sample`
+hook for when VI arrives.
+
+---
+
+## Stdlib distributions beyond v2.1
+
+Additional distributions (truncated continuous with runtime bounds,
+mixture distributions, copulas, etc.) may be added over time. The
+`Distribution<U>` contract is the extensibility surface; new
+distributions should not require language changes.
