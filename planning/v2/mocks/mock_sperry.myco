@@ -7,7 +7,9 @@
 // - Let the compiler discover algebraic loops and choose solvers
 // - Vulnerability curves are a contract — soil and plant share the interface
 // - Photosynthesis is a contract — FarquharC3 encapsulates all biochemistry
-// - Stomatal control is a slot — pluggable (per canopy layer)
+// - Stomatal conductance (g_w) is a variable with no relation; the
+//   workflow layer supplies its source (e.g., bind_controller with a
+//   neural callable, or an analytic heuristic module)
 // - Sun/shade canopy decomposition via val generics
 // - Irreversible cavitation via temporal min accumulator
 // - Generic ConductingElement shared by soil and xylem
@@ -160,7 +162,8 @@ pub type VanGenuchtenVC : VulnerabilityCurve {
 // loop. The planner discovers the loop (assimilation depends on c_i via
 // biochemistry, c_i depends on assimilation via diffusion) and emits a solver.
 pub type FarquharC3 : Photosynthesis {
-    // Parameters at 25C (assumable, learnable via workflow)
+    // Biochemical reference values at 25C. These are variables like any
+    // other; the experimenter supplies sources at the workflow layer.
     v_max_25: CarbonFlux
     j_max_25: CarbonFlux
     r_day_25: CarbonFlux
@@ -171,7 +174,7 @@ pub type FarquharC3 : Photosynthesis {
     constraint coordinated_capacity:
         j_max_25 = 1.67 * v_max_25
 
-    // Arrhenius activation energies — fields, so they can be assumed or learned
+    // Arrhenius activation energies
     ha_vmax: Scalar<J_mol>
     hd_vmax: Scalar<J_mol>
     sv_vmax: Scalar<J_mol_K>
@@ -716,16 +719,20 @@ relation leaf_vpd for i in 0..N_CANOPY:
 
 
 // ============================================================================
-// Slot: Stomatal Controller (per canopy layer)
+// Note: stomatal conductance (canopy_layers[i].g_w)
 //
-// The world model declares WHAT stomata depend on. The HOW is pluggable.
-// The slot provides per-layer g_w — sun and shade leaves get different
-// stomatal conductance because they see different PAR and have different
-// gain curves. The slot joins the hydraulic SCC if its outputs feed the loop.
+// Each canopy layer's g_w is a variable with no relation in this .myco.
+// The workflow layer supplies its source — typically via
+// bind_controller(path="...canopy_layers[i].g_w", fn=..., input_contract=Tree)
+// where fn may be a neural net, Gaussian process, ensemble, or analytic
+// heuristic module (Sperry gain-risk, Ball-Berry, Medlyn, etc.). Sun and
+// shade leaves get different g_w because they see different PAR and,
+// through the hydraulic loop, different leaf water potential.
+//
+// The callable's output joins the hydraulic SCC if its declared inputs
+// include hydraulic-loop variables — the planner discovers this
+// post-binding and emits the appropriate solver.
 // ============================================================================
-
-slot stomatal_control provides [canopy_layers[*].g_w]:
-    inputs = [*]
 
 
 // ============================================================================

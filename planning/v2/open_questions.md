@@ -37,47 +37,51 @@ constraints. It is not a reserved name. See spec §6.3.
 
 ---
 
-## Controllers (formerly "Slots")
+## Variables, Relations, and Workflow Binding
 
-### ~~Shared-controller portability~~ — RESOLVED (data contracts)
+The key framing principle: the `.myco` layer contains variables and
+relations (symmetric constraints) only. Whether a variable's value comes
+from the relations, from data, from a callable, or from training is
+entirely a workflow-layer question. "Controller" is workflow vocabulary
+for the callable attached by `bind_controller`, not a `.myco` kind. See
+the canonical glossary in v2.1_in_progress for authoritative definitions.
+
+### ~~Callable reuse across studies (shared-controller portability)~~ — RESOLVED (data contracts)
 **Decision:** Data contracts (output-only contracts) are the interface a
-controller consumes. Any concrete model that satisfies the contract — via
+callable consumes. Any concrete model that satisfies the contract — via
 direct fields or via internal relations computing the interface fields —
-can be bound to the same controller. `N_SOIL`, VC choice, species sets can
-all vary across studies as long as each concrete model exposes the contract's
-interface. Shared controller weights thread across studies through the
-common contract.
+can bind to the same callable via `bind_controller(path, fn, Tree)`.
+`N_SOIL`, VC choice, species sets can all vary across studies as long as
+each concrete model exposes the contract's interface. A single callable's
+weights thread across studies through the common contract — a workflow-
+layer pattern, not a language primitive.
 
-Example: a `Tree` data contract enumerates `interface_leaf_water_potential`,
-`interface_vpd`, `interface_soil_water_at_rooting_depth`, etc. SperryTree
-with 3 soil layers and Weibull VC satisfies it; SperryTree with 5 soil
-layers and van Genuchten VC also satisfies it; both bind to the same
-controller at workflow time.
+Example: a `Tree` data contract enumerates
+`interface_leaf_water_potential`, `interface_vpd`,
+`interface_soil_water_at_rooting_depth`, etc. SperryTree with 3 soil
+layers and Weibull VC satisfies it; SperryTree with 5 soil layers and van
+Genuchten VC also satisfies it; both bind to the same callable at workflow
+time. See v2.1_in_progress "Data contracts."
 
-Applies no new language primitive — contracts already do this if we accept
-that a contract may have only outputs. See v2.1_in_progress "Data contracts"
-section. Multi-study training threads one controller weight tensor across
-all bound models — a workflow-layer concern, not language.
+### ~~`[*]` wildcard resolves to ~everything~~ — RESOLVED (via slot removal)
+**Decision:** The `slot` keyword has been removed. There is no wildcard
+syntax on the `.myco` side. The callable's visibility is its
+`input_contract` argument to `bind_controller`, resolved at workflow bind
+time. No undirected-walk resolution, no exposure-explosion problem, no
+invalidation of trained callables when the mechanistic model grows new
+parts (unless the `input_contract` itself changes).
 
-### ~~`[*]` wildcard resolves to ~everything~~ — RESOLVED (via slot collapse)
-**Decision:** The `slot` keyword has been removed. With slots collapsed
-into "unowned node + workflow binding", there is no wildcard syntax on the
-`.myco` side. The controller's visibility is its input contract, enumerated
-at workflow bind time. No undirected-walk resolution, no exposure-explosion
-problem, no invalidation of trained controllers when the mechanistic model
-grows new parts (unless the controller's data contract itself changes).
-
-### ~~Transparent controller ABI~~ — RESOLVED (unified interface)
-**Decision:** Transparent controllers (heuristic `.myco` modules) and
-learned callables (NN/GP/ensemble) share the same binding interface at the
-workflow layer — both are owners for otherwise-unowned nodes, both take
-the same `input_contract` argument. No separate ABI design needed.
+### ~~Transparent-heuristic ABI~~ — RESOLVED (unified interface)
+**Decision:** Analytic heuristics (`.myco` modules or Python functions)
+and learned callables share the same `bind_controller` verb. The
+`input_contract` argument determines visibility identically for both. No
+separate ABI.
 
 ### ~~Slot declaration syntax~~ — RESOLVED (syntax removed)
-**Decision:** No slot syntax. The `slot` keyword is gone. Nodes declared
-without a relation in the `.myco` are unowned and must receive an owner
-at workflow bind time (any of `assume_*`, `learn_*`, `bind_controller`,
-`bind_topology`). See v2.1_in_progress "Controllers" section.
+**Decision:** No slot syntax. The `slot` keyword is gone. Variables are
+just variables; the workflow supplies sources via binding verbs
+(`assume_*`, `learn_*`, `bind_controller`, `bind_topology`, `observe`).
+See v2.1_in_progress "Variables, Relations, and Workflow Binding."
 
 ---
 
@@ -256,9 +260,12 @@ Specific items:
 - **Spec `assume_*` methods:** `assume_constant`/`assume_series` stay.
   `bind_topology` and `bind_controller` are standalone additions.
 - **Spec `param` keyword:** Removed in v2.1. Update references.
-- **Spec `slot` keyword:** Removed in v2.1. Collapsed into "unowned node +
-  workflow binding." Strike §7.1 slot syntax; controllers now bind via
-  `bind_controller(target, fn, input_contract)` at the workflow layer.
+- **Spec `slot` keyword:** Removed in v2.1. There is no `.myco`-layer
+  syntax that distinguishes a variable intended to be supplied externally
+  from any other variable. Strike §7.1 slot syntax. Variables with no
+  workflow source remain unknowns in the residual system; variables with
+  a `bind_controller(target, fn, input_contract)` workflow binding get
+  their values from the callable. "Controller" is a workflow-only term.
 - **Spec contracts section:** Add data contracts (output-only), multi-contract
   satisfaction (`: A + B + C`), supertraits (`contract B : A`).
 - **Spec §2 module-scope declarations:** Retire the "implicit top-level type"
@@ -384,7 +391,7 @@ becomes common.
   coupling should all be expressible. Field-to-field (nonlocal diffusion,
   lateral signaling) falls out naturally if kernels are just functions used
   in `integrate()` over spatial domains. No special syntax per coupling type.
-- Can kernels be learned (neural slots)? Concept says yes, syntax undesigned.
+- Can kernels be learned (i.e., bound via a `bind_controller`-like verb)? Concept says yes, syntax undesigned.
 - How does kernel sparsity (characteristic length scale) get communicated to
   the compiler for spatial indexing optimization? (Leaning toward: workflow
   layer for opaque/learned kernels, compiler analysis for transparent ones.)
@@ -463,6 +470,63 @@ See v2.1_in_progress "Probabilistic Programming" and "Refinement types."
 
 - `deriv` primitive needs to handle matrix/tensor expressions for non-Euclidean
   spatial operators.
+
+---
+
+## Workflow Verb Taxonomy
+
+The v2.1 workflow ships eight binding verbs: `assume_constant`,
+`assume_series`, `learn_constant`, `learn_initial`, `learn_trajectory`,
+`bind_controller`, `bind_topology`, `observe`. Earlier drafts grouped them
+into a "four-way workflow vocabulary" (`assume` / `observe` / `learn` /
+`bind`), with `bind_controller` and `bind_topology` as siblings under
+`bind`.
+
+That grouping may or may not survive the clarified framing now that
+"controller" is not a `.myco` kind and `bind_topology` supplies
+structure (geometry/connectivity) rather than values. Specifically:
+
+- Is `bind_controller` actually a `bind` verb in the same sense as
+  `bind_topology`, or is it more naturally grouped with `learn_*` as
+  "supply a trainable source" with the difference being only whether the
+  training loop lives inside Myco's learnable parameters or in the
+  callable's own autodiff?
+- Does the four-verb partition clarify or obscure the fact that each verb
+  simply supplies a source of a particular flavor?
+
+Not blocking — verbs themselves are load-bearing on the Python side and
+stay. Revisit the taxonomy once callable-binding, topology-binding, and
+prior-binding (deferred) have all been designed.
+
+---
+
+## Literal constants in `.myco`
+
+Current spec permits literal scalar constants and universals at module
+scope in `.myco` (e.g., `universal R: Scalar<J_mol_K> = 8.314`). Question:
+should `.myco` have any literal values at all, or should every value
+enter via a workflow binding verb?
+
+Motivation for removing them: `.myco` would become purely structural —
+types, contracts, variables, relations, with zero concrete numerical
+content. Every value the experimenter brings to the model (physical
+constants, parameter guesses, starting conditions, measured data) would
+arrive through the same mechanism (a binding verb). This is a stronger
+form of "the `.myco` describes what is true, the workflow describes what
+you assume" — physical constants like `R` or `stefan_boltzmann` are also
+measured and assumed, just at humanity's scale rather than the
+experimenter's.
+
+Motivation for keeping them: certain values (dimensional constants, unit
+conversions, exact rationals) are intrinsic to the mathematical structure
+and awkward to require binding for. Also clarity: a formula like
+`value_25 * exp(E / (R * T))` reads naturally with `R` as a universal; it
+becomes noisier if `R` must be bound per experiment.
+
+Revisit after more Tier 2 locking. Touches the workflow API design and
+the question of whether "what the experimenter supplies" and "what humans
+have collectively measured over centuries" are meaningfully different
+categories.
 
 ---
 ---
