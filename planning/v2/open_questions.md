@@ -167,28 +167,49 @@ rejected as a workflow-into-model leak.
 
 ## Compiler / Runtime
 
-### Solver convergence during early training
-An untrained controller outputs garbage → SCC solver diverges → NaN. Every
-PINN/hybrid-model project hits this. Need a concrete plan before
-implementation. Options:
-- Homotopy continuation (gradually increase controller authority)
-- Warm-starting from previous timestep's solution
-- Pre-training the controller to mimic a hand-coded baseline (Ball-Berry,
-  gain-risk optimization) before end-to-end training
-- Differentiable projection for box constraints (cheap, reduces penalty burden)
+### ~~Solver convergence during early training~~ — RESOLVED
+**Decision:** The compiler emits warm-started solvers by default. Iterative
+solvers (Newton, fixed-point) accept the previous tick's solution as their
+initial guess; the workflow can disable warm-start for cold-start
+evaluation or regime changes. This is a compilation detail that does not
+change emitted residuals or forward values — backend-agnostic, every
+solver library accepts an initial guess.
 
-This is a compilation/runtime concern, not language syntax, but it must be
-on paper before the training story works. Flagged by external review.
+Homotopy continuation (blending controller output with a baseline via
+annealing `α`) and pre-training against a hand-coded heuristic (Ball-Berry,
+gain-risk) are workflow-layer patterns that the controller-binding API
+already supports. No language features needed — shipped as documented
+Python recipes, not spec additions.
 
-### Constraint enforcement strategy during training
-Soft penalty methods are brittle — weight too low, controller ignores
-constraint; weight too high, optimization stalls. For sparse multi-study
-training, this is exactly the regime where penalties misbehave. Consider:
-- Augmented Lagrangian for equality-residual consistency losses
-- Differentiable projection for all box constraints, not just admissibility
-- Surface `consistency_loss_weight` prominently in diagnostics as a tuning
-  knob, not a sensible default
-Runtime/compilation concern, not language design. Flagged by external review.
+Differentiable box-constraint projection is covered under the constraint
+enforcement decision below.
+
+See v2.1_in_progress "Training emission and constraint enforcement."
+
+### ~~Constraint enforcement strategy during training~~ — RESOLVED
+**Decision:** Compiler surfaces refinement-type bounds on unknowns
+(`0 <= self <= 1`, `self >= 0`, etc.) as workflow-visible metadata. The
+compiler does **not** auto-emit projection — projection flavor is a
+training-dynamics choice. Stdlib ships three projection helpers
+(`hard_clip`, `sigmoid`, `soft_clip`) the workflow selects per-unknown
+or globally.
+
+For equality-residual consistency losses, overdetermined components
+expose residuals individually by name (per §14.6 conventions). v2.1
+stdlib ships two loss helpers:
+- `soft_penalty(weights)` — default. `consistency_loss_weight` surfaced
+  prominently with no "sensible" default; user must tune.
+- `augmented_lagrangian(weights, mu, lambda_init, mu_schedule)` — opt-in
+  for brittle-penalty regimes. Adds `λ_i · r_i` dual term with standard
+  multiplier update; two API shapes (PyTorch mutable state, JAX pure
+  update). Both helpers read the same `model.residuals` list.
+
+Shipping both helpers at v2.1 gives users an immediate escape hatch from
+penalty brittleness and commits us to the per-residual exposure API
+needed for AL. Purely additive library code — no compiler or spec
+changes required.
+
+See v2.1_in_progress "Training emission and constraint enforcement."
 
 ### ~~Closure policy semantic interface~~ — RESOLVED
 **Decision:** Spec §14.6 is the authoritative interface. A policy receives
