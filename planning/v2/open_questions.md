@@ -407,9 +407,17 @@ becomes common.
 
 - Clarify that "atomic" means leaf of the containment tree (holds a numerical
   value), not "single-field."
-- `where` on runtime values (e.g., `where mass > threshold`) is piecewise
-  function behavior. How does this interact with differentiability? Does the
-  compiler need to know about discontinuities?
+- ~~`where` on runtime values~~ — RESOLVED. Runtime `where` is legal
+  everywhere and stays piecewise-hard in emitted code. Smoothing is a
+  **model claim**: users write the smooth form (`smooth_threshold`,
+  `smooth_max`, etc., shipped in stdlib) when they want smooth transitions;
+  workflow-configurable sharpness goes in a `universal` parameter. The
+  compiler never silently rewrites semantics based on compile mode. In
+  training mode, the compiler warns (not errors) when a runtime `where`
+  predicate depends on trainable parameters — non-gradient training
+  methods, ablation studies, and non-blocking gradient paths are all legit
+  reasons to keep sharpness. Silencing via `#[allow(sharp_gradient)]`.
+  See v2.1_in_progress "`if/else`, `where` conditionals."
 - **Named-type rules for equality and comparison.** Spec section 4.7 defines
   named-type rules for arithmetic but not for `=`, `<`, `<=`, `>`, `>=`.
   `CarbonPool = WaterPool` should be a compile error (same dimension, different
