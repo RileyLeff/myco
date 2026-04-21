@@ -202,3 +202,167 @@ AGENTS.md so every agent picks it up at session start.
   cross-cutting concept in §0.1 needs adjustment.
 - After the edit, run `just spec-verify` scoped to the edited
   sections and their immediate cross-refs.
+
+## Phase 1 execution plan (locked)
+
+This is the detailed Phase 1 plan, recorded here so it survives
+context compaction. If you resume Phase 1 in a fresh session, use
+this as the source of truth.
+
+### Model and mode
+
+- Five parallel Sonnet subagents per batch (not Haiku; Riley trusts
+  Sonnet's recommendations).
+- Agents are READ-ONLY. They do not edit any file. They may grep,
+  read, and write their own report file under `planning/v2/audit/`.
+- Riley adjudicates all findings. Fixes are accumulated across all
+  batches and applied in one coordinated pass at the end of Phase 1.
+
+### Scope
+
+All top-level sections of `spec_new.md`, including trackers,
+placeholders, and appendices. Do not skip anything. Relevant content
+may be lurking even in stub sections, and we want the audit to
+surface it.
+
+Section count: §0, §1, and §2 through §40, plus Appendix A / B / C.
+Total: 44 top-level sections.
+
+### Corpus each subagent greps
+
+- `planning/soul.md`
+- `planning/v2/spec.md` (old spec)
+- `planning/v2/spec_dev_notes.md`
+- `planning/v2/riley_project_note.md`
+- `planning/v2/anti_spec.md`
+- `planning/v2/v2.1_in_progress.md`
+- `planning/v2/open_questions.md`
+- `planning/v2/v2.1_chunk_reports/*.md` (all seven)
+
+### Per-section report format
+
+Four buckets, written to
+`planning/v2/audit/<NN>_section_<slug>.md`:
+
+- **absorbed** — content that already landed in spec_new.md §<N>.
+- **superseded** — content in the corpus that has been replaced by a
+  newer decision and should move to anti_spec.md (if not already
+  there).
+- **homeless** — content in the corpus that is relevant to this
+  section, is not accounted for in spec_new.md §<N>, and is not
+  already committed to anti_spec.md. This is the most important
+  bucket; it is what we would lose by canonicalizing.
+- **conflicts** — direct contradictions between spec_new.md §<N>
+  and the corpus.
+
+For any finding, the agent may append one line starting
+`Recommend:` with a proposed disposition (absorb text X into §Y,
+move to anti_spec under heading Z, add entry to open_questions, etc.).
+These are suggestions only; Riley decides.
+
+### Chunk-report treatment
+
+- Reports `01_geometry_design_report.md` and
+  `02_collections_iteration_report.md` are closed. Treat absent
+  content from these as candidate homeless or superseded.
+- Reports `03_kernels_in_progress.md`,
+  `04_egraph_foundation_in_progress.md`,
+  `05_matrices_in_progress.md`,
+  `06_backend_abstraction_in_progress.md`,
+  `07_type_graph_in_progress.md` are still open design venues.
+  Content in these that is legitimately open and absent from
+  spec_new.md is NOT homeless; it belongs to the in-progress work
+  tracked under §33 / §34. Only flag as homeless if it is a stable
+  decision that has not been reflected.
+
+### Batches
+
+Nine batches of five (last batch four):
+
+| Batch | Sections |
+|---|---|
+| 1 | §0, §1, §2, §3, §4 |
+| 2 | §5, §6, §7, §8, §9 |
+| 3 | §10, §11, §12, §13, §14 |
+| 4 | §15, §16, §17, §18, §19 |
+| 5 | §20, §21, §22, §23, §24 |
+| 6 | §25, §26, §27, §28, §29 |
+| 7 | §30, §31, §32, §33, §34 |
+| 8 | §35, §36, §37, §38, §39 |
+| 9 | §40, Appendix A, Appendix B, Appendix C |
+
+Each batch launches as five parallel subagents in a single message.
+Riley reviews the five reports after each batch before the next
+launches.
+
+### Subagent prompt template
+
+```
+You are auditing §<ID> ("<TITLE>") of the canonical Myco v2 spec at
+/Users/rileyleff/Documents/dev/myco/planning/v2/spec_new.md.
+
+Your job is READ-ONLY. Do not edit any file. Write your report to
+/Users/rileyleff/Documents/dev/myco/planning/v2/audit/<NN>_section_<slug>.md.
+
+Corpus to grep for relevant content:
+- planning/soul.md
+- planning/v2/spec.md
+- planning/v2/spec_dev_notes.md
+- planning/v2/riley_project_note.md
+- planning/v2/anti_spec.md
+- planning/v2/v2.1_in_progress.md
+- planning/v2/open_questions.md
+- planning/v2/v2.1_chunk_reports/*.md
+
+Use `just spec-section <ID>` to fetch the section under audit.
+
+Report format (markdown, four sections):
+
+## Absorbed
+Corpus content that already landed in spec_new.md §<ID>. One bullet
+per item with corpus file path and a short quote.
+
+## Superseded
+Corpus content that has been replaced by a newer decision in
+spec_new.md §<ID>. Should move to anti_spec.md if not already there.
+One bullet per item with corpus file path, short quote, and the
+spec_new.md §<ID> text that supersedes it. If already in
+anti_spec.md, say so and skip.
+
+## Homeless
+Corpus content that is RELEVANT to §<ID>, is NOT accounted for in
+spec_new.md §<ID>, and is NOT already committed to anti_spec.md.
+This is the highest-value bucket. One bullet per item with corpus
+file path, short quote, and a brief assessment of whether it should
+land in §<ID>, move to anti_spec.md, or open a new open_questions
+entry. Prefix the assessment with `Recommend:`.
+
+For chunk reports 03-07 (in-progress), content that is legitimately
+open design work absent from spec_new.md is NOT homeless. Only flag
+as homeless if it is a stable decision that never made it into
+spec_new.md.
+
+## Conflicts
+Direct contradictions between spec_new.md §<ID> and any corpus
+document. One bullet per conflict with both sides quoted. Include a
+`Recommend:` line for how to resolve.
+
+Style rules for your report:
+- No em dashes in your own prose.
+- No version strings (v2.1, etc.).
+- No historical breadcrumbs ("was X", "absorbed into Y", "previously").
+- Quotes from corpus may contain any of these; leave them as-is
+  inside blockquotes.
+```
+
+### Exit criteria
+
+Phase 1 is complete when:
+
+- All 44 reports exist under `planning/v2/audit/`.
+- Riley has adjudicated each report and marked the disposition of
+  each finding (accept / reject / defer to open_questions / move
+  to anti_spec).
+- The accumulated fix list has been applied to spec_new.md,
+  anti_spec.md, and open_questions.md in one coordinated pass.
+- `just spec-verify` passes with zero findings.
