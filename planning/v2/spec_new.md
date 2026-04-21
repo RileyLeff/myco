@@ -21,6 +21,13 @@ designed after the language and compiler lock.
 
 ## 0. What Myco Is
 
+**Summary.** Myco is a language for scientific modeling with a GPU-first
+execution target. A modeler writes a `.myco` file (types, relations,
+state, topology) and a Python workflow (values, data, priors,
+observations, training directives). The compiler bridges them under
+five principles: world-vs-experiment split, clean boundary, compiler
+does work, structure regularizes, referential truth.
+
 Myco is a language for scientific modeling. GPU is the primary execution
 target; other backends ship via the trait abstraction in Part V. A
 modeler writes a `.myco` file (types, relations, state evolution,
@@ -49,15 +56,22 @@ first numerical step.
 Events add facts. No retraction, no tombstoning. Entities do not know
 they are dead.
 
-Scope. v2.1 covers the language, compiler substrate, workflow
+Scope. This spec covers the language, compiler substrate, workflow
 boundary, standard library, and backend trait. The long-term goal is
 a GPU ecosystem simulator with neural controllers, dynamic topology,
-and spatial explicitness. v2.1 is a precondition.
+and spatial explicitness. Myco is a precondition.
 
 Output. The `.myco` file plus the workflow Python fully reproduces a
 run. Compiled code belongs to you; inspect it if you want (§22).
 
 ### 0.1 Foundational Concepts
+
+**Summary.** Cross-cutting claims named once so later sections can
+invoke them without restating: conservation laws, referential truth,
+downward-only visibility, traceability, error-reporting tiers,
+capability-error surfacing, three-layer e-graph scoping, determinism,
+world-vs-experiment axis, conversion-graph cost model, projection-
+free compiler, and generated-code-is-the-product.
 
 Cross-cutting claims referenced by later sections. Each concept is
 named here once so that Parts I through VI can invoke it by name
@@ -167,6 +181,9 @@ they were compiled from.
 
 ## 1. Canonical Glossary
 
+**Summary.** The vocabulary used throughout the spec. Each term is
+defined once here and referenced by name elsewhere.
+
 The vocabulary used throughout this document. Each term one line.
 Terms: `variable`, `relation`, `event`, `controller` (workflow-only),
 `initial`, `temporal`, `data contract`, `locus`, `workflow`,
@@ -176,36 +193,56 @@ Terms: `variable`, `relation`, `event`, `controller` (workflow-only),
 
 ## Part I — The Language
 
-The surface a modeler writes in `.myco`.
+**Summary.** The surface a modeler writes in `.myco`: modules and
+imports, the type system (primitives, generics, refinements), node
+declarations, functions, contracts, events, and the static checks the
+compiler runs before any code is generated.
 
 ### 2. Modules, Imports, Scope
+
+**Summary.** File-as-module convention with path-based imports
+(`use path::to::symbol`), public/private/file-local visibility, and
+name resolution for types, universals, contracts, and events. Python
+imports and `.myco` imports are separate systems; the workflow
+imports `.myco` models, not the reverse.
 
 File-as-module convention. Path-based imports (`use path::to::symbol`).
 Visibility rules (public / private / file-local). Scope resolution
 rules for names, types, universals, contracts, events. Relationship
 to the workflow side: Python imports and `.myco` imports are distinct
-systems — the workflow imports `.myco` models, not the other way
+systems; the workflow imports `.myco` models, not the other way
 around.
 
 ### 3. Types
 
-Primitives (`Scalar<U, T = Float64>`, `Tensor<U, shape>` with `Vector`
-and `Matrix` as shape-refined aliases). Named types. Generics: val
-generics, type generics, named-argument rule for multi-parameter
-generics. Structural refinements on matrices (Symmetric, PosDef,
-Diagonal, Triangular, Orthogonal).
+**Summary.** The static type system. Primitives
+(`Scalar<U, T = Float64>`, `Tensor<U, shape>`, with `Vector` and
+`Matrix` as shape-refined aliases), named types, universals, val and
+type generics with the named-argument rule, and the structural
+refinement lattice on matrices (Symmetric, PosDef, Diagonal,
+Triangular, Orthogonal).
 
 #### 3.1 Universal Declarations
+
+**Summary.** Module-scope typed names (`universal R: Scalar<J_mol_K>`)
+that every consumer in a run shares. Value comes from the workflow via
+`assume_constant` or `learn_constant`; CC1 forbids literals in `.myco`.
 
 Module-scope typed names shared across all instances that reference
 them. `universal R: Scalar<J_mol_K>` declares a name with a type; the
 value is supplied by the workflow via `assume_constant` or
 `learn_constant`. CC1: no literal value in `.myco`. Semantics:
-universals are "same value for every consumer in this run" — physical
+universals are "same value for every consumer in this run": physical
 constants, cross-entity shared coefficients. Distinct from ordinary
 fields, which vary per instance.
 
 #### 3.2 Refinement Types
+
+**Summary.** Predicate-refined types such as
+`type UnitInterval = Scalar<dimensionless> where { 0 <= self <= 1 }`.
+Obligations discharge at compile time via e-graph reasoning where
+possible, at runtime otherwise. The `~` operator auto-truncates a
+distribution to a refined target type (§13).
 
 Predicate-refined types: `type UnitInterval = Scalar<dimensionless>
 where { 0 <= self <= 1 }`. Refinement obligations discharged by
@@ -214,19 +251,34 @@ operator on distributions auto-truncates to a refined target type (§13).
 
 #### 3.3 Newtype and Composite Types
 
+**Summary.** Single-field nominal wrappers (`type Depth: Scalar<m>`)
+for type distinction without structural change, plus composite record
+types with named fields. Named-type comparison rules cross-link §7.
+
 Single-field nominal wrappers (`type Depth: Scalar<m>`) for type
 distinction without structural change. Composite record types with
 named fields. Named-type comparison rules cross-link §7.
 
 #### 3.4 Node Instantiation
 
+**Summary.** `node name: Type` at module scope creates an entity with
+durable identity. Identity survives timesteps and e-graph merges;
+events operate on nodes. Distinct from type aliasing; the e-graph
+instantiates one identity-tagged class per node.
+
 `node name: Type` at module scope creates an entity with identity.
 Identity survives timesteps and e-graph merges; events operate on
-nodes. Distinct from type aliasing — `node tree: Tree` creates one
+nodes. Distinct from type aliasing: `node tree: Tree` creates one
 Tree entity, not a name for the Tree type. The e-graph instantiates
 one identity-tagged class per node.
 
 #### 3.5 Heterogeneous Collections — `impl` and `some`
+
+**Summary.** Two orthogonal operators for collection heterogeneity.
+`impl Contract` gives static type heterogeneity over a compile-time-
+known element-type set; `some T` gives homogeneous elements with
+runtime sizing. They compose: `Collection<some (impl Plant)>` is
+statically heterogeneous and dynamically sized.
 
 `impl Contract` and `some T` address orthogonal axes of collection
 heterogeneity.
@@ -258,11 +310,23 @@ runtime sizing drives dynamic-allocation choices.
 
 #### 3.6 Generic Parameter Variance
 
+**Summary.** Variance rules for generic type parameters:
+covariant / contravariant / invariant positions. Subtyping discipline
+for named types, refinements, and conservation-group hierarchies.
+Full treatment tracked in chunk 07 Q4.
+
 Variance rules for generic type parameters (chunk 07 Q4):
 covariant / contravariant / invariant positions. Subtyping discipline
 for named types + refinements + conservation-group hierarchies.
 
 #### 3.7 Conservation Groups
+
+**Summary.** `type Mass : Scalar<kg> { conserved }` marks a parent
+type whose named-type children share conservation semantics. Cross-
+sibling arithmetic is forbidden without explicit convert; destructive
+events must route conserved fields somewhere; the compiler auto-
+generates junction balance relations from `diverg()` on conserved
+flux fields.
 
 `type Mass : Scalar<kg> { conserved }` marks a parent type whose
 named-type children (e.g., `FishMass`, `DetritusMass`) share
@@ -285,9 +349,16 @@ interaction, field-level conservation.
 
 #### 3.8 Scalar and Tensor Reconciliation
 
+**Summary.** How `Scalar<U>` relates to `Tensor<U, ()>`, how
+collections relate to tensor axes, and which transformations live in
+`convert` versus the backend trait. Collections and tensors are
+orthogonal primitives. `convert` handles meaning-preserving tensor
+transforms (reshape, sparse↔dense, structural widening); precision,
+layout, and device residency belong to the backend.
+
 Open: whether `Scalar<U>` is formally sugar for `Tensor<U, ()>`
 (shape-zero tensor) or a distinct primitive with coercion rules
-(chunk 05 Q6). The unification is attractive — it lets structural
+(chunk 05 Q6). The unification is attractive: it lets structural
 refinements, convert variants, and envelope flavors live on a single
 hierarchy. Chunk 05 carries the resolution.
 
@@ -318,9 +389,15 @@ representation-level tuning to the backend trait.
 
 #### 3.9 Matrix Structural Subtype Lattice
 
+**Summary.** Matrix structural properties (Symmetric, PosDef,
+Diagonal, Triangular, Orthogonal, Sparse, Banded) are type-level
+predicates forming a lattice under meet. They drive stdlib primitive
+dispatch: `solve` picks triangular substitution, Cholesky, or general
+LU from the structural subtype of its first argument.
+
 Matrix structural properties are type-level predicates that form a
 lattice under meet (structural intersection). They drive stdlib
-primitive dispatch (§30) — e.g. `solve` chooses triangular
+primitive dispatch (§30), for example `solve` chooses triangular
 substitution, Cholesky back-substitution, or general LU based on the
 structural subtype of its first argument.
 
@@ -375,6 +452,12 @@ Deferred to chunk 05:
 
 ### 4. Values and Literal Policy
 
+**Summary.** Zero literal numerics in value position (CC1). Three
+exception positions where literals are allowed: unit definitions,
+affine conversion bodies, and structural positions (shape tuples,
+indices, generic parameters). All numeric values enter through the
+workflow.
+
 Zero literal numerics in value position. Three exception positions:
 unit definitions, affine conversion bodies, structural positions
 (shape tuples, indices, generic-parameter definitions). All numeric
@@ -382,6 +465,11 @@ values enter from the workflow. See `spec_dev_notes.md` for the
 derivation.
 
 #### 4.1 CC1 Diagnostic Surface
+
+**Summary.** CC1 violations surface as `mycoc` compile errors with a
+consistent shape: identify the literal, name the rejected position
+kind, and point to the canonical workflow verb (`assume_constant`,
+`assume_series`) that would supply the value instead.
 
 Violations surface as `mycoc` compile errors with a consistent
 diagnostic shape. The error identifies the literal, the position
@@ -396,10 +484,20 @@ CC1 enforcement actionable instead of cryptic.
 
 ### 5. Units
 
+**Summary.** Base units, derived units, affine conversions,
+dimensional algebra, and unit-generic types. The `convert` declaration
+(four variants), round-trip verification, and `value_in` operator are
+the modeler surface.
+
 Base units, derived units, affine conversions, dimensional algebra,
 unit-generic types.
 
 #### 5.1 Convert Declarations — Four Variants
+
+**Summary.** Four forms of unit/named-type conversion: `<->` or `->`
+crossed with bare or parameterized-body. Bare forms declare same-
+magnitude aliases or one-way relabels; parameterized forms carry
+bodies the compiler verifies for inverse consistency.
 
 Unit and named-type conversions come in four forms:
 
@@ -415,12 +513,22 @@ Unit and named-type conversions come in four forms:
 
 #### 5.2 Round-Trip Verification (O2.1)
 
+**Summary.** Parameterized `<->` converts obligate the compiler to
+verify inverse consistency via bounded counterexample search within
+the participating types' refinement bounds. Counterexample is a
+compile error; exhausted bound accepts.
+
 Parameterized `<->` converts obligate the compiler to verify inverse
 consistency. Verification runs bounded counterexample search within
-the participating types' refinement bounds. Counterexample found →
-compile error with offending value; exhausted bound → accept.
+the participating types' refinement bounds. Counterexample found is a
+compile error with the offending value; exhausted bound accepts.
 
 #### 5.3 The `value_in` Operator
+
+**Summary.** `value_in(unit)` extracts the raw numeric magnitude of a
+quantity in a named unit (`temperature.value_in(celsius)`). Use
+positions: interop with unit-naive stdlib atoms and external-library
+arguments. Unit must be dimensionally compatible with the receiver.
 
 `value_in(unit)` extracts the raw numeric magnitude of a quantity in
 a named unit. Example: `temperature.value_in(celsius)` pulls the
@@ -430,22 +538,42 @@ the argument must be dimensionally compatible with the receiver.
 
 ### 6. Functions
 
+**Summary.** `fn` declarations with parametric generics. Contracts
+apply to functions via the same composable machinery used for types
+and distributions. Stdlib atoms declare capability contracts like
+`Invertible<_>`, `Differentiable`, `Monotone` that drive e-graph
+rewrites; user functions have no property-declaration surface. The
+compiler derives function properties from body composition plus
+stdlib atom declarations.
+
 `fn` declarations with parametric generics. Body composition. Contracts
 apply to functions using the same composable machinery used for types
 and distribution families (see §7). Stdlib atoms (`exp`, `log`, `sin`,
 `sqrt`, …) declare capability contracts like `Invertible<_>`,
 `Differentiable`, `Monotone`; these drive e-graph rewrites (see §17
-merge sources). User functions carry no property-declaration surface
-— the compiler derives properties from body composition plus stdlib
+merge sources). User functions carry no property-declaration surface;
+the compiler derives properties from body composition plus stdlib
 atom declarations. No annotation blocks, no `#[...]` attributes.
 
 ### 7. Contracts
+
+**Summary.** Contracts are the single abstraction mechanism in Myco:
+declaration, multi-contract satisfaction (`: A + B + C`), and
+supertraits (`contract B : A`). Contracts apply uniformly to types,
+functions, and distribution families. Parameterized and capability
+variants carry compiler-actionable facts.
 
 Contract declaration. Multi-contract satisfaction (`: A + B + C`).
 Supertraits (`contract B : A`). Contracts apply uniformly to types,
 functions, and distribution families. Named-type comparison rules.
 
 #### 7.1 Parameterized Contracts
+
+**Summary.** Contracts take type parameters (`Invertible<T>`,
+`Convert<From, To>`, `Distribution<U>`). Parameters thread through
+supertrait chains and satisfaction checks. Principal users are
+capability contracts on stdlib atoms (§6) and distribution families
+(§27).
 
 Contracts take type parameters: `Invertible<T>` (invertible fn with
 inverse type T), `Convert<From, To>` (conversion capability),
@@ -455,6 +583,13 @@ contracts on stdlib atoms (§6) and distribution families (§27) are
 the principal users.
 
 #### 7.2 Capability Contracts
+
+**Summary.** Capability contracts carry compiler-actionable facts.
+The distribution-side chain drives Tier A closed-form PPL routing;
+the function-side chain (`Invertible<_>`, `Differentiable`,
+`Monotone`) drives function-inverse rewrites and the `deriv` /
+`condition_of` intrinsics. Satisfaction is composable through
+supertrait chains.
 
 Capability contracts carry compiler-actionable facts. Distribution-
 side chain (root `Distribution<U>`, supertraits `AffineSelfClosed`,
@@ -468,12 +603,22 @@ facts through the supertrait chain without restatement.
 
 #### 7.3 Supertraits
 
+**Summary.** `contract B : A` declares B as a refinement of A. Every
+B-satisfier is also an A-satisfier. Supertrait chains compose;
+diamond inheritance resolves by contract identity (one obligation
+per supertrait, not one per path).
+
 `contract B : A` declares B as a refinement of A. Every B-satisfier
 is also an A-satisfier. Supertrait chains compose; diamond
 inheritance resolved by contract identity (same supertrait reached
 by two paths contributes one obligation, not two).
 
 #### 7.4 Multi-Contract Coherence
+
+**Summary.** `T : A + B` requires disjoint obligations or matching
+obligations where A and B overlap. Conflicting obligations (same
+name, incompatible signature across A and B) emit a coherence error
+naming both supertraits.
 
 Satisfaction of `T : A + B` requires disjoint obligations for A and
 B, or matching obligations where they overlap. Conflicting
@@ -483,12 +628,25 @@ both supertraits.
 
 ### 8. Relations and Equality
 
+**Summary.** Relations are world-claims that the compiler treats as
+equational merges. Overdetermination is not an error: after a system-
+level classification (redundant / provably inconsistent /
+conditionally inconsistent), closure policies Y1-Y6 combine competing
+claims. `constraint` declarations carry inequality obligations with
+three explicit discharge paths.
+
 Relations as world-claims. Overdetermination is not an error; closure
 policies combine competing claims. Policies Y1-Y6 including
 un-deferred `condition_weighted` (backed by `condition_of`
 Levels I-III). Merge semantics.
 
 #### 8.1 `constraint` Declarations
+
+**Summary.** Inequality or logical obligations the modeler asserts.
+Unlike relations, constraints do not merge e-classes; they restrict
+the admissible solution set. Three discharge paths: compile-time
+proof, runtime projection (workflow-selected flavor), or training
+loss penalty on training-classified SCCs.
 
 Inequality or logical obligations the modeler asserts must hold.
 Distinct from `relation` (equational merge) in that constraints
@@ -499,6 +657,11 @@ or training loss penalty (SCCs classified training, §20).
 
 #### 8.2 `let` Bindings in Relation Bodies
 
+**Summary.** Local aliases for subexpression reuse inside a relation
+body. Compile-time only: not a new variable, not a state field. Two
+roles: readability for multi-term equations, and e-class hinting
+(same binding means same e-class).
+
 Local aliases for subexpression reuse inside a relation body.
 Compile-time only; not a new variable, not a new state field.
 Example: `let flux = k * (psi_soil - psi_leaf); d(water) = flux -
@@ -507,6 +670,12 @@ and e-class hinting (binding signals "same e-class both places,"
 which the e-graph honors via structural equality).
 
 #### 8.3 `if` / `else` vs `where` in Relation Bodies
+
+**Summary.** Two distinct constructs with different semantics.
+`if C then A else B` is a runtime branch on the truth of `C`;
+`where x is T` is compile-time structural narrowing under the
+assumption that `x` inhabits `T`. `if` keeps e-graph merge
+obligations on both arms; `where` specializes to the narrower type.
 
 Two distinct constructs. `if C then A else B` introduces a runtime
 branch: the relation's semantics depends on the truth of `C` at
@@ -518,6 +687,12 @@ on both arms; `where` specializes the arm to a narrower type.
 
 #### 8.4 `for` Loops in Relation Bodies
 
+**Summary.** Compile-time unfolding. `for node in collection: ...`
+expands to one relation per element at compile time; the loop
+variable is not a runtime iterator. Collection must be statically
+known (shape-generic is OK; runtime-sized `some` collections are
+disallowed here).
+
 Compile-time unfolding. `for node in collection: ...` expands to
 one relation per element at compile time; the loop variable is
 not a runtime iterator. Distinct from runtime iteration in
@@ -525,6 +700,12 @@ collections (§12). The collection must be statically known (shape-
 generic OK; runtime-sized `some` collections disallowed here).
 
 #### 8.5 Inline Relation and Constraint Sugar
+
+**Summary.** Terse forms for single-line claims on field or type
+declarations. `x: Scalar<m> = y + z` desugars to a named relation;
+`x: Scalar<m> where { x > 0 }` desugars to a refinement constraint.
+The longhand block forms remain available; the sugar is purely
+ergonomic.
 
 Terse forms for single-line claims attached to field or type
 declarations. `x: Scalar<m> = y + z` desugars to a named relation
@@ -534,6 +715,12 @@ constraint. The longhand block forms (`relation { ... }`,
 ergonomic.
 
 #### 8.6 Overdetermination: System-Level Classification
+
+**Summary.** Before any closure policy applies, the compiler
+classifies an overdetermined residual block three ways: redundant
+(consistent; policies apply), provably inconsistent (hard compile
+error), or conditionally inconsistent (runtime assertion before the
+solver). Closure policies operate only on the redundant case.
 
 When a residual block has more equational claims than unknowns, the
 compiler classifies the system three ways before any closure policy
@@ -553,6 +740,11 @@ cases are failures, not approximation choices.
 
 #### 8.7 Closure Policies Y1-Y6
 
+**Summary.** Six user-facing handlers for redundant overdetermination:
+`weighted_average`, `soft_select`, `hard_select`, `condition_weighted`,
+user-defined (Y5), and `C(N,M)` enumeration. Selected per residual
+block at workflow composition time.
+
 User-facing handlers for redundant overdetermination. Selected per
 residual block at workflow composition time. Variants:
 
@@ -571,16 +763,28 @@ residual block at workflow composition time. Variants:
 
 #### 8.8 Y5: User-Defined Closure Policies
 
+**Summary.** A Y5 policy is an ordinary `.myco` function satisfying
+the closure-policy interface: candidate values plus hyperparameters
+in, a single forward value out. The compiler inlines the fn body into
+the extraction pipeline, so Y5 policies participate in differentiation
+and e-graph reasoning like any other fn.
+
 A Y5 policy is an ordinary `.myco` function satisfying the
 closure-policy interface: inputs are the candidate values (one per
 competing claim) plus user-supplied hyperparameters; output is a
 single forward value of the same type. Users register a Y5 policy
 by name; workflows select it per residual block via the same
 mechanism as Y1-Y6. The compiler inlines the fn body into the
-extraction pipeline — Y5 policies participate in differentiation
+extraction pipeline; Y5 policies participate in differentiation
 and e-graph reasoning like any other fn.
 
 #### 8.9 Smoothing as a Model Claim
+
+**Summary.** Smoothing is a modeler choice, not a compiler-injected
+approximation. The stdlib provides `smooth_max`, `smooth_abs`,
+`smooth_step`, and related helpers; the modeler writes them
+explicitly where non-smooth operators would break differentiability
+or solver assumptions. The compiler does not auto-smooth.
 
 Smoothing is a modeler choice, not a compiler-injected
 approximation. The stdlib provides `smooth_max`, `smooth_abs`,
@@ -594,6 +798,12 @@ write what they want.
 
 #### 8.10 Generated-Defaults and Obligation Keys
 
+**Summary.** Compiler-generated relations (junction balance, boundary
+condition stubs, conservation synthesis) carry named obligation keys
+like `balance(axial_flux)`. Modelers override with
+`replaces balance(axial_flux): <body>` for targeted overrides
+without disabling generation globally.
+
 When the compiler auto-generates a relation (e.g., junction balance
 from `diverg()` on a conserved flux field, §3.7; boundary condition
 stubs from geometry, §11), the generated relation carries a named
@@ -606,12 +816,24 @@ conservation relations.
 
 ### 9. State and Time
 
+**Summary.** `initial:` and `temporal:` blocks in type bodies.
+Module-scope relations reserved for truly cross-entity cases. ODE
+form `d(x) = expr` and discrete form `step(x) = expr`; no `[t+1]`
+subscript surface. `dt` is not a reserved name and temporal indexing
+produces distinct e-graph ground terms.
+
 `initial:` and `temporal:` blocks live in type bodies. Module-scope
 only for truly cross-entity relations. `d(x) = expr` for ODE form,
 `step(x) = expr` for discrete-update form. No `[t+1]` subscript
 surface.
 
 #### 9.1 `dt` Provision
+
+**Summary.** `dt` is not reserved, not a universal, not a special
+verb. For ODE form the compiler (or integrator) owns step size; for
+discrete form tick cadence is an ordinary workflow binding via
+`assume_constant("config.dt", ...)`. Time `t` is not a universal
+either.
 
 `dt` is not a reserved name in `.myco`, not a universal, not a
 special verb. Two cases:
@@ -629,6 +851,12 @@ structural relations between them (§16).
 
 #### 9.2 Per-Path Uniqueness After Generic Expansion
 
+**Summary.** Generic events and relations expand at compile time to
+one instance per satisfier (cartesian product over generic
+parameters). Duplicate obligation keys across expanded paths are a
+compile error, not a closure-policy situation. Overdetermination
+analysis runs on the fully expanded constraint set.
+
 A generic event or relation (`event<T: Species>(…)`) expands at
 compile time to one concrete instance per T-satisfier (cartesian
 product over all generic parameters). Each expansion path must
@@ -639,19 +867,36 @@ constraint set, so uniqueness is a pre-analysis hygiene check.
 
 ### 10. Dynamic Topology and Events
 
+**Summary.** `event` declarations mutate the simulation graph
+structure. Referential-truth semantics: entities do not know they are
+dead, events add facts, no tombstoning, no retraction. Firing order,
+generic expansion, cross-container events, and `replaces` /
+monotonicity live here.
+
 `event` declarations for topology change. Referential-truth semantics:
 things do not know they are dead. Events add facts; no tombstoning, no
 retraction.
 
 #### 10.1 Firing-Order Policy
 
+**Summary.** Firing order for multiple matching events is a
+simulation parameter at workflow composition, not language syntax.
+Default is declaration order; workflow overrides via run-config.
+Within a single event type, all valid firings execute in parallel
+(GPU-batched).
+
 When multiple events match at the same timestep, firing order
-is a simulation parameter set at workflow composition — not
+is a simulation parameter set at workflow composition, not
 language syntax. Default: declaration order (lexical). Workflow
 override via run-config. Within a single event type, all valid
 firings execute in parallel (GPU-batched).
 
 #### 10.2 Generic Event Cartesian-Product Expansion
+
+**Summary.** Generic events expand at compile time to one concrete
+event per satisfier combination (cartesian product over multiple
+generic parameters). Each expanded path has its own obligation key
+and participates in firing-order dispatch independently.
 
 `event<T: Contract>(…)` expands at compile time to one concrete
 event per T-satisfier. Multi-parameter generic events
@@ -662,6 +907,11 @@ independently.
 
 #### 10.3 Cross-Container Events
 
+**Summary.** Events touching entities from different container types
+resolve scope via the nearest-common-ancestor rule: the event binds
+at the lowest type containing all affected entities. No common
+ancestor is a compile error. Keeps event scope minimal.
+
 An event that touches entities from different container types
 resolves its scope via the **nearest-common-ancestor rule**:
 the event binds at the lowest type that contains all affected
@@ -670,6 +920,12 @@ keeps event scope minimal and prevents accidentally lifting an
 event to module scope.
 
 #### 10.4 Within-Event Tiebreaking
+
+**Summary.** Concurrent firings of a single event type fall into
+three cases: structurally identical facts (e-graph merges them),
+conflicting writes on conserved fields (caught by junction balance),
+or legitimately overdetermined next-tick residual (closure policies).
+No within-event ordering construct is exposed.
 
 A single event type expands (§10.2) to N firings per tick; all
 fire concurrently. Under referential-truth semantics, concurrent
@@ -690,24 +946,43 @@ outcome.
 
 #### 10.5 `replaces` and Monotonicity
 
+**Summary.** `replaces <obligation_key>` overrides a compiler-
+generated default by suppressing its emission, not by retracting a
+fact. The e-graph never contains both the default and the override
+simultaneously, preserving monotonicity. User-written retraction of
+prior user claims remains open (tracked in §35).
+
 A `replaces <obligation_key>` declaration (§8.10) overrides a
 compiler-generated default relation by suppressing its emission,
 not by retracting a fact after the fact. The e-graph never
 contains both the default and the override simultaneously. This
 preserves the monotonicity invariant.
 
-The harder case — a user-written `event` that logically retracts
-a prior user claim — remains open and is tracked in §35 Other
-Opens. In v2.1, events only add facts; `replaces` applies only
+The harder case of a user-written `event` that logically retracts
+a prior user claim remains open and is tracked in §35 Other
+Opens. Events only add facts; `replaces` applies only
 to compiler-generated defaults, not arbitrary prior claims.
 
 ### 11. Geometry and Locus
+
+**Summary.** Spatial framing. Horses own geometry, flies are embedded
+entities located against that geometry. `bind_topology` supplies
+concrete meshes at workflow time. Standard locus vocabulary
+(`boundary`, `chart`, `metric`, `requires`), six stdlib geometries,
+spatial operators (`grad`, `diverg`, `laplace`, `normal_grad`,
+`trace`), and boundary conditions via `requires`.
 
 Horse/fly composition pattern for spatial frames. `bind_topology` at
 workflow time for concrete meshes. `on locus:` clause applies
 symmetrically to `relation` and `temporal`.
 
 #### 11.1 Spatial Operators
+
+**Summary.** Stdlib-recognized spatial operators on locus-scoped
+fields: `grad`, `diverg`, `laplace`, `normal_grad`, `trace`.
+`diverg` on a conserved flux field drives auto-synthesized junction
+balance. Operators are functions with capability contracts; users do
+not annotate them.
 
 Compiler-recognized operators on locus-scoped fields:
 
@@ -728,6 +1003,12 @@ rewrites from stdlib declarations; users never annotate them.
 
 #### 11.2 Boundary Conditions
 
+**Summary.** Boundary conditions are `requires` blocks on boundary
+sub-loci. Three standard forms (Dirichlet, Neumann, Robin) lower to
+projection, elimination, or residual constraints based on
+workflow-selected solver path. No defaults: a boundary without
+`requires` is underdetermined.
+
 Boundary conditions are `requires` blocks on boundary sub-loci.
 Three standard forms:
 
@@ -745,6 +1026,12 @@ default boundary condition (silence is not a free Neumann zero).
 
 #### 11.3 Stdlib Geometries
 
+**Summary.** Six standard geometries: `Line1D`, `Rectangle2D`,
+`Ball3D`, `RootedTree`, `MetricGraph`, `BranchingManifold`. Each
+exposes named sub-loci (`interior`, `boundary`, junction classes).
+Horse/fly composition lets richer entities reuse primitives without
+inheritance.
+
 | Name | Dim | Topology | Typical Use |
 |---|---|---|---|
 | `Line1D` | 1 | interval | roots, stems, cylindrical cross-sections |
@@ -761,6 +1048,11 @@ primitives without inheritance.
 
 #### 11.4 Horse-and-Fly Composition
 
+**Summary.** A horse owns geometry; flies are embedded entities
+located against that geometry via an embedding field on the horse.
+Flies do not own coordinates. Many fly types share one horse without
+inheritance. Cross-scale visibility is downward-only.
+
 A horse owns geometry; flies are embedded entities located
 against that geometry via an embedding field on the horse. Flies
 do not own coordinates; position is a horse-side field indexed
@@ -776,26 +1068,41 @@ patches do not see the tree. Composition, not inheritance.
 
 #### 11.5 Discretization Configuration
 
+**Summary.** Geometry becomes a mesh at workflow composition via
+`bind_topology`: resolution, element type (FDM/FVM/FEM), refinement
+policy, boundary identification. Compiler receives a concrete mesh;
+no auto-refinement or adaptation.
+
 A geometry becomes a mesh at workflow composition. `bind_topology`
 supplies discretization: mesh resolution, element type (FDM /
 FVM / FEM basis), refinement policy, boundary identification.
 The compiler receives a concrete mesh and lowers spatial
-operators against it. The compiler does not auto-refine or adapt
-— mesh is a workflow decision.
+operators against it. The compiler does not auto-refine or adapt;
+mesh is a workflow decision.
 
 #### 11.6 Compiler Discretization Defaults
 
+**Summary.** If `bind_topology` omits discretization, the compiler
+picks per-geometry defaults (uniform grids, one node per structural
+vertex). Defaults are conservative smoke-test affordances; production
+use typically requires explicit override.
+
 If `bind_topology` does not specify a discretization, the
 compiler picks per-geometry defaults documented in the stdlib
-reference. Indicatively: `Line1D` → uniform N-node grid (N is
-still workflow-supplied); `Rectangle2D` → regular M×N grid;
-`RootedTree` → one node per structural vertex with no interior
-refinement. Defaults are conservative — the program compiles,
+reference. Indicatively: `Line1D` uses a uniform N-node grid (N is
+still workflow-supplied); `Rectangle2D` uses a regular M×N grid;
+`RootedTree` uses one node per structural vertex with no interior
+refinement. Defaults are conservative; the program compiles,
 but accuracy targets for scientific applications typically
 require explicit override. The default is a smoke-test
 affordance, not a production recommendation.
 
 #### 11.7 Edge-Interior vs Locus-Scoped Fields
+
+**Summary.** A 1D edge field is either locus-scoped (one value per
+edge, no position dependence) or edge-interior (a function of the
+interior coordinate, discretized during lowering). Spatial operators
+act on edge-interior fields only. The two styles do not merge.
 
 A field attached to a 1D edge declares itself one of two ways:
 
@@ -815,6 +1122,12 @@ to each other and do not merge in the e-graph.
 
 #### 11.8 Default Junction Conditions
 
+**Summary.** Junction default is balance only: conserved-flux sums
+to zero, auto-synthesized from `diverg()`. Continuity of non-flux
+fields is not assumed; modelers opt in with explicit
+`requires: left.f = right.f`. Conservation forces balance for free;
+continuity is a modeling choice.
+
 Where edges meet at a junction, the default condition is
 **balance only**: the sum of conserved fluxes across the
 junction equals zero (§3.7 consequence 4, auto-synthesized from
@@ -831,6 +1144,10 @@ junctions.
 
 #### 11.9 Embedding Fields Are Regular Fields
 
+**Summary.** Flies attach to a horse via ordinary field declarations,
+not a dedicated `embed` or `in` construct. Horse/fly composition is
+a pattern, not a language primitive. No embedding keyword.
+
 Flies attach to a horse (§11.4) via ordinary field declarations,
 not a dedicated `embed` or `in` construct. A `Tree` carrying a
 `LeafPatch` collection with per-patch attachment position uses
@@ -840,15 +1157,27 @@ language primitive. The language has no embedding keyword.
 
 #### 11.10 Geometry Coefficients via `requires`
 
+**Summary.** Material properties (conductivity, diffusivity,
+elastic modulus) enter via `requires` blocks on the locus, not a
+`hint` keyword or parameter list. The same construct that attaches
+boundary conditions attaches coefficients; one attachment surface.
+
 Material properties attached to geometry (conductivity,
 diffusivity, elastic modulus) enter via `requires` blocks on
 the locus, not a `hint` keyword or parameter list. Example:
 `requires: conductivity = <workflow-bound coefficient>` on the
 locus body. The same construct that attaches boundary
-conditions (§11.2) attaches coefficients — one attachment
+conditions (§11.2) attaches coefficients; one attachment
 surface, not two.
 
 #### 11.11 Standard Locus Vocabulary
+
+**Summary.** Four keywords inside locus bodies and geometry
+declarations: `boundary` (named sub-locus), `chart` (coordinate
+chart reference), `metric` (metric tensor for non-Euclidean
+geometries), `requires` (attachment surface for constraints, BCs,
+coefficients). New standard geometries ship via stdlib, not new
+keywords.
 
 Four keywords are used inside locus bodies and geometry
 declarations:
@@ -863,17 +1192,28 @@ declarations:
 - `requires` — attachment of constraints, boundary conditions,
   or material coefficients (§11.2, §11.10).
 
-No other geometry-level keywords are introduced in v2.1. New
-standard geometries ship via stdlib (§11.3), not via new
-keywords.
+No other geometry-level keywords are introduced. New standard
+geometries ship via stdlib (§11.3), not via new keywords.
 
 ### 12. Collections and Iteration
+
+**Summary.** Collections via `impl Contract` (heterogeneous element
+type, static monomorphization) and `some` (runtime sizing).
+Iteration patterns, aggregation primitives (`sum`, `product`, `any`,
+`all`, `count`, `argmin`, `argmax`), and narrowing with
+`where x is T`. Aggregations are stdlib-only.
 
 `impl Contract` (heterogeneous element type, static monomorphization)
 vs `some` (runtime sizing). Iteration patterns. Aggregation lowering.
 Narrowing with `where x is T`.
 
 #### 12.1 Aggregation Primitives
+
+**Summary.** Named stdlib aggregations: `sum`, `product`, `any`,
+`all`, `count`, `argmin`, `argmax`. Units-aware and conservation-
+group-aware. Compose under stdlib-declared e-graph rewrites
+(linearity, distributivity, `sum(map(f, xs))` fusions). No
+user-declared aggregation surface.
 
 Named stdlib aggregations over collections:
 
@@ -886,13 +1226,18 @@ Named stdlib aggregations over collections:
   see §12.2 for the heterogeneous case.
 
 Aggregations compose under stdlib-declared e-graph rewrites
-(linearity, distributivity, `sum(map(f, xs))` fusions). v2.1 has
+(linearity, distributivity, `sum(map(f, xs))` fusions). There is
 no user-declared aggregation surface — new aggregations ship via
 stdlib, matching the `.myco`-has-no-annotation-surface stance.
 Soft and weighted variants (softmax, weighted_sum) are tracked
 in §35 Other Opens pending collection-aggregation syntax lock.
 
 #### 12.2 Tagged Handles for Heterogeneous `argmax`
+
+**Summary.** `argmax` over `impl Contract` returns a tagged handle
+`(pool_identity, intra_pool_index)` since concrete types live in
+separate compile-time pools. `argmax` over homogeneous `some`
+returns a plain index. Surface syntax is the same in both cases.
 
 `argmax` over an `impl Contract` collection returns a tagged
 handle, not a bare index. The handle carries `(pool_identity,
@@ -909,6 +1254,11 @@ collection's static element-type structure.
 
 #### 12.3 Empty-Collection Defaults
 
+**Summary.** Aggregations with identity elements use them on empty
+collections (`sum = 0`, `product = 1`, `all = true`, etc.). `argmin`
+and `argmax` have no identity, so empty-reachable calls are compile
+errors; callers must prove non-emptiness or guard.
+
 Aggregations behave on empty collections as follows:
 
 - `sum(empty) = 0`, `product(empty) = 1`, `count(empty) = 0`.
@@ -923,6 +1273,11 @@ statically prove non-emptiness or guard with a `count > 0`
 check that the compiler can refine against.
 
 #### 12.4 Bind-Time vs Event-Time Dynamism
+
+**Summary.** Two sources of collection-size change. Bind-time
+dynamism fixes membership at workflow composition (lowers with
+runtime size N, no N-max). Event-time dynamism mutates at runtime
+(requires N-max slot allocation and alive-mask lowering).
 
 Two distinct sources of collection-size change:
 
@@ -942,16 +1297,26 @@ diagnoses ambiguous cases at compile time.
 
 #### 12.5 Per-Type Pool Desugaring
 
+**Summary.** `impl Contract` collections desugar to one homogeneous
+pool per concrete satisfier. Iteration fuses across pools into one
+monomorphized loop per pool; cross-pool aggregations compose per-pool
+results. Users see one collection; the compiler sees N pools.
+
 An `impl Contract` collection desugars at compile time to one
 homogeneous pool per concrete satisfier type. Iteration fuses
 across pools: `for x in xs: body(x)` expands to one
 monomorphized loop per pool. Cross-pool aggregations (`sum`,
 `argmax`, etc.) compose the per-pool results under stdlib
 rewrites. Preserves static monomorphization behind a
-heterogeneous-iteration surface — users see one collection, the
+heterogeneous-iteration surface: users see one collection, the
 compiler sees N pools.
 
 #### 12.6 Iteration Styles
+
+**Summary.** Three compile-time iteration surfaces: index-style
+(`for i in 0..N`), iterator-style (`for x in xs`), and graph-
+neighborhood-style (`for n in node.neighbors`). All are compile-time
+constructs; runtime iteration is a lowering artifact.
 
 Three iteration surfaces, selected by collection kind:
 
@@ -970,6 +1335,11 @@ distinction.
 
 #### 12.7 Filtering with `where x is T`
 
+**Summary.** `where x is T` narrows iteration to elements inhabiting
+`T`, reusing the §8.3 type-narrowing machinery. Structural filter on
+an `impl Contract` pool with body monomorphized against `T`; not a
+runtime predicate. Runtime predicates use `if` inside the body.
+
 `where x is T` narrows an iteration to elements inhabiting `T`.
 Reuses the type-narrowing machinery from §8.3. Structural
 filter, not a runtime predicate:
@@ -987,12 +1357,25 @@ in trees where tree is OldGrowth)`.
 
 ### 13. Probabilistic Programming
 
+**Summary.** `~` is layer-2 distributional metadata, not an equality
+merge. Aleatoric/epistemic split, Tier A/B/C routing (closed-form /
+approximate rewrite / opaque PPL handoff), independence via
+structural identity (no naked correlation), and Cholesky
+reparameterization for MVN. Observation machinery and joint-
+sample field access via `.at()`.
+
 `~` as layer-2 distributional metadata, not an equality merge.
 Aleatoric/epistemic split. Tier A/B/C routing (exact closed-form /
 approximate rewrite / opaque PPL handoff). Independence via structural
 identity; no naked correlation. Cholesky reparameterization.
 
 #### 13.1 Aleatoric and Epistemic Uncertainty
+
+**Summary.** Same `~` surface, two kinds of uncertainty by
+structural position. Aleatoric (world-randomness) `~` sits inside
+`temporal:` / event scope and is realized via sampling. Epistemic
+(parameter uncertainty) `~` sits at module scope or in `initial:`
+and reduces with observation via Bayesian update.
 
 Two distinct sources of uncertainty. Same `~` surface; the
 distinction is structural position:
@@ -1013,6 +1396,12 @@ training class. The same `~` operator, routed differently by
 where it lives.
 
 #### 13.2 Tier A / B / C Dispatch
+
+**Summary.** Three tiers tried in order per stochastic SCC. Tier A
+uses capability-contract-advertised closed forms (affine, sum,
+product, scale closures). Tier B applies user-permitted approximate
+rewrites (Delta, Fenton-Wilkinson, CLT, GEV). Tier C hands the SCC
+to the backend's opaque PPL.
 
 Three tiers of `~` resolution, tried in order per stochastic
 SCC at compile time:
@@ -1040,6 +1429,12 @@ surfaces (§22) show which tier each stochastic SCC landed on.
 
 #### 13.3 Automatic Marginalization
 
+**Summary.** When a latent has no downstream observation and its
+marginal is closed-form (via capability contract), the compiler
+eliminates it without user directive. Failed marginalization falls
+through to Tier B/C. Users forbid specific marginalization by
+tethering the latent with an observation.
+
 When a latent variable has no downstream observation and the
 integral is closed-form, the compiler eliminates it by
 marginalization without user directive. Criteria:
@@ -1058,6 +1453,11 @@ that keeps the latent's value in scope.
 
 #### 13.4 SDE Convention: Itô vs Stratonovich
 
+**Summary.** SDE draws carry an integration-convention type
+parameter (`BrownianMotion<Ito>` vs `<Stratonovich>`), not a global
+setting. Default is `Ito`. Mismatched conventions within one SCC
+are a compile error; cross-scope consistency is the user's call.
+
 SDE draws carry an integration-convention generic:
 `x ~ BrownianMotion<Ito>(...)` vs
 `x ~ BrownianMotion<Stratonovich>(...)`. The convention is a
@@ -1065,10 +1465,16 @@ type parameter on the stochastic family, not a global setting.
 The compiler uses it to route drift/diffusion rewrites
 correctly. Default is `Ito`. Mismatched conventions within one
 SCC are a compile error; the compiler does not auto-convert.
-Cross-scope consistency is the user's call — one `.myco` file
+Cross-scope consistency is the user's call; one `.myco` file
 may contain both conventions at different loci.
 
 #### 13.5 Independence via Structural Identity
+
+**Summary.** Two stochastic draws are independent iff their
+e-classes are distinct. No naked correlation surface: correlated
+structures are built by sharing upstream distributions or declaring
+a joint family (MVN, Mixture). E-class identity is the only
+language-level handle on independence.
 
 Two stochastic draws are independent iff their e-classes are
 distinct. `x ~ Normal(μ, σ)` and `y ~ Normal(μ, σ)` on separate
@@ -1085,6 +1491,12 @@ principle: equational identity of e-classes is the only
 language-level handle on independence.
 
 #### 13.6 Cholesky Reparameterization (Z10)
+
+**Summary.** `x ~ MultivariateNormal(μ, Σ)` reparameterizes to
+`x = μ + L @ ε` with `L L^T = Σ` and `ε ~ Normal(0, I)`. The
+Cholesky factor L is the compiler's canonical MVN intermediate;
+positive-definiteness of Σ is encoded by L's positive-diagonal
+refinement, removing the runtime PD check.
 
 An MVN draw `x ~ MultivariateNormal(μ, Σ)` reparameterizes to
 `x = μ + L @ ε` where `L L^T = Σ` and `ε ~ Normal(0, I)`. The
@@ -1107,6 +1519,11 @@ pattern via `ReparameterizedSampleable` (§7.2).
 
 #### 13.7 Field Sampling with `.at()`
 
+**Summary.** `.at("field_name")` extracts named fields from joint
+/ named-field samples. Same `.at(...)` on the same sample collapses
+to one e-class for consistency. `.at()` on a missing field is a
+compile error. No tuple destructuring or positional indexing.
+
 For distributions returning structured samples (joints, named-
 field-valued), `.at("field_name")` extracts a named field:
 
@@ -1124,6 +1541,12 @@ sample field-access surface; no tuple destructuring, no
 positional index access.
 
 #### 13.8 Observation Injection and Likelihood Back-Propagation
+
+**Summary.** `observe(data, x ~ D)` attaches observed data as a
+layer-2 envelope fact on x's e-class (no equational merge with the
+data). Downstream samples condition on it; `D.log_pdf(data)` adds
+to the SCC's training loss. Distinct from `identify`: observation
+narrows the distribution, not the value.
 
 `observe(data, x ~ D)` injects observed data into a
 stochastic SCC. Mechanism:
@@ -1145,9 +1568,15 @@ not an equation.
 
 #### 13.9 Observed Samples as Envelope Facts
 
+**Summary.** `observe` attaches layer-2 metadata, not a new merge
+source. The eight sources in §17 remain eight; layer-1 equational
+core is untouched. Observations compose with other envelope facts
+(refinement bounds, capability advertisements, tolerance envelopes)
+without equational conflict.
+
 `observe` attaches layer-2 distributional metadata; it does
 not introduce a new e-graph merge source. The envelope fact
-says "this e-class has observed data attached" — it narrows
+says "this e-class has observed data attached"; it narrows
 the distribution and drives likelihood contribution (§13.8),
 but the equational core (layer 1) is unchanged.
 
@@ -1169,7 +1598,13 @@ by layer, not by spelling.
 
 #### 13.10 Tier 2 PPL Lock
 
-The 2026-04 Tier 2 PPL design lock extended the core `~`
+**Summary.** Core `~` extends to cover remaining PPL surfaces
+(coupling machinery B4, joint declaration syntax B2, higher-order
+distributions) without freezing every keyword. Tier 1 primitives
+(§27) are the ship surface; Tier 2 primitives land in chunk 08 and
+§28.
+
+The Tier 2 PPL design lock extended the core `~`
 mechanism to cover the remaining probabilistic-programming
 surfaces without committing surface syntax for all of them:
 
@@ -1187,16 +1622,28 @@ surfaces without committing surface syntax for all of them:
 
 The lock closes "does this primitive have a home?" without
 freezing every keyword. Tier 1 primitives (§27) remain the
-v2.1 ship surface; Tier 2 primitives land in chunk 08 and
+current ship surface; Tier 2 primitives land in chunk 08 and
 §28.
 
 ### 14. Compiler Intrinsics
+
+**Summary.** The intrinsics the compiler surfaces to modelers:
+`deriv`, `integrate`, `condition_of` (Levels I symbolic / II
+algorithmic / III runtime), and `loss_of` (named-field return).
+Each intrinsic has defined e-graph interaction and documented
+guarantees.
 
 `deriv`, `integrate`, `condition_of` (Levels I symbolic / II algorithmic
 / III runtime), `loss_of`. What each intrinsic means, what the compiler
 guarantees about it, how it interacts with the e-graph.
 
 #### 14.1 `condition_of` — Levels I, II, III
+
+**Summary.** `condition_of(expr)` returns a conditioning estimate at
+one of three levels: symbolic (Level I, problem-intrinsic), algorithmic
+(Level II, lowering-dependent), or runtime (Level III, numerically
+computed). The level is tagged on the return. Primary consumer: Y4
+`condition_weighted` closure policy.
 
 `condition_of(expr)` returns a conditioning estimate for an
 expression. Three levels of evaluation, tagged in the return
@@ -1225,6 +1672,11 @@ makes the distinction inspectable. Primary consumer: the Y4
 
 #### 14.2 `loss_of` — Named-Field Return
 
+**Summary.** `loss_of(residual)` returns a struct of named components
+(`data_fit`, `constraint_violation`, `regularization`), not a scalar.
+Users aggregate by name at training emission. The compiler does not
+auto-sum; scalar loss is a workflow composition.
+
 `loss_of(residual)` returns a struct of named loss components,
 not a scalar. Fields cover the residual's loss sources:
 
@@ -1240,6 +1692,11 @@ the workflow's call. The compiler does not auto-sum; scalar
 loss is a workflow composition, not a language default.
 
 #### 14.3 `integrate` — Domain, Units, E-Graph
+
+**Summary.** `integrate(f, x, domain)` returns the integral of `f(x)`
+over `domain`. Unit algebra is mechanical (`[f] · [x]`). Integration-
+by-parts fires as a stdlib rewrite; closed-form antiderivatives
+collapse at compile time. Distinct from SDE stochastic integration.
 
 `integrate(f, x, domain)` returns the integral of `f(x)` over
 `domain`. Semantic commitments:
@@ -1265,11 +1722,23 @@ loss is a workflow composition, not a language default.
 
 ### 15. Approximate Blocks
 
-The 2×2 matrix of approximation flavors: (lossy-model vs
-lossy-tolerance) × (univariate vs bivariate). Syntax, semantics,
+**Summary.** `approximate` blocks authorize specific lossy rewrites
+for a named scope with declared tolerance class and error bound. The
+compiler derives expression lossiness from four cumulative sources
+(atom contracts, approximation declarations, numeric types, backend
+emulation) and cuts it into three tiers: lossless, lossy-model,
+lossy-tolerance.
+
+The 2x2 matrix of approximation flavors: (lossy-model vs
+lossy-tolerance) x (univariate vs bivariate). Syntax, semantics,
 envelope consequences.
 
 #### 15.1 Block Syntax
+
+**Summary.** `approximate` blocks carry `under` (named rewrite),
+`tolerance_class`, `error_bound`, `body` scope, and optional `where`
+predicate. Blocks compose by nesting; outside a block's `body` the
+authorized rewrite does not fire. No global `approximate` scope.
 
 An `approximate` block authorizes one specific lossy rewrite
 for a named scope. Fields:
@@ -1302,6 +1771,11 @@ scope exists; approximation is always explicitly chosen.
 
 #### 15.2 Auto-Derived Lossiness (Four Sources)
 
+**Summary.** Expression lossiness is a lattice join over four
+sources: stdlib atom contracts, approximation-block declarations,
+numeric type choices, and backend emulation paths. The compiler
+reports the aggregate via inspection surfaces.
+
 The compiler derives an expression's lossiness from four
 cumulative sources:
 
@@ -1326,6 +1800,12 @@ independent contributions; lossiness is a lattice join over
 them, not a single authoritative source.
 
 #### 15.3 Three-Tier Lossiness Cut
+
+**Summary.** Lossiness groups into three tiers for diagnostics and
+Tier B dispatch: lossless (equational rewrites only), lossy-model
+(modeler-chosen approximations), and lossy-tolerance (numerical
+tolerance intrinsic to the solve). Each tier is surfaced distinctly
+in diagnostics.
 
 For diagnostics and Tier B dispatch (§13.2), lossiness groups
 into three tiers:
@@ -1352,6 +1832,12 @@ postures, surfaced distinctly.
 ---
 
 ## Part II — Compiler Substrate
+
+**Summary.** What the compiler sees and manipulates: the e-graph
+substrate with its three-layer scoping split, the eight equality-
+introducing machinery sources, the type graph, the residual graph
+projection, hierarchical SCC decomposition, lowering targets, and
+plan-inspection affordances.
 
 What the compiler sees and manipulates.
 
@@ -1380,11 +1866,25 @@ substrate (§16) and the per-block solver dispatch of Parts II-III.
 
 ### 16. The E-Graph
 
+**Summary.** The e-graph is Myco's internal equality substrate,
+structured as three concentric layers: an equational core (ground
+terms under monotonic merge), envelope metadata keyed by e-class
+identity, and adjacent keyed state for per-call solver state and
+timestep/event-tagged copies. Each layer has its own monotonicity
+and ownership rules.
+
 The e-graph as the internal equality substrate. Three-layer split:
 (1) equational core, (2) envelope metadata attached to e-classes,
 (3) adjacent keyed state (timesteps, events, identity-tagged copies).
 
 #### 16.1 Three-Layer Scoping Split
+
+**Summary.** Three concentric layers: equational core (union-find
+under monotonic merge, one per-run instance), envelope metadata
+(facts keyed by e-class narrowing without merging), adjacent keyed
+state (temporal/event/identity-indexed structures holding e-class
+references). Merge sources write layer 1; contracts and observations
+write layer 2; timesteps and events index layer 3.
 
 The e-graph is structured as three concentric layers. Each layer
 has its own modification rules and its own consumers. Every
@@ -1421,6 +1921,12 @@ fact lives on (§22).
 
 #### 16.2 Monotonicity Invariant
 
+**Summary.** Append-only. Merged e-classes stay merged; attached
+envelope facts stay attached. No retraction, tombstoning, or
+rollback. `replaces` suppresses default generation, not emitted
+facts. Events add facts; dead entities continue to exist
+equationally. Compilation is a left-to-right accumulation.
+
 The equational core is append-only. Once two e-classes merge,
 they stay merged; once an envelope fact attaches, it stays
 attached. No retraction, no tombstoning, no rollback. This is
@@ -1444,6 +1950,12 @@ undo logs. Compilation is a left-to-right accumulation; the
 final state is the union of every fact ever claimed.
 
 #### 16.3 Envelope Ownership
+
+**Summary.** Envelope facts have three writers (stdlib contracts,
+compiler rewrites, workflow `observe`), four readers (Tier A/B
+dispatch, extraction pipeline, diagnostics, plan inspection), and
+no invalidator. Conflicting facts emit a coherence error rather
+than silent preference.
 
 Envelope facts (layer 2) have three classes of writer, one
 class of reader, and no invalidator:
@@ -1474,6 +1986,13 @@ preferring one.
 
 #### 16.4 Envelope Flavors
 
+**Summary.** Tolerance envelopes carry one of four flavors:
+entry-wise (per-element), operator-norm (induced matrix norm),
+spectral (eigenvalue/singular-value behavior), or structural
+(combinatorial / pattern-preserving). Each flavor has its own
+composition rule; `approximate` blocks declare flavor in
+`tolerance_class`.
+
 Tolerance envelopes (a subclass of envelope facts) carry a
 flavor declaring how error is measured. Four flavors:
 
@@ -1503,11 +2022,18 @@ family.
 
 ### 17. Equality-Introducing Machinery
 
+**Summary.** Eight enumerated merge sources for the equational core:
+explicit relation equations, workflow constant injection, algebraic
+rewrites, `identify`, stdlib-declared function inverses, named-type
+conversion, closure-policy co-membership, unit-preserving rewrites.
+Unified rewrite-predicate language, A-Y rule groupings
+(Appendix C), `identify` vs relation `=` distinction.
+
 Eight enumerated merge sources: explicit relation equations,
 workflow constant injection, algebraic rewrites, `identify`,
 stdlib-declared function inverses (via capability contracts on
 fns; see §6), named-type conversion, closure-policy co-membership,
-unit-preserving rewrites. The 2×3 faithfulness × orientation matrix
+unit-preserving rewrites. The 2x3 faithfulness x orientation matrix
 covering `convert`, `identify`, `approximate`, relation `=`.
 Unified rewrite-predicate language.
 
@@ -1521,6 +2047,12 @@ a merge source. Two mechanisms, one unfortunately-similar name;
 the distinction is by layer (§16.1), not by spelling.
 
 #### 17.1 The Eight Merge Sources — Prose
+
+**Summary.** Exactly eight merge sources write the equational core:
+explicit relation equations, workflow constant injection, algebraic
+rewrites, `identify`, stdlib-declared function inverses, named-type
+conversion, closure-policy co-membership, unit-preserving rewrites.
+Source tags travel with merges for diagnostics and provenance.
 
 The e-graph's equational core (layer 1 of the three-layer split,
 §16.1) accepts merges from exactly eight sources. Each source
@@ -1573,6 +2105,12 @@ with merges through the e-graph.
 
 #### 17.2 `identify` vs Relation `=`
 
+**Summary.** Both produce e-class merges but differ in user-facing
+semantics. `identify x = y` means "these are the same thing": no
+residual, no closure-policy consequences, idempotent. Relation `=`
+is a world-claim equation that participates in overdetermination
+and closure policies.
+
 Both produce e-class merges, but the user-facing semantics
 differ:
 
@@ -1594,6 +2132,11 @@ inside type bodies; relation `=` lives inside relation bodies.
 
 #### 17.3 Function Inverses via Stdlib Capability Contracts
 
+**Summary.** Function-inverse merges fire from stdlib-declared
+capability contracts (`Invertible<inv=log, domain=Real>` on `exp`),
+not user annotations. Users extend the catalog by composition, not
+declaration. The inverse catalog is inspectable from stdlib alone.
+
 Function-inverse merges fire from stdlib-declared capability
 contracts on atoms, not from user annotations. `exp` declares
 `Invertible<inv=log, domain=Real>`; the e-graph then fires
@@ -1614,6 +2157,11 @@ annotation; they extend it by composition.
 
 #### 17.4 Unified Rewrite-Predicate Language
 
+**Summary.** All merge sources share one predicate language for
+guards: refinements, capability satisfaction, structural shape, and
+unit algebra. Compile-time only; runtime values do not drive
+rewrites. One surface, one discharge procedure.
+
 All merge sources use one predicate language for expressing
 guards. A rewrite predicate can reference:
 
@@ -1632,6 +2180,12 @@ stdlib algebraic rewrite, which uses the same form as a
 (e-graph reasoning with refinement + contract lookup).
 
 #### 17.5 Rewrite-Rule Groups A-Y
+
+**Summary.** Rewrite rules are organized into 25 lettered groups A-Y
+for inspection, debugging, and `approximate` block referencing.
+Representative groups: A (algebraic), E (equality/merge), Y
+(closure-policy), Z (distribution-family). Full catalog lives in
+Appendix C.
 
 Rewrite rules are organized into lettered groups by category.
 The compiler and stdlib commit to the grouping for inspection,
@@ -1653,6 +2207,13 @@ commits partial enumeration. Approximate blocks (§15.1)
 reference rules by group letter in their `under:` field.
 
 #### 17.6 Baseline Rewrite Partition
+
+**Summary.** Rewrites partition into default-on (fire when predicate
+holds: relation-`=`, algebraic, stdlib inverses, conversion, unit,
+`identify`, constant injection) and default-off (fire only inside an
+authorizing `approximate` block). Gives `.myco` its conservative
+default: a model compiles with zero authorized approximations if the
+modeler wrote none.
 
 Rewrites partition into **default-on** and **default-off**
 buckets:
@@ -1678,7 +2239,14 @@ they do not compose across blocks without explicit nesting.
 
 ### 18. The Type Graph
 
-STUB — chunk 07 pending. The type graph is a separate substrate from
+**Summary.** The type graph is a separate substrate from the expression
+e-graph, carrying named-type relations (subtyping, conversion,
+conservation-group membership, refinement implications). Its precise
+interaction with the e-graph (how conversions inject merges, how
+refinement obligations translate to rewrite predicates) remains open
+pending chunk 07.
+
+STUB, chunk 07 pending. The type graph is a separate substrate from
 the expression e-graph, carrying named-type relations (subtyping,
 conversion, conservation-group membership, refinement implications).
 Its interaction with the e-graph (how named-type conversions inject
@@ -1687,11 +2255,23 @@ rewrite predicates) is the chunk 07 deliverable.
 
 ### 19. Residual Graph (Projection)
 
+**Summary.** The residual graph is a user-facing diagnostic view
+projected from the e-graph via cost-vector-guided extraction. It is
+not a canonical form: different workflow cost preferences yield
+different residuals. Subsections cover the cost model, projection
+mechanics, residual classification, and saturation scheduling.
+
 The residual graph as a user-facing diagnostic view projected from
 the e-graph. Extraction decisions and what they yield. How
 diagnostics reference which view.
 
 #### 19.1 Extraction Cost Model
+
+**Summary.** Residual extraction optimizes against a multi-dimensional
+cost vector (precision, latency, memory, approximation class), not a
+single scalar. Extraction returns a Pareto front; workflow
+configuration selects a point. The same e-graph can yield different
+residuals under different policies.
 
 Residual extraction from the e-graph optimizes against a
 **multi-dimensional cost vector**, not a single scalar. Cost
@@ -1717,6 +2297,12 @@ different workflow policies. The residual graph is a projection
 
 #### 19.2 Residual ↔ E-Graph Projection Mechanics
 
+**Summary.** The extractor walks the e-graph top-down, choosing one
+representative term per e-class under the cost vector. The broad
+mechanism (root set from workflow-bound variables and observed
+quantities, share-always preference, envelope propagation) is stable;
+specific heuristics remain open under Tier 0 Phase 2 work.
+
 The extractor walks the e-graph top-down, choosing one
 representative term per e-class subject to the cost vector
 (§19.1). Open items tracked in §35 (Tier 0 Phase 2 Q3):
@@ -1736,6 +2322,12 @@ The mechanism is stable in broad strokes; the specific
 heuristics are chunk 04 Tier 0 Phase 2 work and remain open.
 
 #### 19.3 Residual Classification
+
+**Summary.** Residuals carry two orthogonal classifications: the
+four-way SCC tag (static, dynamic, stochastic, training) drives
+lowering and backend dispatch, while the three-way overdetermination
+tag (redundant, provably inconsistent, conditionally inconsistent)
+gates closure-policy meaning. Diagnostics surface the pair.
 
 Residual nodes receive classifications that pivot lowering and
 diagnostics. Two orthogonal axes:
@@ -1757,6 +2349,12 @@ pair: "this residual is a stochastic SCC with conditionally
 inconsistent equations," for example.
 
 #### 19.4 Saturation Termination and Rewrite Scheduling
+
+**Summary.** Default-on rewrites saturate; default-off rewrites fire
+only inside authorizing `approximate` blocks with an error budget.
+Explicit relation and `identify` merges fire first, then algebraic
+and unit-preserving, then conversion and closure-policy. An absolute
+rewrite-count cap guards against pathological cases.
 
 The e-graph applies rewrites until saturation or termination
 bound. Scheduling and termination guarantees:
@@ -1790,6 +2388,11 @@ elaboration, before saturation runs.
 
 ### 20. SCC Decomposition and Component Classification
 
+**Summary.** The compiler decomposes the residual graph into
+strongly-connected components and assigns each SCC a four-way class:
+static, dynamic, stochastic, or training. The class pivots lowering
+strategy, training emission, and backend dispatch.
+
 After constraint collection, the compiler decomposes the residual
 graph into strongly-connected components. Each SCC receives a four-
 way classification: **static** (fully resolved pre-run), **dynamic**
@@ -1800,11 +2403,23 @@ dispatch.
 
 ### 21. Lowering
 
+**Summary.** Lowering compiles the residual graph into a backend
+artifact. Static and dynamic modules take distinct paths; each SCC
+lowers per its class; dynamic topology uses N-max slots plus an alive
+mask; temporal indexing produces distinct ground terms rather than a
+template. Subsections detail each mechanism.
+
 N-max / alive-mask lowering for dynamic topology. `y[t]` and `y[t+1]`
 as distinct ground terms (no per-timestep or template e-graph).
 Handoff to the backend.
 
 #### 21.1 Static vs Dynamic Module Classification
+
+**Summary.** Modules classify as static (no events, no temporal
+relations; single-pass lowering) or dynamic (at least one event or
+temporal relation; timestepped runtime loop). Classification happens
+before SCC decomposition and is module-level, so static modules
+skip dynamic lowering machinery entirely.
 
 A `.myco` module is classified at compile time, before SCC
 decomposition:
@@ -1824,6 +2439,13 @@ remains dynamic even if only one of its SCCs is actually
 time-dependent.
 
 #### 21.2 Four-Way SCC Lowering Targets
+
+**Summary.** Each SCC class lowers through a distinct path: static
+SCCs fold or prelude-evaluate; dynamic SCCs emit per-tick body code;
+stochastic SCCs route to PPL tiers A, B, or C; training SCCs emit
+gradient-producing computation with per-residual loss exposure. An
+SCC inherits the most expensive class among its members, with
+diagnostics on promotion so the modeler can refactor or accept.
 
 Each SCC's class (§20) determines its lowering target.
 The four targets are distinct compilation paths:
@@ -1856,12 +2478,19 @@ structurally (by refactoring) or accept the promotion.
 
 #### 21.3 `y[t]` and `y[t+1]` as Ground Terms
 
+**Summary.** Each tick's value of a temporal field is a distinct
+ground term in the e-graph, not a template instance. Temporal
+relations (`step`, `d`) connect adjacent ticks; merges at one tick
+do not propagate across time; each tick's residuals are independently
+classified. Backend storage maps T ticks to T slots (bounded runs)
+or a rolling buffer sized to max lookback (streaming runs).
+
 Temporal indexing produces distinct e-graph ground terms,
 not a templated family. `y[1]`, `y[2]`, `y[3]` are three
 different e-classes; temporal relations (`step(y) = expr`
 writes `y[t+1]` from `y[t]`; `d(y) = expr` encodes a
 derivative relation between adjacent ticks) connect them.
-The e-graph does not "template" over time — there is no
+The e-graph does not "template" over time; there is no
 symbolic `y[t]` class that specializes at runtime.
 
 Consequences:
@@ -1884,6 +2513,12 @@ buffers sized to the maximum temporal-lookback depth the
 module references.
 
 #### 21.4 N-max Slots and Alive Masks
+
+**Summary.** Event-time collections lower to a fixed-capacity array
+plus an alive-bit mask. N-max is declared at the collection, optionally
+overridden by `bind_topology`. Allocation claims free slots in O(1);
+retirement flips the bit but leaves equational history intact;
+overflow is a runtime error, not silent growth.
 
 Event-time collections (§12.4) lower to a fixed-capacity
 array plus an alive mask.
@@ -1915,6 +2550,12 @@ array plus an alive mask.
 
 ### 22. Plan Inspection
 
+**Summary.** The compiled program is an output artifact, not the
+source of truth: reproducibility rests on `.myco` plus workflow
+Python together. The `mycoc explain` CLI exposes the compiled plan
+for auditing, debugging, and verifying compilation choices.
+Inspection is a debugging affordance, not a required step.
+
 The compiled program is an output artifact. Reproducibility is
 guaranteed by `.myco` plus workflow Python together. Compiled code
 is inspectable via `mycoc explain` (and related CLI surfaces, §36)
@@ -1925,9 +2566,21 @@ compilation choices. Inspection is a debugging affordance.
 
 ## Part III — Workflow Interface
 
+**Summary.** Part III defines the boundary between `.myco` and the
+Python workflow that drives it: the compiler declares structure,
+Python supplies values, initial conditions, topology, and observations.
+Covers the eight workflow verbs, training emission, and how the
+boundary keeps the compiler projection-free.
+
 The boundary between `.myco` and Python.
 
 ### 23. The `.myco` ↔ Python Boundary
+
+**Summary.** `.myco` declares structure; Python supplies values and
+drives execution. The compiler stays projection-free: solver choice,
+projection flavor, and numeric configuration all cross from Python.
+Subsections cover runtime `where`, multi-binding compilation,
+cross-study callable reuse, and the two error tiers.
 
 `.myco` declares structure; Python supplies values and drives
 execution. The compiler does not auto-emit projection or solver
@@ -1937,6 +2590,12 @@ data series, initial conditions, topology, observations) cross
 this boundary.
 
 #### 23.1 Runtime `where` at Workflow Composition
+
+**Summary.** The `where` keyword spans three layers: compile-time
+type narrowing, collection iteration filter, and workflow
+composition gate. Context disambiguates; diagnostics name the layer.
+The composition-gate form evaluates at binding time, so the compiled
+artifact carries only the selected bindings.
 
 `where` appears at three layers, each with its own semantics:
 
@@ -1954,11 +2613,16 @@ this boundary.
   selected bindings.
 
 The three uses share the keyword but live at three different
-layers — compile, iteration, composition. Context
-disambiguates; diagnostics name the layer when the keyword
-appears ambiguously.
+layers: compile, iteration, composition. Context disambiguates;
+diagnostics name the layer when the keyword appears ambiguously.
 
 #### 23.2 Multi-Binding Compilation
+
+**Summary.** One `.myco` compiles once to a parameterized plan;
+many workflows bind the same plan under different value
+configurations. Trained controller weights persist across runs that
+bind the same callable, so calibration on one dataset transfers to
+prediction on another without recompilation.
 
 One `.myco` compiles once to a plan; many workflows bind the
 same plan under different value configurations.
@@ -1982,6 +2646,13 @@ values that make the plan concrete for this run.
 
 #### 23.3 Cross-Study Callable Reuse via Plain Contracts
 
+**Summary.** Callables cross study boundaries by conforming to plain
+contracts: output contract advertises what the callable produces,
+input contract advertises what it consumes, and any workflow whose
+surface matches can bind the trained instance. No separate "data
+contract" kind, no stateful cross-workflow runtime; the shared
+artifact is trained weights plus a plain contract.
+
 Callables cross study boundaries by conforming to plain
 contracts (§7). The "data contract" kind is retired (see
 anti_spec.md); callables advertise their output type's
@@ -1999,10 +2670,17 @@ composition errors.
 
 The mechanism handles the "train once, reuse" story without a
 separate contract kind or a stateful cross-workflow runtime.
-The shared artifact is trained weights plus a plain contract
-— no extra machinery.
+The shared artifact is trained weights plus a plain contract;
+no extra machinery.
 
 #### 23.4 Error Tiers: Compile vs Workflow Composition
+
+**Summary.** Errors split into two tiers: `mycoc` compile errors
+(structural problems visible without bindings) and workflow
+composition errors (problems visible only once bindings arrive, like
+shape mismatches, contract violations, or N-max ceiling overrun).
+Runtime errors form a third tier that lives in backend surfaces, not
+this spec.
 
 Errors surface at two distinct layers:
 
@@ -2025,16 +2703,29 @@ Both tiers emit user-directed diagnostics. Tooling
 distinction: `mycoc check` catches tier-1 errors; workflow
 composition surfaces tier-2. Runtime errors (numerical
 divergence, overflow, solver non-convergence) are a third
-tier that this spec does not address normatively — they live
+tier that this spec does not address normatively; they live
 in backend and deployment surfaces.
 
 ### 24. Eight Workflow Verbs
+
+**Summary.** Eight verbs form the workflow-composition surface:
+`assume_constant`, `assume_series`, `learn_constant`, `learn_initial`,
+`learn_trajectory`, `bind_controller`, `bind_topology`, `observe`.
+Each verb binds a specific surface with specific gradient-flow
+implications. Subsections detail controllers, topology binding,
+future candidates, and run-config.
 
 `assume_constant`, `assume_series`, `learn_constant`, `learn_initial`,
 `learn_trajectory`, `bind_controller`, `bind_topology`, `observe`. For
 each verb: what it binds, when it fires, gradient-flow implications.
 
-#### 24.1 `bind_controller` — Contract I/O Specification
+#### 24.1 `bind_controller`, Contract I/O Specification
+
+**Summary.** `bind_controller(path, fn, input_contract,
+output_contract)` attaches a Python callable to a named `.myco`
+site. Both contracts are plain contracts; there is no separate
+"data contract" kind. The controller is a purely workflow concept,
+with no `.myco` keyword introducing it.
 
 `bind_controller(path, fn, input_contract, output_contract)`
 attaches a Python callable to a named `.myco` site. Both
@@ -2063,7 +2754,14 @@ introduces a controller; the binding is the only mechanism.
 This retires the `slot` / `learn_slot` machinery and the
 transparent-heuristic ABI (anti_spec.md).
 
-#### 24.2 `bind_controller` — Gradient-Flow Semantics
+#### 24.2 `bind_controller`, Gradient-Flow Semantics
+
+**Summary.** Controllers register their learnable parameters with
+the training loss at composition. Gradient flow happens via the
+backend's AD: the compiler treats the controller as a differentiable
+black box advertising `Differentiable` on its output contract. Non-
+differentiable controllers fall back to opaque. Trained weights
+persist across runs that bind the same callable.
 
 Controllers usually wrap differentiable components (neural
 nets with learnable weights). Gradient semantics:
@@ -2078,7 +2776,7 @@ nets with learnable weights). Gradient semantics:
   flow through the model graph to the controller's output,
   into the controller's parameters, via the backend's AD
   facility (§31). The compiler treats the controller as a
-  differentiable black box — it advertises
+  differentiable black box: it advertises
   `Differentiable` on its output contract; implementation
   is the backend's business.
 - **Opaque-fn fallback.** Controllers without
@@ -2101,6 +2799,12 @@ legacy code.
 
 #### 24.3 `bind_topology` and §11 Geometry
 
+**Summary.** `bind_topology` is the workflow counterpart to `.myco`
+geometry declarations: it supplies a concrete mesh, boundary
+identification, material coefficients, and optional event-time
+capacity override. Fires at workflow composition and is the only
+path by which declared geometry becomes executable.
+
 `bind_topology(path, geometry, discretization=...)` is the
 workflow-side counterpart to the `.myco` geometry declarations
 of §11. The verb supplies:
@@ -2121,22 +2825,28 @@ of §11. The verb supplies:
 `bind_topology` fires at workflow composition. The compiler
 receives a concrete mesh and lowers spatial operators against
 it. The verb is the only path by which geometry becomes
-executable — `.myco` declares the locus structure, the verb
+executable: `.myco` declares the locus structure, the verb
 materializes a specific instance.
 
 #### 24.4 Future Verbs Beyond the Eight
 
-Positive statement of v2.1 scope: the eight verbs listed in
+**Summary.** The eight verbs are the complete workflow-composition
+surface for this release. Candidate future additions
+(`bind_known_constants`, `bind_parameters`, `assume_prior`) are
+tracked but deferred because the existing verbs cover shipped use
+cases. Revisit if later work creates concrete demand.
+
+Positive statement of scope: the eight verbs listed in the
 §24 preamble are the complete workflow-composition surface
-for v2.1. No additional verbs ship in the first release.
+for this release. No additional verbs ship in the first release.
 
-Candidate future additions tracked for post-v2.1:
+Candidate future additions tracked for later:
 
-- **`bind_known_constants`** — batch form for binding many
+- **`bind_known_constants`.** Batch form for binding many
   physical constants at once from a workflow-side table.
-- **`bind_parameters`** — batch binding for empirical-fit
+- **`bind_parameters`.** Batch binding for empirical-fit
   parameter vectors (e.g., a full parameter sweep).
-- **`assume_prior`** — explicit prior-distribution binding
+- **`assume_prior`.** Explicit prior-distribution binding
   distinct from `learn_constant`, for cases where the user
   wants to specify a prior without declaring the constant
   as learned.
@@ -2149,6 +2859,13 @@ existing verbs by that point.
 
 #### 24.5 Run-Config and Workflow Configuration Surface
 
+**Summary.** Run-config is the non-binding configuration the
+workflow supplies at composition: seed, backend, verbosity, dt
+(when used), profile hints. Distinct from the eight verbs since
+run-config does not bind model values; it configures how the
+compiled plan executes. Different runs of one plan can use
+different run-config without recompilation.
+
 Run-config is the non-binding configuration the workflow
 supplies at composition. Distinct from the eight verbs: run-
 config does not bind model values; it configures how the
@@ -2156,13 +2873,13 @@ compiled plan executes.
 
 Representative fields:
 
-- `run.config.seed` — RNG seed for stochastic SCCs.
-- `run.config.backend` — backend selection and its
+- `run.config.seed`. RNG seed for stochastic SCCs.
+- `run.config.backend`. Backend selection and its
   capability-fallback mode (error / host / emulate, §31).
-- `run.config.verbosity` — diagnostics level.
-- `run.config.dt` — when referenced via `assume_constant`
-  in a discrete-time model (§9.1).
-- `run.config.profile` — execution-profile hints (batch
+- `run.config.verbosity`. Diagnostics level.
+- `run.config.dt`. Referenced via `assume_constant` in a
+  discrete-time model (§9.1).
+- `run.config.profile`. Execution-profile hints (batch
   size, memory budget).
 
 Run-config fields are referenced from workflow verbs as
@@ -2172,6 +2889,13 @@ binding surface. Different runs of the same plan can use
 different run-config without recompilation.
 
 ### 25. Training Emission
+
+**Summary.** Training SCCs compile to gradient-trainable code with
+warm-start semantics drawn from `assume_constant` initial values or
+`learn_constant` priors. Workflow selects projection flavor
+(`hard_clip`, `sigmoid`, `soft_clip`). Per-residual loss exposure
+lets users attach losses to named residuals; constraint enforcement
+discharges at compile time where possible, otherwise at runtime.
 
 How the compiler emits gradient-trainable code for SCCs classified as
 training (§20). Warm-start semantics (initial values from
@@ -2185,9 +2909,20 @@ discharge where possible, runtime projection otherwise.
 
 ## Part IV — Standard Library
 
+**Summary.** Part IV covers what ships with Myco: numeric types,
+distribution families, kernels, units, and matrix/tensor primitives.
+Domain-specific units and models stay out of core and ship as
+distributable packages on top of the stdlib.
+
 What ships with Myco.
 
 ### 26. Numeric Types
+
+**Summary.** `Scalar<U, T = Float64>` takes an explicit numeric
+representation parameter with `Float64` as default. Seven reps ship:
+`Bool`, `Integer`, `Rational`, `Float32`, `Float64`, `BigFloat`,
+`Complex`. `T` must satisfy a base `Numeric` contract hierarchy;
+mixed-T arithmetic is forbidden without explicit conversion.
 
 `Scalar<U, T = Float64>` with explicit `T` parameter and `Float64`
 default. `Rational` for exact constant folding (with termination
@@ -2195,8 +2930,14 @@ caveats). `BigFloat`. Default-compatibility constraints.
 
 #### 26.1 Numeric Representation Hierarchy
 
+**Summary.** The stdlib provides seven representations for the `T`
+parameter: `Bool`, `Integer`, `Rational`, `Float32`, `Float64`,
+`BigFloat`, and `Complex`. `Float64` is the per-Scalar default, not
+module-wide. Forward-mode AD is not exposed as a user-facing
+representation since backends own AD.
+
 `Scalar<U, T>` takes an explicit numeric representation parameter
-T. The v2.1 stdlib provides:
+T. The stdlib provides:
 
 | T | Role | Notes |
 |---|---|---|
@@ -2206,9 +2947,9 @@ T. The v2.1 stdlib provides:
 | `Float32` | IEEE single | backend-dependent availability |
 | `Float64` | IEEE double | default; universal backend support |
 | `BigFloat` | arbitrary-precision floats | exact rounding semantics; GPU-incompatible |
-| `Complex` | complex numbers | v2.1 scope, representation and contracts open (§35) |
+| `Complex` | complex numbers | in scope, representation and contracts open (§35) |
 
-Forward-mode AD is not a user-facing representation in v2.1.
+Forward-mode AD is not a user-facing representation.
 Backends own AD (§31); dual numbers would duplicate what the
 backend already provides. Retired to anti_spec.md.
 
@@ -2218,19 +2959,25 @@ T within one expression is forbidden without explicit
 
 #### 26.2 Default-Compatibility Constraints on T
 
+**Summary.** `T` must satisfy a base `Numeric` hierarchy: ring
+closure, total ordering (where applicable; Complex is exempt), zero
+and one identity elements, and backend representability. Mixed-T
+arithmetic is a compile error and requires explicit `convert`;
+`Float32 -> Float64` is lossless, the reverse is lossy-tolerance.
+
 The `T` parameter in `Scalar<U, T>` must satisfy a base
 `Numeric` contract hierarchy:
 
-- **Ring closure** (`Plus`, `Minus`, `Times`) — the four
+- **Ring closure** (`Plus`, `Minus`, `Times`). The four
   arithmetic operators close within T.
-- **Total ordering** (`Compare`) — required for `min`,
+- **Total ordering** (`Compare`). Required for `min`,
   `max`, sort, `argmin`, `argmax`. Complex T does not
   satisfy total ordering; stdlib functions requiring it
   accept only ordered T.
-- **Zero and one identity elements** — required for
+- **Zero and one identity elements.** Required for
   empty-collection defaults (§12.3), algebraic rewrites
   (§17.1 source 3).
-- **Backend representability** — the run's backend must
+- **Backend representability.** The run's backend must
   advertise support for T. Mismatch surfaces as a
   workflow-composition error (§23.4).
 
@@ -2243,6 +2990,13 @@ tolerance envelope (§15.3).
 
 #### 26.3 Rational Termination Caveat
 
+**Summary.** `Rational` arithmetic is exact but unbounded, so
+numerator and denominator can grow without limit in iterated
+operations. Two compile-time guards: a warning (not error) for
+`Rational` state inside temporal relations, and a workflow-composition
+error for `Rational` in GPU-backed SCCs. Same constraints apply to
+arbitrary-precision `Integer` and `BigFloat`.
+
 `Rational` arithmetic is exact but unbounded. Numerator and
 denominator grow with each non-trivial operation; iterated
 exact arithmetic can blow up representation size. Two
@@ -2250,7 +3004,7 @@ compile-time guards:
 
 - **Unbounded-loop warning.** `Rational`-typed state inside
   a temporal relation (`d` or `step`, §9) emits a compile
-  warning. Warning, not error — some applications
+  warning. Warning, not error: some applications
   legitimately use `Rational` in bounded iterations (short
   exact simulations, verification runs).
 - **GPU-incompatibility surface.** `Rational` has no GPU
@@ -2267,6 +3021,13 @@ runtime representation for production models.
 
 ### 27. Distribution Families (Z-group)
 
+**Summary.** Tier 1 ships 19 univariate continuous, 5 discrete, and 3
+multivariate families, plus the `Truncated<D>` and `Mixture` meta-
+families. Conjugate-posterior rewrites are enumerated as a closed
+catalog. Tier B approximate rewrites (Delta, Fenton-Wilkinson, CLT,
+block-maxima to GEV) fire under `approximate` blocks. Tier 1, 2, 3
+scope the family catalog; Tier A, B, C are the orthogonal dispatch axis.
+
 Tier 1 univariate continuous families (19): Normal, LogNormal, Uniform,
 Beta, Gamma, Exponential, ChiSquared, Cauchy, Student-t, Laplace,
 HalfNormal, HalfCauchy, InverseGamma, Lévy, Weibull, Pareto, Fréchet,
@@ -2277,7 +3038,13 @@ MultivariateNormal, Dirichlet, Multinomial. Meta-families: `Truncated<D>`,
 Tier B approximate rewrites: Delta method, Fenton-Wilkinson, CLT,
 block-maxima → GEV.
 
-#### 27.1 Tier 1 Distribution Families — Table
+#### 27.1 Tier 1 Distribution Families, Table
+
+**Summary.** Tier 1 families ship as capability-tagged stdlib
+declarations with Distribution, Affine/Sum/Product/ScaleSelfClosed,
+SmoothTransformable, ReparameterizedSampleable, and Conj(X) tags.
+Multivariate subset (MVN, Dirichlet, Multinomial) is gated on B5
+matrix heterogeneous-unit resolution for how `Σ` carries units.
 
 Tier 1 families ship as capability-tagged stdlib declarations
 (§7.2). Capability columns use shorthand: **D** =
@@ -2339,10 +3106,16 @@ are covered in subsequent subsections.
 
 #### 27.2 Meta-Families: `Truncated<D>` and `Mixture`
 
+**Summary.** Two meta-families wrap Tier 1 distributions to produce
+new compositional distributions. `Truncated<D>` restricts a univariate
+D to an interval and renormalizes; `Mixture` combines n components
+under non-negative weights summing to 1. Both inherit a subset of
+their components' capabilities and compose with each other.
+
 Two meta-families wrap base Tier 1 distributions (§27.1) to
 produce new compositional distributions.
 
-**`Truncated<D>` — interval truncation.** `Truncated<Normal>(μ,
+**`Truncated<D>`, interval truncation.** `Truncated<Normal>(μ,
 σ, lo, hi)` restricts `Normal(μ, σ)` to the interval `[lo,
 hi]` and renormalizes. Applies to any univariate D that
 satisfies `Distribution<U>`. Capabilities: inherits D's
@@ -2352,11 +3125,11 @@ survives via inverse-CDF sampling). Refinement types
 (§3.2) interact cleanly: `x ~ Truncated<Normal>(0, 1, 0, 1)`
 auto-satisfies `UnitInterval`.
 
-**`Mixture<D₁, …, Dₙ | weights>` — weighted combination.** A
+**`Mixture<D₁, …, Dₙ | weights>`, weighted combination.** A
 mixture of n component distributions with non-negative weights
 summing to 1. Components can be distinct families; shared-
 support requirement is enforced structurally. Weights are
-themselves values — workflow-supplied (`assume_constant` or
+themselves values, workflow-supplied (`assume_constant` or
 `learn_constant`). Capabilities: `Mixture` is a `Distribution`
 but closes under fewer algebraic operations than its
 components; specifically, `AffineSelfClosed` survives only
@@ -2367,6 +3140,13 @@ Truncated<Normal>(…)>` is a legitimate Tier 1 construction.
 Nesting depth is bounded only by backend handoff costs.
 
 #### 27.3 Conjugate-Posterior Rewrite Catalog
+
+**Summary.** The stdlib enumerates a closed catalog of conjugate-
+posterior rewrites covering Beta-Bernoulli/Binomial, Gamma-Poisson,
+Normal-Normal (known variance), InverseGamma-Normal (known mean),
+and Dirichlet-Multinomial. The rewrites fire automatically when the
+compiler detects a matching `~` structure, no user directive
+required.
 
 The stdlib ships an enumerated catalog of conjugate-posterior
 rewrites. Each rewrite fires from capability-contract
@@ -2381,13 +3161,19 @@ rewrites. Each rewrite fires from capability-contract
 | `InverseGamma(α, β)` | `Normal(μ, σ²)` known μ, n draws, sum-sq s | `InverseGamma(α + n/2, β + s/2)` |
 | `Dirichlet(α)` | `Multinomial(n, p)` counts c | `Dirichlet(α + c)` |
 
-The catalog is closed for v2.1 — additional conjugate pairs
+The catalog is closed for this release; additional conjugate pairs
 that modelers need are either derivable via `Truncated` /
 `Mixture` composition or route to Tier 2 (chunk 08). The
 rewrites fire automatically when the compiler detects a
 matching `~` structure; no user directive is required.
 
 #### 27.4 Extended Capability Table
+
+**Summary.** Tier A dispatch needs extra capability columns beyond the
+core tags: support, log_pdf, moments, reparam, sampling, entropy,
+kl_div. The full table lives in the stdlib reference; this spec is
+normative only about which columns exist. Missing entries are "not
+closed-form" and fall through to Tier B or Tier C.
 
 For Tier A dispatch (§13.2), the compiler needs more than
 the core capability tags (§27.1). The extended per-family
@@ -2411,26 +3197,34 @@ to Tier B or Tier C for the missing capability.
 
 #### 27.5 Tier Ordering
 
+**Summary.** Tier 1 ships: 27 families plus two meta-families with
+capability contracts and conjugate-rewrite wiring. Tier 2 is partial:
+the factorized or closed-form-reparameterizable subset ships in Tier
+1; the genuinely joint subset (B2 coupling syntax, copulas, Wishart
+variants) is open pending chunk 08. Tier 3 (non-parametric) is open.
+Tier 1/2/3 orders the family catalog; Tier A/B/C orders dispatch and
+is orthogonal.
+
 Tiers are the PPL scoping axis distinct from the distribution-
 family catalog:
 
-- **Tier 1** — ships in v2.1. The 27 families in §27.1 plus
-  the two meta-families in §27.2, with capability contracts
+- **Tier 1.** Ships in this release. The 27 families in §27.1
+  plus the two meta-families in §27.2, with capability contracts
   and closed-form rewrites (§27.3) wired in. Includes three
   multivariate members (MVN, Dirichlet, Multinomial), with
   MVN using the Cholesky reparameterization locked in §13.6.
-- **Tier 2** — partial. The multivariate subset that admits a
+- **Tier 2.** Partial. The multivariate subset that admits a
   factorized representation or a closed-form reparameterization
   ships in Tier 1 (MVN via Cholesky, Dirichlet/Multinomial via
-  conjugacy). The genuinely joint subset — declarations that
+  conjugacy). The genuinely joint subset: declarations that
   introduce coupling structure directly (B2 syntax), correlated-
   sample coupling machinery (B4), copulas, Wishart / InverseWishart
   / LKJ (gated on B5 heterogeneous-unit matrix resolution), and
   higher-order distributions routing through kernel machinery
-  (§28) — remains **open** pending chunk 08 design. Framing is
-  "in scope for v2.x, machinery not yet locked," not "deferred to
-  a future version." Tracked in §35 Other Opens.
-- **Tier 3** — open. Non-parametric and process-valued families
+  (§28), remains **open** pending chunk 08 design. Framing is
+  "in scope for this design envelope, machinery not yet locked,"
+  not "deferred to a future version." Tracked in §35 Other Opens.
+- **Tier 3.** Open. Non-parametric and process-valued families
   (Gaussian Process, Dirichlet Process, Chinese Restaurant
   Process, Pitman-Yor, Indian Buffet Process, Beta Process). No
   formal tier boundary has been drawn. GPs are expected to route
@@ -2438,25 +3232,40 @@ family catalog:
   catalog entry, but whether non-parametric families share that
   routing, require a distinct mechanism, or are treated as Tier C
   (opaque PPL handoff) is an open question. Tracked in §35.
-- **Tier A / B / C** — dispatch tiers (§13.2), orthogonal to
+- **Tier A / B / C.** Dispatch tiers (§13.2), orthogonal to
   Tier 1/2/3. A = exact closed-form, B = approximate rewrites
   (Delta, Fenton-Wilkinson, CLT, block-maxima → GEV), C =
   opaque PPL handoff.
 
 "Tier 1 ships" is the positive commitment. "Tier 2 partial /
 Tier 3 open" are explicit open design questions, not deferrals
-to a future Myco version — they belong inside the v2.x design
+to a future Myco version: they belong inside the current design
 envelope and block shipping only of the specific families that
 need their machinery. Tier A/B/C are about dispatch, not about
-what exists — a Tier 1 family can dispatch to any of A/B/C
+what exists: a Tier 1 family can dispatch to any of A/B/C
 depending on the transformation applied to it.
 
 ### 28. Kernels
+
+**Summary.** Kernels are ordinary functions from locus point pairs
+to scalars, with kernel-ness expressed via capability contracts
+(`PositiveDefinite`, `Stationary`, `Isotropic`) rather than a separate
+type kind. Stdlib ships Matérn, RBF, rational-quadratic, and Wendland;
+composition rules preserve contracts. Sparsity and integration
+operators are deferred to chunk 03.
 
 Chunk 03 unified-machinery thread is pending e-graph substrate lock;
 the surface shape below is committed, internal substrate not.
 
 #### 28.1 Kernels as Functions with Capability Contracts
+
+**Summary.** Kernels are plain functions `fn k(x: Point<L>, y:
+Point<L>) -> Scalar<U>` with no separate keyword or type kind.
+Kernel-ness comes from capability contracts on atoms:
+`PositiveDefinite`, `Stationary`, `Isotropic`. Standard operations
+(sum, product, scaling, radial wrapping) preserve contracts via
+closure rules, so the compiler derives kernel properties from
+composition without user property-declaration surface.
 
 Kernels are ordinary functions from pairs of locus points to scalars:
 `fn k(x: Point<L>, y: Point<L>) -> Scalar<U>`. No separate `kernel`
@@ -2467,16 +3276,16 @@ and differentiability are derived (§7.2, §6, Anti-Spec "user-declared
 fn invertibility / differentiability / domain"). The relevant
 capability contracts:
 
-- `PositiveDefinite` — guarantees the Gram matrix
+- `PositiveDefinite`. Guarantees the Gram matrix
   `K_{ij} = k(x_i, x_j)` is PSD for any finite point set. Required
   for use as a Gaussian Process covariance kernel.
-- `Stationary` — guarantees `k(x, y) = k̃(x − y)` for some `k̃`.
+- `Stationary`. Guarantees `k(x, y) = k̃(x − y)` for some `k̃`.
   Implies translation invariance on the ambient locus.
-- `Isotropic` — guarantees `k(x, y) = k̂(‖x − y‖)` for some `k̂`.
+- `Isotropic`. Guarantees `k(x, y) = k̂(‖x − y‖)` for some `k̂`.
   Supertrait `Stationary` plus rotation invariance.
 
-Stdlib kernels — Matérn (ν = 1/2, 3/2, 5/2, ∞), squared-exponential
-(RBF), rational-quadratic, Wendland compact-support — satisfy all
+Stdlib kernels, Matérn (ν = 1/2, 3/2, 5/2, ∞), squared-exponential
+(RBF), rational-quadratic, Wendland compact-support, satisfy all
 three. Non-stationary kernels (e.g. polynomial `k(x, y) = (x · y + c)^d`,
 Brownian `k(x, y) = min(x, y)`) satisfy `PositiveDefinite` but not
 `Stationary`. The usual operations on kernels preserve the contracts:
@@ -2488,9 +3297,15 @@ from composition without user property-declaration surface.
 
 #### 28.2 Ambient-Locus via Composition
 
+**Summary.** Kernels take `Point<L>` arguments where `L` is ambient at
+the call site, not declared per-kernel. Kernel families that require
+specific locus structure express it via a locus contract, not a
+specialized kernel type. Product loci compose via `(x1,y1), (x2,y2)`
+arguments with the PositiveDefiniteness closure rule applied.
+
 Kernels take `Point<L>` arguments, where the locus `L` is ambient and
 fixed by where the kernel is called, not by a per-kernel declaration.
-This avoids kernel families that only work on one space — e.g.
+This avoids kernel families that only work on one space; e.g.
 squared-exponential is usable on any `L` that admits a norm, and the
 compiler picks up the norm from the locus definition (§11.1). A
 kernel that requires a specific structure (e.g. spherical kernels
@@ -2504,7 +3319,14 @@ kernels on product loci (`L = L_x × L_y`) are written
 `k((x1, y1), (x2, y2)) = k_x(x1, x2) * k_y(y1, y2)` and the
 PositiveDefiniteness closure rule covers them.
 
-#### 28.3 Kernel Sparsity and Integration — Deferred to Chunk 03
+#### 28.3 Kernel Sparsity and Integration, Deferred to Chunk 03
+
+**Summary.** Two kernel-adjacent concerns defer to chunk 03: sparse /
+compact-support representation (belongs in matrix assembly, not
+kernel definition) and kernel integration operators (convolution,
+measures, stochastic integrals). Until unlock, kernels support
+direct evaluation, function composition, and use as GP covariances
+via Tier C opaque handoff.
 
 Two kernel-adjacent concerns are deferred:
 
@@ -2523,12 +3345,18 @@ Two kernel-adjacent concerns are deferred:
   committing to a representation that the e-graph cannot efficiently
   normalize.
 
-Until those unlocks, kernels in v2.1 support direct evaluation,
+Until those unlocks, kernels support direct evaluation,
 function composition, and use as GP covariances via opaque PPL
 handoff (§13.2, Tier C). Non-opaque GP handling routes through the
 kernel stdlib when chunk 03 lands.
 
 ### 29. Units Library
+
+**Summary.** The core units library ships SI base units, common
+SI-derived units via derived-unit algebra, standard affine
+conversions between equivalent spellings, and dimensionless-ratio
+handling. Domain-specific unit libraries (ecophysiology, chemistry,
+finance) stay out of core and ship as distributable packages on top.
 
 SI base units (m, kg, s, A, K, mol, cd). Common SI-derived units
 (N, Pa, J, W, C, V, Ω, Hz, etc.) via derived-unit algebra (§5).
@@ -2544,51 +3372,69 @@ under the domain's own project maintenance.
 
 ### 30. Matrix and Tensor Primitives (STUB)
 
+**Summary.** Section 30 commits only the stdlib function surface for
+linear algebra (cholesky, lu, qr, svd, eigen, solve, inverse, det);
+the underlying type-layer design lives in §3.9 pending chunk 05. Each
+primitive wraps backend kernels and is opaque at the e-graph layer,
+with invariants declared by capability contract.
+
 Chunk 05 (B5 heterogeneous-unit resolution) is the design venue for
 the underlying type layer; this section commits only the stdlib
 function surface. Type content (structural subtypes, shape refinements,
 envelope interaction) lives in §3.9 per the chunk 05 scope decision.
 
 The matrix / tensor stdlib ships the linear-algebra primitives that
-the rest of the spec depends on by name — in particular, the Cholesky
+the rest of the spec depends on by name, in particular the Cholesky
 factorization used in MVN reparameterization (§13.6, Z10) and the
 kernel Gram-matrix machinery (§28). Committed primitives:
 
-- `cholesky(A)` — lower-triangular factor `L` such that `L · Lᵀ = A`
+- `cholesky(A)`. Lower-triangular factor `L` such that `L · Lᵀ = A`
   for `A: Matrix<_, PositiveDefinite>`. Returns `Matrix<_, LowerTriangular>`.
-- `lu(A)` — `(L, U, P)` with `P · A = L · U`, for square invertible `A`.
-- `qr(A)` — `(Q, R)` with `A = Q · R`, `Q` orthogonal, `R` upper
+- `lu(A)`. `(L, U, P)` with `P · A = L · U`, for square invertible `A`.
+- `qr(A)`. `(Q, R)` with `A = Q · R`, `Q` orthogonal, `R` upper
   triangular. Works on rectangular `A` (`m × n`, `m ≥ n`).
-- `svd(A)` — `(U, Σ, Vᵀ)` with `A = U · Σ · Vᵀ`, `Σ` diagonal with
+- `svd(A)`. `(U, Σ, Vᵀ)` with `A = U · Σ · Vᵀ`, `Σ` diagonal with
   nonnegative entries. Works on general rectangular `A`.
-- `eigen(A)` — eigenvalue / eigenvector pair for square `A`. Real-
+- `eigen(A)`. Eigenvalue / eigenvector pair for square `A`. Real-
   symmetric specialization returns real eigenvalues and orthonormal
   eigenvectors; general case defers to complex eigenvalues pending
   §26.1 `Complex` lock.
-- `solve(A, b)` — linear solve for `A · x = b`. Dispatches on the
+- `solve(A, b)`. Linear solve for `A · x = b`. Dispatches on the
   structural subtype of `A` (triangular solve, Cholesky back-
   substitution, general LU) via the §3.9 lattice.
-- `inverse(A)` — direct inversion for documentation and small cases;
+- `inverse(A)`. Direct inversion for documentation and small cases;
   the compiler rewrites `inverse(A) · b` to `solve(A, b)` by default
   to avoid explicit inversion in numeric code.
-- `det(A)` — determinant. On `Matrix<_, Triangular>` this reduces to
+- `det(A)`. Determinant. On `Matrix<_, Triangular>` this reduces to
   diagonal product; on general `A` it routes through LU.
 
 Each primitive carries a capability contract that records what its
 output satisfies structurally (see §3.9). The primitives are opaque
-at the e-graph layer — their invariants are declared by contract,
-not derived from body composition — because they wrap backend
-linear-algebra kernels (BLAS / LAPACK / cuBLAS equivalents via the
-Part V backend trait).
+at the e-graph layer: their invariants are declared by contract, not
+derived from body composition, because they wrap backend linear-
+algebra kernels (BLAS / LAPACK / cuBLAS equivalents via the Part V
+backend trait).
 
 ---
 
 ## Part V — Backend Abstraction (STUB)
 
+**Summary.** Part V specifies the abstraction by which Myco compiles
+plans against a trait surface (numerical execution, AD, PPL handoff,
+opaque-callable runtime, capability advertising) rather than a
+specific runtime. Specific trait signatures and open forks land in
+chunk 06; this part is normative in scope only.
+
 Pending chunk 06 design completion. Specific trait shape and open forks
 tracked separately; this part is normative in scope only.
 
 ### 31. Backend Trait Surface
+
+**Summary.** The backend is a trait the compiler targets: numerical
+execution, automatic differentiation, PPL handoff, opaque-callable
+runtime, plus capability advertising. Multiple backends (Rust tensor
+stacks, JAX-alikes, CPU reference implementations) satisfy the trait
+symmetrically; the workflow selects a concrete backend at run time.
 
 The backend is an abstraction: Myco compiles plans against a trait
 surface, not a specific runtime. Multiple backends can satisfy the
@@ -2596,14 +3442,21 @@ trait (burn-style tensor stacks, JAX-alikes, CPU reference
 implementations). The compiler emits against the trait; the workflow
 selects a concrete backend at run time (§24 verbs).
 
-The minimum trait API covers four responsibilities — numerical
+The minimum trait API covers four responsibilities, numerical
 execution, automatic differentiation, PPL handoff, and opaque-
-callable runtime — plus a capability-advertising mechanism that lets
+callable runtime, plus a capability-advertising mechanism that lets
 the compiler and workflow negotiate what a particular backend
 supports. The subsections below commit the shape; concrete signatures
 land in chunk 06.
 
 #### 31.1 Capability Advertising and Fallback Modes
+
+**Summary.** Backends advertise capabilities (complex support,
+forward AD, HMC, sparse matmul) and the compiler verifies required
+ones at plan-binding time. Three fallback modes handle mismatches:
+`error` (fail), `host` (route to host-side reference), `emulate`
+(substitute approximate algorithm and enter approximation-error
+layer). Fallback is per-run via `run.config.backend`.
 
 Backends advertise capabilities (e.g. `supports_complex`,
 `supports_forward_ad`, `supports_hamiltonian_monte_carlo`,
@@ -2611,14 +3464,14 @@ Backends advertise capabilities (e.g. `supports_complex`,
 capabilities at plan-binding time. When a required capability is
 missing, the compiler consults the workflow's fallback policy:
 
-- **`error`** — fail at plan-binding time with a capability-mismatch
+- **`error`.** Fail at plan-binding time with a capability-mismatch
   diagnostic (workflow-composition error tier, §19.4). Conservative
   default.
-- **`host`** — route the offending subgraph to a host-side reference
+- **`host`.** Route the offending subgraph to a host-side reference
   implementation. Correctness preserved at the cost of device-host
   traffic. Useful for CPU-only families (e.g. `Rational` arithmetic,
   §26).
-- **`emulate`** — substitute an approximate or slower algorithm that
+- **`emulate`.** Substitute an approximate or slower algorithm that
   the backend does support (e.g. dense solve in place of a missing
   sparse solve, finite-difference AD in place of missing forward AD).
   The substitution enters the approximation-error layer (§16 adjacent
@@ -2629,17 +3482,30 @@ workflows can also scope fallback to specific capabilities.
 
 #### 31.2 PPL Handoff Protocol
 
+**Summary.** Tier C stochastic SCCs ship to the backend's PPL as
+opaque log-density problems via a protocol (not a library call).
+Serialized form: log-density callable, parameter shape and bounds,
+observation data, inference kind. The backend returns samples plus
+diagnostics; returned samples carry no parametric envelope facts
+and are treated downstream as opaque draws.
+
 Tier C stochastic SCCs (§13.2) ship to the backend's PPL handler
 as opaque log-density problems. The handoff is a protocol, not a
 library call: the backend receives a sampling / inference task
 described by a standard serialized form (log-density callable,
-parameter shape and bounds, observation data, inference kind — MCMC,
+parameter shape and bounds, observation data, inference kind: MCMC,
 VI, importance, etc.), runs inference with backend-native machinery,
 and returns samples plus diagnostics. Samples come back without
 envelope facts about the parametric form (§13 recommits this);
 downstream code treats them as opaque draws.
 
 #### 31.3 Opaque-Callable Runtime
+
+**Summary.** The backend supplies the runtime that calls back into
+Python during simulation for `bind_controller` callables, threads
+gradients through Python for training emission, and manages memory
+and device-residency for interop. The compiler sees only the
+callable's advertised input and output contract, not its interior.
 
 `bind_controller` (§24.1) hands the compiler a Python callable (a
 learned function, typically a neural network). The backend provides
@@ -2652,6 +3518,13 @@ input / output contract.
 
 #### 31.4 Backend Versioning
 
+**Summary.** Backend implementations version on their own cadence;
+the trait surface is versioned by Myco. Plans bind a specific trait
+version; compatible backends advertise which versions they implement.
+Breaking trait changes require a major bump. The plan cache keys on
+`(plan, trait_version, backend_identity)` so upgrades invalidate
+correctly.
+
 Backend implementations are versioned on their own cadence. The trait
 surface is versioned by Myco. A given plan binds against a specific
 trait-surface version; compatible backend versions advertise which
@@ -2662,6 +3535,13 @@ keys on `(plan, trait_version, backend_identity)` so upgrading
 backends invalidates the cache correctly.
 
 #### 31.5 Stochastic E-Class Serialization
+
+**Summary.** Tier C handoff serializes stochastic e-classes across
+the trait boundary: e-class identity, envelope parametric metadata
+(family, parameters, shape), layer-1 equational term, capability
+requirements, observation constraints. The compiler owns
+serialization; backends own deserialization and any backend-specific
+canonicalization post-receipt.
 
 Stochastic e-classes (§13 distributional metadata in the envelope)
 need to cross the trait boundary when Tier C SCCs hand off to the
@@ -2675,6 +3555,12 @@ receipt.
 
 #### 31.6 No Primary-Backend Commitment
 
+**Summary.** Myco does not privilege any backend: Rust tensor
+stacks, JAX-alikes, PyTorch-alikes, and CPU reference implementations
+are all first-class against the trait. Capability advertising lets
+each backend declare honestly what it supports; the workflow selects
+the concrete backend via `run.config.backend`.
+
 Myco does not privilege any single backend. The trait-surface design
 treats backends symmetrically: a burn-style Rust tensor stack, a
 JAX-alike, a PyTorch-alike, and CPU reference implementations are
@@ -2682,17 +3568,29 @@ all first-class. The compiler emits trait-targeting code; capability
 advertising (§31.1) lets each backend declare what it supports
 honestly, and the workflow-side `run.config.backend` selects which
 one a given run uses. Earlier design drafts privileged a specific
-Python ecosystem backend; v2.1 retires that framing in favor of the
-trait-based approach.
+Python ecosystem backend; the current design retires that framing
+in favor of the trait-based approach.
 
 ### 32. Open Backend Items
 
-AD ownership fork (Myco-owned / backend-delegate / hybrid — leans
+**Summary.** Open items in the backend design: AD ownership (Myco-
+owned, backend-delegate, hybrid; leans hybrid), PPL protocol
+specifics (message schema, inference-kind enumeration), gradient-
+flow semantics for `bind_controller`, the mixed-backend policy, and
+the first concrete backend choice.
+
+AD ownership fork (Myco-owned / backend-delegate / hybrid, leans
 hybrid). PPL protocol specifics (message schema, inference-kind
 enumeration). Gradient-flow semantics for `bind_controller`
 callables.
 
 #### 32.1 Mixed-Backend Policy
+
+**Summary.** Whether a single run can span multiple backends is
+open. Current lean is single-backend-per-run: if a workflow needs
+specialized handling for one SCC, the intended escape hatch is
+workflow-layer glue rather than cross-backend marshalling in the
+compiler. Not yet locked; chunk 06.
 
 Open question: should a single Myco run be permitted to span multiple
 backends, or must each run commit to exactly one? Arguments for
@@ -2710,7 +3608,11 @@ cross-backend marshalling in the compiler. Not yet locked; chunk 06.
 
 #### 32.2 First Concrete Backend
 
-Which backend is implemented first — a burn-style Rust tensor stack,
+**Summary.** Which backend ships first (Rust tensor stack, NumPy
+reference, JAX-alike) is open. Affects ergonomics of the first
+end-to-end demos but does not change the trait-surface design.
+
+Which backend is implemented first, a burn-style Rust tensor stack,
 a NumPy reference implementation, or a JAX-alike. Open. Affects
 ergonomics of the first end-to-end demos but does not change the
 trait-surface design, since the trait is backend-agnostic by
@@ -2720,10 +3622,20 @@ construction.
 
 ## Part VI — Known Open Items
 
+**Summary.** Part VI enumerates open design items (B-tagged blockers,
+chunk-slotted work, and a catalog of smaller opens) carried forward
+explicitly so they are not silently committed during consolidation.
+Covers matrix heterogeneous-unit resolution, backend AD ownership,
+joint distribution syntax, residual-graph mechanics, and more.
+
 Carried forward explicitly so they are not silently committed during
 consolidation.
 
 ### 33. Design Blockers
+
+**Summary.** Five named B-blockers remain open: B1 opaque log_pdf
+policy, B2 joint declaration syntax, B4 coupling machinery, B5
+matrix heterogeneous-unit resolution, B6 backend abstraction.
 
 - **B1.** Opaque log_pdf stdlib policy.
 - **B2.** Joint declaration syntax.
@@ -2733,14 +3645,26 @@ consolidation.
 
 ### 34. Chunk-Slotted Work
 
-- **Chunk 05** — matrix details (heterogeneous units, envelope flavors,
+**Summary.** Five design chunks carry outstanding work: chunk 05
+matrix details, chunk 06 backend abstraction, chunk 07 type-graph
+to e-graph bridge, chunk 08 joint syntax and coupling, chunk 03
+kernels (resumes after substrate lock).
+
+- **Chunk 05.** Matrix details (heterogeneous units, envelope flavors,
   subtype lattice, shape refinements, scalar reconciliation).
-- **Chunk 06** — backend abstraction.
-- **Chunk 07** — type-graph ↔ e-graph bridge.
-- **Chunk 08** — B2 + B4 joint syntax / coupling.
-- **Chunk 03** — kernels, resume after substrate lock.
+- **Chunk 06.** Backend abstraction.
+- **Chunk 07.** Type-graph ↔ e-graph bridge.
+- **Chunk 08.** B2 + B4 joint syntax / coupling.
+- **Chunk 03.** Kernels, resume after substrate lock.
 
 ### 35. Other Opens
+
+**Summary.** Catalog of smaller open items: `replaces` obligation
+retraction under monotonicity, residual-to-e-graph mechanics, CC1
+diagnostics, GPU-incompatibility of exact numeric types, chunk 04
+carryovers (per-residual loss, heterogeneous `argmax`, event-driven
+topology, spatial operator lowering), Complex contracts, controller-
+interface affordances, and Tier 2/Tier 3 distribution machinery.
 
 `replaces` obligation retraction (monotonicity tension with the
 e-graph; cross-refs §8.10 declaration, §10.5 semantics, §15
@@ -2763,45 +3687,57 @@ when events add nodes, edges, or locus structure mid-run). O4.8
 spatial operator lowering (rewrite group P1 architectural call:
 e-graph rewrite versus pre-e-graph codegen; geometry chunk 01
 cross-ref). Backend AD ownership (Part V §32, listed separately for
-visibility). Macros (dropped from v2.1 surface; revisit if concrete
-boilerplate pain emerges). `softmax` and weighted-sum aggregation
-surface (stdlib primitive vs user-composed from `exp` + `sum`; collection-
-aggregation syntax pending zip/alignment semantics lock; Y2 `soft_select`
-already uses softmax internally in §8.7, so the shape is known but
-the ergonomic surface is not). **Complex numeric representation in scope
-for v2.1** — Riley-confirmed that `Complex` ships; open items are which
-contracts it satisfies (not totally ordered, so `Compare`-dependent
-stdlib functions exclude it; which of `Plus` / `Minus` / `Times` /
-`Divide` close; interaction with units in `Scalar<U, Complex>`), backend
-support commitments, and whether `Complex` forms a separate `Numeric`
-sub-hierarchy or lives alongside `Float`. **Controller-interface
-affordances in the Python layer** — general-system question: what hooks
-does Myco need to expose so workflows can cleanly implement patterns
-like taxonomic embeddings, context injection, per-category modulation,
-FiLM-style conditioning? Not FiLM specifically; the meta-question of
-which controller-binding surfaces belong in the language / stdlib vs
-which are workflow idioms the user builds on their own. The goal is to
-avoid baking Riley-specific project patterns into the language while
-still exposing enough machinery that workflow authors can implement
-them cleanly against `bind_controller` (§24.1). **Tier 2 distribution
-machinery** — joint-declaration syntax (B2), coupling / correlated-
-sample machinery (B4), copulas, Wishart / InverseWishart / LKJ (gated
-on B5), higher-order distribution routing through kernels. In scope
-for v2.x but not yet locked; chunk 08 is the intended design venue.
-The multivariate subset that admits factorization or closed-form
+visibility). Macros (dropped from the current surface; revisit if
+concrete boilerplate pain emerges). `softmax` and weighted-sum
+aggregation surface (stdlib primitive vs user-composed from `exp` +
+`sum`; collection-aggregation syntax pending zip/alignment semantics
+lock; Y2 `soft_select` already uses softmax internally in §8.7, so
+the shape is known but the ergonomic surface is not).
+
+**Complex numeric representation in scope.** Riley-confirmed that
+`Complex` ships; open items are which contracts it satisfies (not
+totally ordered, so `Compare`-dependent stdlib functions exclude it;
+which of `Plus` / `Minus` / `Times` / `Divide` close; interaction
+with units in `Scalar<U, Complex>`), backend support commitments,
+and whether `Complex` forms a separate `Numeric` sub-hierarchy or
+lives alongside `Float`.
+
+**Controller-interface affordances in the Python layer.** General-
+system question: what hooks does Myco need to expose so workflows
+can cleanly implement patterns like taxonomic embeddings, context
+injection, per-category modulation, FiLM-style conditioning? Not
+FiLM specifically; the meta-question of which controller-binding
+surfaces belong in the language / stdlib vs which are workflow
+idioms the user builds on their own. The goal is to avoid baking
+project-specific patterns into the language while still exposing
+enough machinery that workflow authors can implement them cleanly
+against `bind_controller` (§24.1).
+
+**Tier 2 distribution machinery.** Joint-declaration syntax (B2),
+coupling / correlated-sample machinery (B4), copulas, Wishart /
+InverseWishart / LKJ (gated on B5), higher-order distribution
+routing through kernels. In scope for the current design envelope
+but not yet locked; chunk 08 is the intended design venue. The
+multivariate subset that admits factorization or closed-form
 reparameterization (MVN, Dirichlet, Multinomial) already ships in
-Tier 1 so this open does not block the common cases. **Tier 3
-distribution machinery** — non-parametric and process-valued families
-(Gaussian Process, Dirichlet Process, Chinese Restaurant Process,
-Pitman-Yor, Indian Buffet Process, Beta Process). Open question
-whether these share §28 kernel routing (likely for GPs), require a
-distinct process-family mechanism, or are treated as Tier C opaque
-PPL handoff. No formal tier boundary drawn; design not yet scoped to
-a chunk.
+Tier 1 so this open does not block the common cases.
+
+**Tier 3 distribution machinery.** Non-parametric and process-valued
+families (Gaussian Process, Dirichlet Process, Chinese Restaurant
+Process, Pitman-Yor, Indian Buffet Process, Beta Process). Open
+question whether these share §28 kernel routing (likely for GPs),
+require a distinct process-family mechanism, or are treated as
+Tier C opaque PPL handoff. No formal tier boundary drawn; design
+not yet scoped to a chunk.
 
 ---
 
 ## Part VII — Developer Experience (Deferred)
+
+**Summary.** Part VII names developer-experience surfaces outside the
+language and compiler proper: CLI, dependency management, editor
+tooling, doc generation, agent/LLM integration. Deferred until Parts
+I-IV lock; listed to keep the surfaces from being forgotten.
 
 Outside the language and compiler proper, but on the roadmap. Deferred
 until Parts I–IV are locked. Listed here so the surfaces aren't
@@ -2809,10 +3745,18 @@ forgotten during consolidation.
 
 ### 36. Command-Line Interface
 
+**Summary.** The `myco` CLI spans compile, run, check, fmt, explain,
+and related subcommands, with flag conventions, exit codes, and
+output formats yet to lock.
+
 The `myco` CLI: compile, run, check, fmt, explain, and related
 subcommands. Flags, exit codes, output conventions.
 
 ### 37. Dependency Management and Package Registry
+
+**Summary.** How `.myco` packages declare dependencies, resolve
+versions, publish, and lock. Interacts with but stays distinct from
+the Python workflow layer's package system.
 
 How `.myco` packages declare dependencies on each other. Version
 resolution. Package registry layout and publishing workflow. Lockfile
@@ -2821,17 +3765,30 @@ format. Interaction with the Python workflow layer's package system
 
 ### 38. Editor Tooling
 
+**Summary.** Editor-side surfaces: a language server (LSP), VS Code
+extension, tree-sitter grammar, and the full syntax-highlighting,
+diagnostics, hover, goto-definition, and refactoring affordances.
+
 Language server (LSP). VS Code extension. Tree-sitter grammar. Syntax
 highlighting, diagnostics, hover, goto-definition, refactoring
 affordances.
 
 ### 39. Documentation Generation and Website
 
+**Summary.** Docstring conventions, a doc generator for user-defined
+types, contracts, events, and universals, and a website layout
+covering language reference, tutorials, API docs, and examples.
+
 Docstring conventions. Doc generator for user-defined types, contracts,
 events, universals. Website layout: language reference, tutorials, API
 docs, examples.
 
 ### 40. Agent / LLM Integration
+
+**Summary.** Agent skills for writing, reviewing, and validating
+`.myco` models, harness support for running Myco-aware agents, and
+conventions (canonical examples, anti-patterns, diagnostic
+interpretation) so LLMs can reason about the language correctly.
 
 Agent skills for writing, reviewing, and validating `.myco` models.
 Harness support for running Myco-aware agents. Conventions so LLMs can
@@ -2843,6 +3800,12 @@ anti-patterns, diagnostic interpretation).
 ## Appendices
 
 ### Appendix A — Reserved Keywords and Syntactic Surface
+
+**Summary.** Appendix A enumerates the reserved keyword surface of
+`.myco`: declaration keywords, type-formers, body forms, the
+stochastic operator, not-yet-assigned reservations, structural
+punctuation, and stdlib-reserved identifiers. Additions to this list
+are a breaking change to the parse surface.
 
 The `.myco` surface reserves the following keywords. Reserved keywords
 cannot be used as user identifiers and will emit a `mycoc` parse error
@@ -2881,11 +3844,15 @@ family names enumerated in §27. User functions shadow stdlib atoms
 at the user's own module scope; stdlib dispatch preempts at the
 global scope.
 
-The full list is normative as of v2.1 lock. Additions are a
+The full list is normative as of the current lock. Additions are a
 breaking change to the parse surface and follow the source-
 language stability process (to be designed post-build).
 
 ### Appendix B — Grammar / EBNF Summary
+
+**Summary.** Placeholder for the normative EBNF summary of the
+`.myco` surface. Lands once the surface is stable enough to commit
+to a grammar (production per construct across §2 through §14).
 
 Open. A normative EBNF summary of the `.myco` surface will appear
 here once the surface is stable enough to commit to a grammar.
@@ -2896,14 +3863,21 @@ a later pass.
 
 ### Appendix C — Rewrite Catalog (A–Y)
 
+**Summary.** Appendix C is the concrete rule surface of the e-graph
+rewrite system: 25 lettered groups (A through Y), each tagged with a
+faithfulness class (strict, fuzzy-model, fuzzy-tolerance, one-way,
+N-way extraction, forbidden) and an orientation (bidi, uni). LOCKED
+rules ship now; OPEN rules pend a named design item. Every rule
+routes through one of the eight §17 merge sources.
+
 Enumerates the rewrite rules the compiler applies over the e-graph
 substrate (§16, §17). Organized into 25 lettered groups. Each group
 carries a faithfulness tag (strict / fuzzy-model / fuzzy-tolerance /
 one-way / N-way extraction / forbidden) and an orientation tag (bidi /
-uni). Rules marked **LOCKED** ship in v2.1. Rules marked **OPEN**
-are intended for v2.1 but pending resolution of a named design item.
-Cross-cutting flags (CC1-5) appear in-line; see §0.1 for their normative
-disposition.
+uni). Rules marked **LOCKED** ship now. Rules marked **OPEN** are in
+scope for the current design envelope but pend resolution of a named
+design item. Cross-cutting flags (CC1-5) appear in-line; see §0.1 for
+their normative disposition.
 
 Merge-source correspondence: the eight merge sources of §17 are
 canonical shapes; the A–Y catalog enumerates the concrete rule surface.
