@@ -21,6 +21,8 @@ gap-review stale list, subsequent design locks.
 | `const N: usize` | `N: val` | cleaner val-generic spelling |
 | `assume_topology` | `bind_topology` | 8-verb taxonomy |
 | `has`-style field-presence filtering | `where x is T` narrowing | type-based narrowing |
+| `property` declarations (`property sigma is PositiveDefinite`) | refinement types + capability contracts (`Invertible<_>`, `Differentiable`, `Monotone`) + `constraint` blocks | redundant with existing machinery; spec_new.md §6 already forbids user property-declaration surface. mock_sperry.myco flagged for rewrite |
+| `DataContract` / "data contract" as distinct contract kind | plain contracts satisfied by a type's output fields | workflow-layer visibility (`bind_controller(path, fn, contract)`) enforces access; no failure case found where a plain contract + output-type annotation is insufficient |
 
 ## Retired annotations / attributes
 
@@ -41,6 +43,8 @@ gap-review stale list, subsequent design locks.
 | stdlib physical constants (`R`, `Avogadro`, etc.) | workflow-injected via `assume_constant` | physical constants are values; values live workflow-side |
 | literal numerics in `.myco` value position | CC1: banned except in unit defs, affine conversion bodies, structural positions (shape tuples / indices / arity) | no two-trust-posture split; all `.myco` files obey one rule |
 | universals carrying values (`universal R: Scalar<U> = 8.314`) | `universal R: Scalar<U>` declaration only; value from workflow | CC1 scope |
+| contract composition alias (`contract C := A + B`) | nothing | multi-contract satisfaction (`: A + B + C`) + supertraits already cover the bundle case; alias adds a second spelling with no new expressive power |
+| user-facing `Dual` numeric representation | backend-owned AD | Part V commits backend-delegated AD (burn-style tensor tracks operations); user-facing `Dual` would duplicate backend machinery and risks conflicting with backend AD representation. Forward-mode AD is a backend concern, not a user-facing scalar type |
 
 ## Retired architectural framing
 
@@ -77,4 +81,5 @@ gap-review stale list, subsequent design locks.
 - `chunk 01` `assume_topology` occurrences (10 locations) — pre-verb-lock
 - `chunk 03` §8 `condition_weighted` deferral — pre chunk-04
 - `mock_potkay.myco` — uses `slot` + `[t+1]` + universals-with-values; full rewrite pending
+- `mock_sperry.myco` — uses `property monotone: ...` (retired); rewrite to capability contracts pending
 - `open_questions.md` §Spec Maintenance section — migration checklist, not spec prose

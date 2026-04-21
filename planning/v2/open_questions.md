@@ -722,6 +722,15 @@ becomes common.
   named-type rules for arithmetic but not for `=`, `<`, `<=`, `>`, `>=`.
   `CarbonPool = WaterPool` should be a compile error (same dimension, different
   semantic type). Extend named-type rules to cover relations and comparisons.
+- **Dynamic matrix shapes.** Fixed-shape `Matrix<N, M>` is well-defined in
+  the §3.9 structural subtype lattice. Dynamic-shape `Matrix<?, ?>` (shape
+  unknown at compile time, bound by the workflow) needs a worked-out story:
+  how the shape-refinement system interacts with the lattice, how shape-
+  dependent dispatch resolves at workflow composition vs runtime, and what
+  the error surface looks like when a runtime shape violates a structural
+  constraint (e.g. bound matrix turns out non-square when caller expected
+  `Symmetric`). Fixed-shape cases cover most v2.1 use; dynamic-shape is
+  the remaining extent question.
 
 ---
 
@@ -764,6 +773,14 @@ See v2.1_in_progress "Probabilistic Programming" and "Refinement types."
 
 - `deriv` primitive needs to handle matrix/tensor expressions for non-Euclidean
   spatial operators.
+- **Cross-backend callable interop.** §31.6 locks that Myco commits to no
+  primary backend; §23.3 locks that trained callables reuse across workflows
+  via plain contracts. What's unresolved: if workflow A trains a callable
+  on backend X (e.g., PyTorch), can workflow B bind the same callable
+  when running on backend Y (e.g., JAX)? Weight-format translation,
+  gradient-plumbing compatibility, and advertised-capability reconciliation
+  all need to be specified. The single-backend-per-run policy (§32.1) caps
+  intra-run scope; cross-run interop is the open question.
 
 ---
 

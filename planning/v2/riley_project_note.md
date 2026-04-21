@@ -1,3 +1,30 @@
+## Scope boundary — Myco vs Riley's project
+
+**No Riley-project-specific stuff in the Myco core repo.** Plant
+ecophysiology-specific content — the ecophys unit library
+(water potential, gas-exchange rates, PPFD, LAI, soil-water
+conversions, species-trait inputs, vulnerability curves, Jmax /
+Vmax, Q10-style corrections, etc.), model-family shapes (Sperry /
+Potkay / Farquhar variants), ecosystem-simulation scaffolding,
+FiLM-style taxonomic embeddings, and so on — lives in a dedicated
+external library (tentatively called a **"spore"**: a distributable
+Myco package). The spore is a consumer of Myco, not part of it.
+
+Things that DO belong in Myco core: general language surface
+(types, contracts, relations, events, loci, workflow verbs), the
+general units machinery (SI base + derived, the affine-conversion
+facility), the distribution catalog and capability contracts, the
+backend trait, etc. Things that do NOT belong in Myco core: any
+unit, function, model shape, or stdlib item that only makes sense
+in a plant-physiology / ecology / Riley's-research context.
+
+If a tracker item or writeup starts talking about respiration,
+photosynthesis, stomata, canopies, leaves, soil water, trees,
+species, etc. as language / stdlib content — that's the
+spore-project, not Myco core.
+
+---
+
 let's worry less about "what we can implement now" and worry more about "what's the right thing for myco". i find that if I take shortcuts to    
   get to products faster with LLMs it becomes harder, not easier, to build the right thing later on. so let's try to get it right. if we disregard  
   tiers, what's the right version of this look like? i think from my perspective, the ux i want is to be able to add data and assumptions on the    
