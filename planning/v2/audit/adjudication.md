@@ -671,3 +671,74 @@ Batch 7 (§30-§34) raised the following new cross-cutting items:
 - **Fallback-default-mode formal lock** (§31 C3). §31.1 labels `error` with "Conservative default" which implies it is the decided default; chunk 06 §4.2 explicitly marks default-policy selection as open. Three options: (a) formally lock `error` as default with rationale recorded (safest, no silent performance catastrophes); (b) lock `host` (most permissive); (c) move default-policy selection to §32 as explicit open item. Leaning (a) — `error` being default matches Myco's broader "fail loudly at composition" posture. Small decision; just needs a sentence of rationale. Needs Riley's call.
 - **B2/B4 chunk assignment** (§33 C1 + §34 C2). Three positions in corpus: §33 does not assign B2+B4 to any chunk; §34 Chunk 08 bullet carries stale "B2 + B4 joint syntax / coupling" label (actual chunk 08 is fn-ban + parameterized-relation only — confirmed by chunk 08 report deferred list which excludes B2/B4); chunk 04 §11 "Recommended ordering" still says "future chunk 07" (the chunk-07 slot was reassigned to type-graph work). Net state: B2+B4 is not currently assigned to any chunk. Two options: (a) accept this — B2+B4 remains a blocker with no chunk owner; open a placeholder "future chunk 13 (or similar)" for when design starts; update §34 Chunk 08 entry to remove stale "B2+B4" prefix; update chunk 04 §11 to say "chunk TBD" or similar; (b) assign B2+B4 to an explicit chunk number now and treat the fn-ban work in chunk 08 as separable. Leaning (a) — B2+B4 requires B5 + B6 + chunk-08 contract-shape question to close first; premature chunk assignment would just churn. Needs Riley's call on placeholder-chunk convention.
 - **"Kernels as ordinary functions" anti_spec.md row staleness** (§34 S1). Current anti_spec.md retires the `kernel` keyword and says replacement is "ordinary `fn` accepting two point arguments and returning a scalar." That replacement framing predates chunk 08's user-fn ban. Chunk 08's actual replacement is "parameterized relation." One-row edit to anti_spec.md: change the retirement-reason text from "ordinary `fn` accepting two point arguments" to "ordinary parameterized relation" (per chunk 08 lock). No design call; drop-in edit. Flagging as cross-cutting because chunk 03's return-path text ("kernels are ordinary `.myco` functions") also needs updating when chunk 03 resumes.
+
+---
+
+## Batch 8 (§35-§39) — pre-adjudicated
+
+### §35 — Other Opens
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | O4.1 three option names (in-graph versioning / Layer-3 obligation-keyed metadata / referential-truth reframe) not in §35 | expand §35 O4.1 to enumerate three options + referential-truth parallel with §10/§16.1 | ACC | Tier 0 Phase 4 per chunk 04 |
+| H2 | O4.3 tension with algebraic collapse named but resolution locus (§19 extraction policy, not rewrite ban) absent | add sentence: e-graph holds both forms; §19 extraction policy selects named form under training-emission mode | ACC | covered jointly with §35 C3 |
+| H3 | Workflow verb taxonomy grouping question (`bind_controller` with `bind_topology` or `learn_*`?) not in §35 | add short open item; revisit after §24 verbs fleshed out | ACC | deprecated-open-questions orphan |
+| H4 | Cross-backend callable interop (workflow A trains on X, workflow B runs on Y) — ACC adjudication item not yet written | add §35 entry with cross-refs to §23.3, §31.6, §32.1 | ACC | duplicate of §23 H6 + §32 H6; dedup as single §35 add |
+| H5 | Rational saturation termination missing from §35 alongside BigFloat/Rational GPU item | extend GPU-incompatibility entry: "Rational saturation termination — coprime-denominator growth, precision cap or canonical-form policy needed (§26.3, §15)" | ACC | chunk 04 §8 deferred-numeric item |
+| H6 | Sequential inference for HMMs (forward-backward / Viterbi / particle filter) has no tracking home after deprecated-open-questions retirement | add §35 entry; no chunk assigned; design not yet scoped | ACC | compiler-detects-errors baseline in v2.1 |
+| H7 | Workflow-side capability overrides (accept-large-enumeration, inference-backend selection, approximate-inference switches) have no tracking home | add §35 entry; intended to land with §24 verbs | ACC | deprecated-open-questions orphan |
+| S1 | deprecated open-questions `condition_weighted` deferral + chunk 03 §8 | already covered by existing anti_spec.md row | SKIP | batch 5 S1 already marked void |
+| S2 | O4.2 Pole L'Hopital as structural-predicate-gated rewrites | covered by CC5 resolution + anti_spec.md X-category bundling retirement | SKIP | |
+| S3 | Literal-constants resolution (CC1 policy) | §35's "diagnostic surface" entry is correct — policy resolved, diagnostics surface remains open | SKIP | no supersession conflict |
+| C1 | `condition_weighted` deferral (checked for conflict in §35) | no conflict — §35 correctly omits as deferred | SKIP | confirmed clean |
+| C2 | CC5 block (~6 paragraphs in §35) is fully resolved content occupying an "Opens" section | (a) move CC5 block to Appendix C / §17 where resolved rewrites live, OR (b) condense to 2-sentence resolved-item summary with cross-refs | ACC | presentation gap, not design contradiction |
+| C3 | §35 O4.3 points toward "§20 rewrite group O1" when chunk 04 explicitly locates resolution at §19 extraction policy | amend to name §19 extraction policy as locus (not rewrite-rule ban) | ACC | combines with H2 |
+
+### §36 — Command-Line Interface
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | §36 uses "the `myco` CLI"; §0.1/§4.1/§22/§23.4/§32 use `mycoc`; Riley confirms the CLI is `hypha` | global rename: `myco` (in §36) and `mycoc` (elsewhere) → `hypha`; `hypha` is the single user-facing CLI | ACC | Riley 2026-04-22: "the myco cli is called hypha" |
+| H2 | `hypha explain` has committed `--vs path_A path_B` flag (chunk 04 §5) + 3 open design items (e-graph/residual navigation, e-class referencing, round-trip materialization) not named in §36 | add note: partial commitment for `explain` + 3 open design items pending chunk 04 Phase 2 Q3 | ACC | prevents uniform-blank-slate reading |
+| H3 | `hypha check` scope locked in §23.4 (tier-1 errors, no codegen, no workflow binding) but §36 treats it as uniformly deferred | add sentence: `check` is committed verb per §23.4; flags / exit codes still open | ACC | §23.4 is already normative |
+| H4 | Chunk 08 uses `hypha explain`; rest of corpus uses `mycoc explain` | chunk 08's `hypha explain` is correct per Riley; all `mycoc explain` references elsewhere need renaming | ACC | resolved by H1 global rename |
+| H5 | Two-binary split (`mycoc` compiler + `hypha` package manager) not stated in §36 | one-sentence toolchain-shape note: `hypha` is the user-facing CLI (like `cargo`, `uv`); relation to internal compiler binary left to implementation | ACC | single user-facing CLI per Riley; chunk 10's `mycoc`+`hypha` split framing needs revisit |
+| H6 | §36 not cross-ref'd from §0.1 (traceability) or §22 (plan inspection) despite being the CLI-spec home for `explain` | add cross-refs back to §22 and §0.1 | ACC | stub-as-dead-end problem |
+| S1 | spec.md Appendix B single-`myco`-binary model (`myco repl`, `myco plan --dot`, `myco add`, `myco publish`, `myco search`) | covered by wholesale spec.md supersede; rename `myco` → `hypha` per Riley | SKIP | no new anti_spec row |
+| C1 | §36 line 5059+5063 says "the `myco` CLI spans compile, run, check, fmt, explain"; other sections use `mycoc` | rename all CLI references to `hypha` (Riley 2026-04-22) | ACC | resolved by H1 global rename |
+
+### §37 — Dependency Management and Package Registry
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Four locked vocabulary terms (`spore`, `hypha`, `myco.toml`, `myco.lock`) absent from §37 body (appear only in §33 open-questions block) | add **Vocabulary (locked)** paragraph — one sentence per term; `hypha` is the user-facing CLI (covers compile, run, check, fmt, explain, package mgmt) | ACC | Riley 2026-04-22: `hypha` is singular CLI, not only package mgmt |
+| H2 | Cargo+uv convention lock absent from §37 | add **Approach (locked)** line | ACC | chunk 10 Principle section |
+| H3 | Chunk 10 open-items list (9 items: resolver, version semantics, feature model, build scripts, workspace-Python, tooling, cross-spore visibility, registry, platform metadata) not surfaced in §37 | add **Open items** list to §37 body (enumerate per §33 block + tooling) | ACC | copy-from-source-already-in-spec_new.md |
+| H4 | Chunk 10 "Minimum viable package system for v2.1" subset + post-v2.1 deferral list not in §37 | add **Minimum viable scope (v2.1)** paragraph | ACC | gives concrete boundary |
+| H5 | §34 omits chunk 10 (confirmed by §34 audit H2) | resolved by §34 batch-7 ACC; ensure chunk 10 entry cross-refs §37 | SKIP | already tracked in §34 H2 |
+| H6 | `hypha` as CLI binary not named in §37 | one-sentence note: `hypha` is the user-facing CLI (same binary as §36); packaging sub-commands live alongside compile/run/check/explain | ACC | Riley 2026-04-22: single CLI, not a distinct package-manager binary |
+| C1 | §37 body lines 5068/5072/5074 use "`.myco` packages" where rest of spec (§2, §23, §33) uses "spore" | replace with "spore" (or "`.myco` spore" on first use) | ACC | vocabulary consistency; chunk 10 locked |
+| C2 | §37 Summary presents declare/resolve/publish/lock as uniform open, contradicting chunk 10 partial-lock (lockfile locked, resolver open, publishing open) | implicitly resolved by H1/H2 additions (show locked alongside open) | ACC | subsumed |
+
+### §38 — Editor Tooling
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | chunk 10 line 197 bundles "editor integration (LSP) / doc generation / formatter / linter" under tooling-integration; LSP→§38, doc→§39, `fmt` CLI flag→§36, formatter + linter as tools have no tracking home | add "Formatter and linter" to §38 body list | ACC | chunk 10 open bundle splits across §36/§38/§39 |
+
+### §39 — Documentation Generation and Website
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | chunk 10 flags `hypha doc` as candidate CLI sub-command spelling for doc generation; §39 doesn't reference CLI surface | brief note: doc generation is invoked as `hypha doc` | ACC | Riley 2026-04-22: `hypha` is the CLI; `hypha doc` is the locked sub-command |
+| H2 | spec.md §B.5 names Mermaid and D2 as rendering targets relevant to doc/presentation contexts; §39 treats docs as static HTML only | optional cross-ref note: doc website may embed generated graph diagrams via §B.5 / §22 | ACC | cross-ref, not new commitment |
+
+Stale-doc-only conflicts (not tabled): legacy spec.md §14.6 `condition_weighted`-as-deferred text, v2.1_in_progress `condition_weighted` deferral prose, spec.md Appendix B single-binary CLI framing, deprecated-open-questions file wholesale (handled by archival plan).
+
+---
+
+Batch 8 (§35-§39) raised the following new cross-cutting items:
+
+- **CLI binary naming resolved: `hypha`** (§36 H1 + §36 C1 + §36 H4 + §37 H6 + §39 H1). Riley 2026-04-22: "the myco cli is called hypha." The user-facing CLI is `hypha` — a single binary covering compile, run, check, fmt, explain, and package-management sub-commands (analogous to `cargo` or `uv`). Resolution: (i) §36 rename "`myco` CLI" → "`hypha` CLI"; (ii) global rename `mycoc` → `hypha` across §0.1, §4.1, §22, §23.4, §32 (and any other section using `mycoc`); (iii) chunk 08's `hypha explain` is correct — all `mycoc explain` references elsewhere need updating; (iv) §39 doc-gen sub-command is `hypha doc` (locked, not open); (v) chunk 10's "two-binary split (`mycoc` compiler + `hypha` package manager)" framing needs revisit — whether `mycoc` survives as an internal compiler binary invoked by `hypha` (like `rustc` under `cargo`) or disappears entirely is an implementation detail that does not need to appear in spec prose. Applies at Phase 1 end alongside other ACC fixes. Touches §36, §37, §39 (as noted), plus §0.1, §4.1, §22, §23.4, §32 (global rename). Also: chunk 10 report should be annotated that `hypha` is confirmed as the user-facing CLI name.
+- **CC5 block placement in §35** (§35 C2). The CC5 site-gated-strict-rewrites block occupies ~6 paragraphs in §35 describing fully resolved design (Layer-3 site records, X1/X2 split, cross-geometry pollution proof). It reads as completed prose in a section titled "Other Opens." Two options: (a) move the block wholesale to Appendix C (where X1/X2 rewrite rules live) or §17 (rewrite-rule substrate), leaving only a short "CC5 resolved — see Appendix C" pointer in §35; (b) condense the §35 block to a 2-sentence resolved-item note with cross-refs. Leaning (a) — the block is dense substantive design content and Appendix C / §17 is the semantic home for rewrite-rule material. §35 should be a list of genuinely open items. Not urgent; presentation-level fix. Needs Riley's call on option (a) vs (b).
+- **Chunk 10 tooling-integration bundle splits across §36/§38/§39** (§38 H1 + §39 H1). Chunk 10 bundles "editor integration (LSP), documentation generation, formatter, linter" as a single open item. In spec_new.md these live in three different Part VII stubs: LSP in §38, doc gen in §39, `fmt` as a CLI flag in §36 with the formatter-tool itself having no home, linter entirely absent. No design decision needed; resolution is (a) add "formatter and linter" to §38, (b) cross-ref §36/§38/§39 from chunk 10's open-item text, (c) close the bundle. Drop-in edits only; listed as cross-cutting because it touches three sections.
