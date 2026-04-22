@@ -23,6 +23,11 @@ gap-review stale list, subsequent design locks.
 | `has`-style field-presence filtering | `where x is T` narrowing | type-based narrowing |
 | `property` declarations (`property sigma is PositiveDefinite`) | refinement types + capability contracts (`Invertible<_>`, `Differentiable`, `Monotone`) + `constraint` blocks | redundant with existing machinery; spec_new.md §6 already forbids user property-declaration surface. mock_sperry.myco flagged for rewrite |
 | `DataContract` / "data contract" as distinct contract kind | plain contracts satisfied by a type's output fields | workflow-layer visibility (`bind_controller(path, fn, contract)`) enforces access; no failure case found where a plain contract + output-type annotation is insufficient |
+| `Line1D` / `Rectangle2D` / `Ball3D` dimensional-suffix geometry names | `Interval` / `Rectangle` / `Ball` (suffix-free authoritative names) | dimension is intrinsic to the mathematical object; suffix is noise. Stdlib catalog in §11.3 uses standard names |
+| `Polar` / `Spherical` as geometry types | coord parameterization on `as` clause (`Disk as (r, θ)`, `Ball as (r, θ, φ)`) | coordinate systems are annotations on solid regions, not separate geometry types |
+| `Sphere` as a solid 3D region | `Sphere` = S² (2-manifold, surface only); `Ball` = solid 3D region | mathematical convention; solid-vs-manifold distinction is load-bearing in §11.3 |
+| `laplace` spelling | `laplacian` | one canonical spelling across stdlib and docs |
+| `trace(f, junction, edge)` overload for directional limit at graph junctions | `limit_from(f, junction, edge)` | `trace` kept for manifold restriction (standard PDE trace operator); overloading two mathematically distinct operations on one name invites confusion |
 
 ## Retired annotations / attributes
 
@@ -42,6 +47,7 @@ gap-review stale list, subsequent design locks.
 | homotopy continuation as language feature | workflow Python recipe | belongs on workflow side |
 | stdlib physical constants (`R`, `Avogadro`, etc.) | workflow-injected via `assume_constant` | physical constants are values; values live workflow-side |
 | literal numerics in `.myco` value position | CC1: banned except in unit defs, affine conversion bodies, structural positions (shape tuples / indices / arity) | no two-trust-posture split; all `.myco` files obey one rule |
+| dimensionless-ratio literal carve-out (`0.5`, `2.0` in a dimensionless expression) | CC1 applies uniformly: bind the ratio as a universal | earlier drafts allowed "obvious" dimensionless ratios inline; CC1 is now position-based not dimensionality-based, so no carve-out exists |
 | universals carrying values (`universal R: Scalar<U> = 8.314`) | `universal R: Scalar<U>` declaration only; value from workflow | CC1 scope |
 | contract composition alias (`contract C := A + B`) | nothing | multi-contract satisfaction (`: A + B + C`) + supertraits already cover the bundle case; alias adds a second spelling with no new expressive power |
 | user-facing `Dual` numeric representation | backend-owned AD | Part V commits backend-delegated AD (burn-style tensor tracks operations); user-facing `Dual` would duplicate backend machinery and risks conflicting with backend AD representation. Forward-mode AD is a backend concern, not a user-facing scalar type |
@@ -57,6 +63,9 @@ gap-review stale list, subsequent design locks.
 | compiler auto-selected solver | workflow selects | same principle |
 | controller as `.myco` construct | workflow-only concept | strict `.myco` / Python split |
 | "slot is gone" narrative / "v2.0 had X" retirement prose | none — use anti_spec.md instead of in-spec versioning | consolidation strips versioning prose |
+| X-category bundling pole L'Hopital and `identify` as one rewrite shape | X1 (pole L'Hopital, removable-singularity operator substitution) / X2 (identify, quotient-induced value equality via Layer-3 site records) | different data paths: X1 rewrites an operator at a locus, X2 installs a Layer-1 merge mediated by Layer-3 adjacent keyed state. Bundling obscured the geometric-fact-in-Layer-3 / value-equality-in-Layer-1 split. Resolved 2026-04-22 |
+| "structural-predicate-gated" as the X-category name | "site-gated strict" | collision with §16.4 structural tolerance and §17.4 structural shape; X fires on a site or geometric predicate owned by a geometry, not on structural envelope properties |
+| "eight merge sources" as a monolithic framing (all sources directly write merges) | "eight authorization sources" with direct-writer vs rewrite-class-authorizer split: sources 1, 2, 3, 7, 8 directly write merges; sources 4 (`identify` via Layer-3 site records), 5 (stdlib inverses via E-group), 6 (`convert`) authorize rewrite classes that subsequently effect merges | clarifies that the e-graph's Layer-1 merge surface is narrower than the set of §17 sources; resolves the identify-as-merge-source vs identify-via-Layer-3 tension raised by opus_identify_review.md. Resolved 2026-04-22 |
 
 ## Retired open questions (closed or structurally void)
 

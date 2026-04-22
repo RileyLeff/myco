@@ -56,10 +56,12 @@ first numerical step.
 Events add facts. No retraction, no tombstoning. Entities do not know
 they are dead.
 
-Scope. This spec covers the language, compiler substrate, workflow
-boundary, standard library, and backend trait. The long-term goal is
-a GPU ecosystem simulator with neural controllers, dynamic topology,
-and spatial explicitness. Myco is a precondition.
+Scope. Myco is a general language for scientific modeling. This spec
+covers the language, compiler substrate, workflow boundary, standard
+library, and backend trait. Domain libraries (ecosystem simulators,
+circuit models, population dynamics, and so on) are external to the
+core and ship as ordinary Myco modules against the surface defined
+here.
 
 Output. The `.myco` file plus the workflow Python fully reproduces a
 run. Compiled code belongs to you; inspect it if you want (§22).
@@ -185,9 +187,12 @@ they were compiled from.
 defined once here and referenced by name elsewhere.
 
 The vocabulary used throughout this document. Each term one line.
-Terms: `variable`, `relation`, `event`, `controller` (workflow-only),
-`initial`, `temporal`, `data contract`, `locus`, `workflow`,
-`e-class`, `envelope`, `universal`, `approximate`, `observe`.
+Terms: `variable`, `bound variable`, `free variable`, `relation`,
+`binding verb`, `event`, `controller` (workflow-only), `initial`,
+`temporal`, `node`, `locus`, `geometry`, `domain`, `workflow`,
+`e-class`, `envelope`, `universal`, `SCC`, `residual graph`,
+`~` (distribution operator), `impl`, `some`, `` `approximate` `` block,
+`observe`.
 
 ---
 
@@ -201,17 +206,36 @@ compiler runs before any code is generated.
 ### 2. Modules, Imports, Scope
 
 **Summary.** File-as-module convention with path-based imports
-(`use path::to::symbol`), public/private/file-local visibility, and
-name resolution for types, universals, contracts, and events. Python
-imports and `.myco` imports are separate systems; the workflow
-imports `.myco` models, not the reverse.
+(`use path::to::symbol`) and name resolution for types, universals,
+contracts, and events. Re-exports thread symbols through the importing
+module's path. The import graph is a DAG; circular imports are a
+compile error. Python imports and `.myco` imports are separate
+systems; the workflow imports `.myco` models, not the reverse.
 
-File-as-module convention. Path-based imports (`use path::to::symbol`).
-Visibility rules (public / private / file-local). Scope resolution
-rules for names, types, universals, contracts, events. Relationship
-to the workflow side: Python imports and `.myco` imports are distinct
-systems; the workflow imports `.myco` models, not the other way
-around.
+File-as-module convention. Path-based imports
+(`use path::to::symbol`). Scope resolution rules for names, types,
+universals, contracts, events.
+
+Re-export. A module that imports a symbol may re-expose it under its
+own path; downstream imports resolve against the importing module's
+path, not the source. Re-exports make a module's external surface
+independent of where each name was first declared.
+
+Import graph. The `.myco` module import graph is a directed acyclic
+graph. Circular imports are a compile error at module load; the
+diagnostic names the cycle.
+
+Relationship to the workflow side: Python imports and `.myco` imports
+are distinct systems; the workflow imports `.myco` models, not the
+other way around.
+
+Package-level dependencies (cross-spore imports, version resolution,
+workspace layout) are a separate concern from file-as-module scoping
+and are covered in `v2.1_chunk_reports/10_package_dependencies.md`.
+Within a `.myco` file, `use hydraulics::...` resolves to whatever
+spore the enclosing `myco.toml` declares as `hydraulics`; the `use`
+form itself does not change between intra-spore and cross-spore
+imports.
 
 ### 3. Types
 
@@ -251,13 +275,29 @@ operator on distributions auto-truncates to a refined target type (§13).
 
 #### 3.3 Newtype and Composite Types
 
-**Summary.** Single-field nominal wrappers (`type Depth: Scalar<m>`)
-for type distinction without structural change, plus composite record
-types with named fields. Named-type comparison rules cross-link §7.
+**Summary.** Nominal wrappers (`type Depth: Scalar<m>`) for type
+distinction without structural change, plus composite record types
+with named fields. "Atomic" means the type is a leaf of the
+containment tree rather than a single-field wrapper; a composite is
+atomic at sites that do not decompose its fields. Named-type
+comparison rules: `=` and ordering between two distinct named types
+require an explicit `convert` to share scope; the compiler rejects
+cross-type arithmetic and comparison without it.
 
-Single-field nominal wrappers (`type Depth: Scalar<m>`) for type
-distinction without structural change. Composite record types with
-named fields. Named-type comparison rules cross-link §7.
+Nominal wrappers (`type Depth: Scalar<m>`) distinguish a name from
+its underlying representation without changing structure. Composite
+record types declare named fields. A nominal wrapper is atomic
+(a containment leaf); a composite is atomic at every site that does
+not decompose its fields.
+
+Named-type comparison. Relations that write `=` (or any ordering
+operator) between two values of distinct named types require an
+explicit `convert` declaration (§5.1) between those types; otherwise
+the relation is a compile error. Bare `convert` sibling-relabels
+under a conservation group (§3.7) satisfy this requirement without
+a conversion body. Comparisons between a named type and its
+underlying representation are never implicit; the modeler must name
+which side of the wrapper the comparison lives on.
 
 #### 3.4 Node Instantiation
 
@@ -318,6 +358,13 @@ Full treatment tracked in chunk 07 Q4.
 Variance rules for generic type parameters (chunk 07 Q4):
 covariant / contravariant / invariant positions. Subtyping discipline
 for named types + refinements + conservation-group hierarchies.
+
+Scalar-value generics. A generic parameter may itself be a typed
+scalar (e.g., `LOW: Scalar<U>`) rather than a type. Scalar-value
+generics participate in refinements and shape-tuple positions and
+are bound at compile time through the same workflow verbs as
+ordinary universals (§4 exception classes cover their declaration
+sites).
 
 #### 3.7 Conservation Groups
 
@@ -450,7 +497,33 @@ Deferred to chunk 05:
   marker; the concrete storage is a backend-level choice tracked
   in chunk 06 alongside device-layout concerns.
 
-### 4. Values and Literal Policy
+#### 3.10 Sum Types / Enums (STUB)
+
+**Summary.** Tagged sum types (enums) are a core composite-type form
+alongside newtype and record. They capture **structural
+polymorphism** — a field that is one of several shapes — where
+contracts capture **behavioral polymorphism**. Variants may be unit,
+positional, or struct-like; matches are exhaustive; the compiler
+picks compile-time specialization (when the discriminant is static
+after workflow binding) or a runtime discriminant-tagged kernel
+(when dynamic). Enums compose with contracts; variant fields may
+themselves be contract-typed. Stdlib ships at least `Prior<T>`
+(number-or-distribution), `Maybe<T>`, and `Result<T, E>`. Exact
+syntax, pattern-matching power, event-triggered variant transitions
+(FSMs), lifted-arithmetic sugar through `Prior<T>`, and workflow
+binding surface are open.
+
+Four independent pressures motivate enums as a single mechanism:
+number-or-distribution materialization of the same model, Mode B
+heterogeneous contract dispatch across a population (chunk 08,
+chunk 09), finite state machines in dynamic topology, and
+Option/Result at the workflow boundary. Contracts alone cannot
+cover these cases without hiding the `~` operator from the PPL
+machinery (§13) or collapsing structural differences that the
+compiler needs to see.
+
+Full design lives in `v2.1_chunk_reports/11_sum_types_enums.md`.
+This subsection is a stub; detailed prose lands when chunk 11 closes.
 
 **Summary.** Zero literal numerics in value position (CC1). Three
 exception positions where literals are allowed: unit definitions,
@@ -463,6 +536,20 @@ unit definitions, affine conversion bodies, structural positions
 (shape tuples, indices, generic-parameter definitions). All numeric
 values enter from the workflow. See `spec_dev_notes.md` for the
 derivation.
+
+Mathematical constants. π, e, and similar fixed reals are ordinary
+stdlib-declared identifiers (`universal pi: Scalar<dimensionless>`,
+`universal e: Scalar<dimensionless>`). They receive no CC1 carve-out:
+they are universals like any other, and a workflow binds their
+numeric values at compile time through the same mechanism as any
+other constant. The stdlib ships default bindings so users do not
+write them by hand.
+
+Workflow bindings enter the e-graph as equalities. A workflow
+constant supplied at compile time merges an observation-tagged
+equality between the universal's e-class and a literal term in the
+B2 rewrite layer (§17). Numeric values therefore participate in
+rewriting and extraction without appearing in `.myco` source.
 
 #### 4.1 CC1 Diagnostic Surface
 
@@ -537,6 +624,15 @@ with unit-naive stdlib atoms, external-library arguments. Units of
 the argument must be dimensionally compatible with the receiver.
 
 ### 6. Functions
+
+*Open (pending application).* The design lock in chunk 08 bans user
+`fn` declarations in favor of parameterized relations; contract
+methods become required parameterized relations; kernels become
+parameterized relations. The prose in this section still describes
+the prior `fn`-as-first-class surface and is stale relative to the
+locked design. Canonical reference:
+`planning/v2/v2.1_chunk_reports/08_relation_fix_whoops.md`. Tracked
+in §34.
 
 **Summary.** `fn` declarations with parametric generics. Contracts
 apply to functions via the same composable machinery used for types
@@ -617,14 +713,40 @@ by two paths contributes one obligation, not two).
 
 **Summary.** `T : A + B` requires disjoint obligations or matching
 obligations where A and B overlap. Conflicting obligations (same
-name, incompatible signature across A and B) emit a coherence error
-naming both supertraits.
+name, incompatible signature across A and B) are a hard error at
+**contract declaration time**, not impl time. `contract C : A + B`
+with an unresolvable same-name collision between A and B is
+rejected immediately, before any type tries to impl C. Contract
+authors must rename to eliminate the collision.
 
 Satisfaction of `T : A + B` requires disjoint obligations for A and
-B, or matching obligations where they overlap. Conflicting
-obligations (A requires `fn foo(x: U) -> V`, B requires
-`fn foo(x: U) -> W` with `V ≠ W`) emit a coherence error naming
-both supertraits.
+B, or matching obligations where they overlap. Two kinds of
+collision can arise, with different resolution rules:
+
+1. **Same obligation, reached by two supertrait paths** (ordinary
+   diamond). `contract C : A + B` where both `A` and `B` supertrait
+   a common `Root`, and `Root` declares obligation `foo`. This
+   contributes **one** obligation per §7.3 (contract identity,
+   not path identity). No conflict.
+
+2. **Different obligations colliding on name** (the hard case).
+   `A` declares obligation `foo: ... -> V`; `B` independently
+   declares obligation `foo: ... -> W` with `V ≠ W` (or any
+   incompatible signature). These are distinct obligations that
+   happen to share a name. Myco rejects this at the declaration
+   site of the contract that supertraits both: `contract C : A + B`
+   emits a coherence error naming `foo`, both supertraits, and both
+   signatures. Contract authors rename at the point of divergence.
+
+The alternative policies (supertrait-order precedence with silent
+shadow, or per-impl disambiguation syntax) were considered and
+rejected. Silent shadow violates the "no surprises" posture; per-
+impl disambiguation pushes the fix downstream to impl authors who
+did not introduce the collision.
+
+No same-name collisions across `A + B` ever reach the impl author.
+By the time `T : A + B` is satisfiable, all obligations are
+uniquely named.
 
 ### 8. Relations and Equality
 
@@ -881,15 +1003,36 @@ retraction.
 
 **Summary.** Firing order for multiple matching events is a
 simulation parameter at workflow composition, not language syntax.
-Default is declaration order; workflow overrides via run-config.
-Within a single event type, all valid firings execute in parallel
-(GPU-batched).
+Default is declaration order; workflow overrides via a Python-side
+scheduling policy. Within a single event type, all valid firings
+execute in parallel (GPU-batched). Three stdlib policies ship
+(priority-based, random-with-seed, FIFO); the exact Python API
+signature lives in §24.
 
 When multiple events match at the same timestep, firing order
 is a simulation parameter set at workflow composition, not
 language syntax. Default: declaration order (lexical). Workflow
-override via run-config. Within a single event type, all valid
-firings execute in parallel (GPU-batched).
+override via a Python-side scheduling policy that sees the
+pending firings and the current state and returns an ordered list.
+Three stdlib policies ship:
+
+- **Priority-based.** Events declare numeric priorities;
+  scheduler orders by descending priority.
+- **Random-with-seed.** Scheduler draws a permutation from a
+  seeded RNG for reproducibility.
+- **FIFO.** Order of queueing; useful for streaming / arrival-
+  order semantics.
+
+Users may supply custom Python policies. The Python API signature
+for scheduling policies is a workflow-layer concern and lives in
+§24 (workflow verbs); §10 commits only to the contract that such
+a policy exists and the three stdlib policies above. Keeps the
+`.myco`-side story focused on event semantics rather than Python
+surface.
+
+Within a single event type, all valid firings execute in parallel
+(GPU-batched); the scheduling policy operates between event types
+at the same tick.
 
 #### 10.2 Generic Event Cartesian-Product Expansion
 
@@ -968,9 +1111,9 @@ to compiler-generated defaults, not arbitrary prior claims.
 **Summary.** Spatial framing. Horses own geometry, flies are embedded
 entities located against that geometry. `bind_topology` supplies
 concrete meshes at workflow time. Standard locus vocabulary
-(`boundary`, `chart`, `metric`, `requires`), six stdlib geometries,
-spatial operators (`grad`, `diverg`, `laplace`, `normal_grad`,
-`trace`), and boundary conditions via `requires`.
+(`boundary`, `chart`, `metric`, `requires`), stdlib geometry catalog,
+spatial operators (`grad`, `diverg`, `laplacian`, `curl`,
+`normal_grad`, `trace`), and boundary conditions via `requires`.
 
 Horse/fly composition pattern for spatial frames. `bind_topology` at
 workflow time for concrete meshes. `on locus:` clause applies
@@ -979,10 +1122,12 @@ symmetrically to `relation` and `temporal`.
 #### 11.1 Spatial Operators
 
 **Summary.** Stdlib-recognized spatial operators on locus-scoped
-fields: `grad`, `diverg`, `laplace`, `normal_grad`, `trace`.
-`diverg` on a conserved flux field drives auto-synthesized junction
-balance. Operators are functions with capability contracts; users do
-not annotate them.
+fields: `grad`, `diverg`, `laplacian`, `curl`, `normal_grad`,
+`trace`, `limit_from`. `diverg` on a conserved flux field drives
+auto-synthesized junction balance. Operators are stdlib axioms with
+capability contracts; users do not annotate them. Dimension-
+dependent signatures (e.g., `curl`) dispatch at the axiom level via
+case-on-val-generic in the return type.
 
 Compiler-recognized operators on locus-scoped fields:
 
@@ -991,15 +1136,40 @@ Compiler-recognized operators on locus-scoped fields:
 - `diverg(v)` — divergence of a vector field; yields a scalar.
   `diverg` on a conserved flux field drives auto-synthesized
   junction balance (§3.7, §11.8).
-- `laplace(f)` — Laplacian; `diverg(grad(f))`.
+- `laplacian(f)` — Laplace operator; `diverg(grad(f))`.
+- `curl(F)` — dimension-dependent signature:
+  `Vec<U> over Domain<G>` with `G.dim == 2` yields
+  `Scalar<U/length>`; with `G.dim == 3` yields
+  `Vec<U/length>`. `G.dim ∉ {2, 3}` is a compile error at the
+  call site.
 - `normal_grad(f)` — gradient dotted with the outward normal;
   defined on boundary sub-loci only.
-- `trace(f, boundary)` — restriction of `f` to the named
-  boundary sub-locus.
+- `trace(f, boundary)` — manifold restriction: the value of
+  field `f` restricted to the named boundary sub-locus.
+  Standard PDE trace operator.
+- `limit_from(f, junction, edge)` — one-sided directional limit:
+  the value of `f` as the junction is approached along a
+  specified incident edge. Defined on `MetricGraph` /
+  `RootedTree` junctions where the field may be discontinuous
+  across incident edges.
 
-Operators are stdlib functions with capability contracts (§7.2).
-Relations like `laplace(f) = diverg(grad(f))` fire as e-graph
+Operators are stdlib axioms with capability contracts (§7.2).
+Relations like `laplacian(f) = diverg(grad(f))` fire as e-graph
 rewrites from stdlib declarations; users never annotate them.
+
+**Dimension dispatch in axiom return positions.** `curl` is the
+first operator whose return type depends on a val generic carried
+by the input domain (`G.dim`). The dispatch pattern mirrors
+`solve`'s dispatch on matrix structural subtype (§3.9, §30): the
+stdlib declaration enumerates per-dimension cases, and the compiler
+picks the applicable one at the call site based on the input's
+generic parameters. User code generic in dimension may reach for
+`curl` under a `where G.dim in {2, 3}` clause; monomorphization
+produces distinct specialized bodies per dimension with the
+appropriate return type. The formalization of case-on-val-generic in
+axiom return positions is a small extension tracked as an open in
+§35 (chunk 11 cross-cut, since sum types / pattern-matching at the
+type level touch the same family of concerns).
 
 #### 11.2 Boundary Conditions
 
@@ -1026,20 +1196,42 @@ default boundary condition (silence is not a free Neumann zero).
 
 #### 11.3 Stdlib Geometries
 
-**Summary.** Six standard geometries: `Line1D`, `Rectangle2D`,
-`Ball3D`, `RootedTree`, `MetricGraph`, `BranchingManifold`. Each
-exposes named sub-loci (`interior`, `boundary`, junction classes).
-Horse/fly composition lets richer entities reuse primitives without
-inheritance.
+**Summary.** Standard geometries use authoritative mathematical
+names without dimensional suffixes. Solid regions: `Interval`,
+`Rectangle`, `Disk`, `Box`, `Ball`. Manifolds: `Circle` (S¹),
+`Sphere` (S²). Networks: `RootedTree`, `MetricGraph`,
+`BranchingManifold`. Each exposes named sub-loci (`interior`,
+`boundary`, junction classes). Horse/fly composition lets richer
+entities reuse primitives without inheritance.
 
-| Name | Dim | Topology | Typical Use |
+| Name | Dim | Kind | Typical Use |
 |---|---|---|---|
-| `Line1D` | 1 | interval | roots, stems, cylindrical cross-sections |
-| `Rectangle2D` | 2 | rectangle | leaf surfaces, soil patches |
-| `Ball3D` | 3 | solid ball | fruit, nodules, root cells |
-| `RootedTree` | 1 (branching) | tree | plant hydraulic networks, vasculature |
-| `MetricGraph` | 1 (branching) | general graph | river networks, mycelia |
+| `Interval` | 1 | solid | roots, stems, cylindrical cross-sections |
+| `Circle` | 1 | manifold (S¹) | periodic loops, azimuthal coordinates |
+| `Rectangle` | 2 | solid | leaf surfaces, soil patches |
+| `Disk` | 2 | solid | circular regions, polar-coord domains |
+| `Sphere` | 2 | manifold (S²) | closed surfaces, radiative hemispheres |
+| `Box` | 3 | solid | rectangular volumes, voxel domains |
+| `Ball` | 3 | solid | fruit, nodules, root cells |
+| `RootedTree` | 1 (branching) | network | plant hydraulic networks, vasculature |
+| `MetricGraph` | 1 (branching) | network | river networks, mycelia |
 | `BranchingManifold` | n | recursive | fractal / self-similar structures |
+
+Naming rule: solid regions and manifolds use their standard
+mathematical names without dimensional suffixes. `Sphere` is the
+2-manifold S² (the surface of a 3-ball), distinct from `Ball`
+(the 3D solid region). `Disk` is the 2D solid region, distinct
+from `Circle` (the 1-manifold S¹, the loop boundary of a disk).
+The solid-vs-manifold distinction is load-bearing; using `Sphere`
+interchangeably for the surface and the solid region is a
+category error the compiler rejects.
+
+Coordinate-system parameterization lives on the `as` clause, not
+as separate geometry types. `Disk as (r, θ)` expresses a disk in
+polar coordinates; `Ball as (r, θ, φ)` expresses a ball in
+spherical coordinates. There is no `Polar` or `Spherical`
+geometry type in stdlib; those are coord conventions on solid
+regions.
 
 Each geometry exposes named sub-loci: `interior`, `boundary`,
 junction classes (where applicable). Composition via the
@@ -1065,6 +1257,13 @@ the tree. The tree's hydraulic relations live on the tree locus;
 the patches' gas-exchange relations live on patch loci. Cross-
 scale visibility is downward only: the tree sees its patches;
 patches do not see the tree. Composition, not inheritance.
+
+Identifications on a geometry (§17 X2, geometry-body `identify`
+declarations) apply to fields defined over the geometry. Fly
+positions reference geometric points but do not inherit identity
+collapse across fly identities: two flies at identified positions
+sit at the same geometric point but remain distinct fly entities
+unless the modeler writes an explicit merge.
 
 #### 11.5 Discretization Configuration
 
@@ -1369,31 +1568,57 @@ Aleatoric/epistemic split. Tier A/B/C routing (exact closed-form /
 approximate rewrite / opaque PPL handoff). Independence via structural
 identity; no naked correlation. Cholesky reparameterization.
 
+**Analytical-first ordering.** The compiler attempts closed-form
+envelope propagation before approximate rewrite, and approximate
+rewrite before sampling handoff. Tier A runs to exhaustion, then
+Tier B under authorized `approximate` blocks runs to exhaustion,
+then Tier C hands residual SCCs to the backend PPL. Sampling is
+the language of last resort, not first resort. Capability contracts
+on distribution families (§27) are load-bearing precisely because
+every closure contract (`AffineSelfClosed`, `SumSelfClosed`,
+`ProductSelfClosed`, `ScaleSelfClosed`, `SmoothTransformable`,
+`ReparameterizedSampleable`) is a compile-time affordance for
+keeping the graph symbolic. The pushforward rewrite (Appendix C
+Z11) extends analytical carry-through across invertible
+differentiable maps whose closure contracts do not otherwise match.
+
 #### 13.1 Aleatoric and Epistemic Uncertainty
 
-**Summary.** Same `~` surface, two kinds of uncertainty by
-structural position. Aleatoric (world-randomness) `~` sits inside
-`temporal:` / event scope and is realized via sampling. Epistemic
-(parameter uncertainty) `~` sits at module scope or in `initial:`
-and reduces with observation via Bayesian update.
+**Summary.** Same `~` surface, two kinds of uncertainty
+classified by graph position plus workflow bindings. Aleatoric
+`~` applies to measured/observed quantities tethered to data
+via `observe` or to `~` inside temporal/event scope; realized
+via sampling, does not reduce with data. Epistemic `~` applies
+to unknown constants not observed per time-step; reduces via
+Bayesian update and participates in training. The classification
+is compiler-derived, not user-annotated.
 
 Two distinct sources of uncertainty. Same `~` surface; the
-distinction is structural position:
+compiler derives the classification from two static signals:
+whether the LHS e-class has observation data attached (workflow
+`observe`; §13.8) and where the `~` appears in the model
+structure.
 
 - **Aleatoric** — world-randomness. The quantity genuinely
   fluctuates across realizations (measurement noise,
-  environmental stochasticity). `~` appears inside `temporal:`
-  or event scope. Realized via sampling; does not reduce with
-  more data.
+  environmental stochasticity). Applies when the LHS is a
+  measured/observed quantity tethered to data, or when the `~`
+  appears inside `temporal:` or event scope. Realized via
+  sampling; does not reduce with more data.
 - **Epistemic** — parameter uncertainty. A fixed-but-unknown
-  value the modeler does not know. `~` appears at module scope
-  or in `initial:`. Reduces with observation via Bayesian
-  update; participates in training.
+  value the modeler does not know. Applies when the quantity
+  is an unknown constant not observed per time-step (module
+  scope, `initial:`, or any `~` whose LHS is neither data-bound
+  nor in temporal/event scope). Reduces with observation via
+  Bayesian update; participates in training.
 
-SCC classification (§20) threads the two: aleatoric variables
-enter the stochastic SCC class; epistemic latents enter the
-training class. The same `~` operator, routed differently by
-where it lives.
+The classification is compiler-derived, not user-annotated.
+The user writes `~` uniformly; the compiler inspects graph
+position plus workflow bindings to assign aleatoric vs
+epistemic. SCC classification (§20) threads the two: aleatoric
+variables enter the stochastic SCC class; epistemic latents
+enter the training class. The same `~` operator, routed
+differently based on derived classification.
 
 #### 13.2 Tier A / B / C Dispatch
 
@@ -1662,7 +1887,7 @@ type so downstream code can distinguish:
   time. Fallback when neither symbolic nor algorithmic form
   is available.
 
-The mode is tagged in the return; `condition_of(expr).level`
+The mode is tagged in the return; `condition_of(expr).mode`
 surfaces which tier the compiler chose. Algorithmic-vs-problem
 duality: Level I is the *problem's* conditioning (intrinsic to
 the math); Level II is the *algorithm's* conditioning (depends
@@ -1671,6 +1896,12 @@ makes the distinction inspectable. Primary consumer: the Y4
 `condition_weighted` closure policy (§8.7).
 
 #### 14.2 `loss_of` — Named-Field Return
+
+*Open.* Field inventory overlaps `cost_of` (§14) and the §19.1
+extraction cost vector. Three surfaces use the word "cost" with
+three different field sets and no cross-reference. Unification
+tracked in chunk 12:
+`planning/v2/v2.1_chunk_reports/12_cost_field_unification.md`.
 
 **Summary.** `loss_of(residual)` returns a struct of named components
 (`data_fit`, `constraint_violation`, `regularization`), not a scalar.
@@ -1797,7 +2028,12 @@ cumulative sources:
 The compiler reports the aggregate lossiness per expression
 via inspection surfaces (§22). The four sources are
 independent contributions; lossiness is a lattice join over
-them, not a single authoritative source.
+them, not a single authoritative source. The four sources are
+the *origin* axis of lossiness; the *accounting* axis —
+where in the compile stack the lossiness is quantified — is
+the five-layer stack in §15.4. The two axes are orthogonal: a
+single rewrite carries both a source label (one of four) and
+a layer label (one of five).
 
 #### 15.3 Three-Tier Lossiness Cut
 
@@ -1828,6 +2064,62 @@ floating-point" vs "this output uses a Delta-method
 linearization the modeler authorized" vs "this output is
 a tolerance-gated iterative solve." Three different trust
 postures, surfaced distinctly.
+
+#### 15.4 Five-Layer Lossiness Accounting
+
+**Summary.** Lossiness is quantified at five layers of the
+compile stack: syntactic, distributional-envelope, structural-
+identification, seam-state, and extraction-cost. Orthogonal to
+the four-source origin taxonomy (§15.2); each rewrite carries
+both a source label and a layer label. The layer axis tells
+diagnostics *where the distortion is booked*; the source axis
+tells them *why it happened*.
+
+Lossiness accounting layers:
+
+- **Layer 0 — Syntactic.** Distortions visible in the surface
+  form without consulting envelope facts. Name-stripping
+  rewrites (U-group) and operator-form substitutions at
+  singularity sites (X1 pole L'Hopital). No numerical loss;
+  information loss shows up as names that no longer
+  round-trip.
+- **Layer 1 — Equational.** Merges in the equational core
+  (§16.1 layer 1). Strict by construction (monotonicity, §16.2).
+  No lossiness at this layer by design; lossy-model rewrites
+  (L, M, Q groups) must be authorized by an `approximate`
+  block before they may produce layer-1 effects.
+- **Layer 2 — Distributional envelope.** Distortions
+  quantified in the distributional metadata layer (§16.1 layer
+  2). Tier B approximations (Delta, Fenton-Wilkinson, CLT,
+  GEV) live here. Admissibility projections (`hard_clip`,
+  `sigmoid`, `soft_clip`) distort the distribution and are
+  accounted at this layer.
+- **Layer 3 — Adjacent keyed state.** Distortions localized
+  to specific seams, events, or identity-indexed state
+  (§16.1 layer 3). Identify-seam propagation (X2) and event-
+  scoped rewrites (O-group, W-group) book their effects
+  here. The layer-3 record carries provenance back to the
+  declaring construct.
+- **Layer 4 — Extraction cost.** Distortions that manifest
+  only at residual-projection time: cost-vector-guided
+  extraction picks one among multiple valid representations
+  (Y-group closure policies, cost-struct tradeoffs §19.1).
+  The rewrite itself is layer-1 or layer-2 lossless; the
+  *choice* among equivalents carries accounting only when
+  extraction commits to one.
+
+**Worked example.** `hard_clip(x, 0, inf)` at a positivity
+bound. Source axis (§15.2): source-1 projection (pre/post-
+processing collapse onto a half-line). Layer axis (this
+section): layer 2 distributional-envelope (distorts x's
+distribution; equational core is untouched because the
+projection is a user-authorized pre/post-processing operator,
+not a layer-1 merge). One rewrite, two independent labels.
+
+Diagnostic surfaces (§22) render both axes; the layer axis
+tells the reader *where* to look for the distortion's
+bookkeeping, the source axis tells them *why* it was
+introduced.
 
 ---
 
@@ -2026,7 +2318,7 @@ family.
 explicit relation equations, workflow constant injection, algebraic
 rewrites, `identify`, stdlib-declared function inverses, named-type
 conversion, closure-policy co-membership, unit-preserving rewrites.
-Unified rewrite-predicate language, A-Y rule groupings
+Unified rewrite-predicate language, A-Z rule groupings
 (Appendix C), `identify` vs relation `=` distinction.
 
 Eight enumerated merge sources: explicit relation equations,
@@ -2046,18 +2338,39 @@ attaches distributional metadata as an envelope fact and is not
 a merge source. Two mechanisms, one unfortunately-similar name;
 the distinction is by layer (§16.1), not by spelling.
 
-#### 17.1 The Eight Merge Sources — Prose
+#### 17.1 The Eight Authorization Sources — Prose
 
-**Summary.** Exactly eight merge sources write the equational core:
+**Summary.** Exactly eight authorization sources write — directly
+or via authorized rewrite classes — to the equational core:
 explicit relation equations, workflow constant injection, algebraic
 rewrites, `identify`, stdlib-declared function inverses, named-type
 conversion, closure-policy co-membership, unit-preserving rewrites.
-Source tags travel with merges for diagnostics and provenance.
+Some authorize direct merges; others authorize a rewrite class
+whose merges fire when a predicate matches. Source tags travel
+with merges for diagnostics and provenance.
 
 The e-graph's equational core (layer 1 of the three-layer split,
-§16.1) accepts merges from exactly eight sources. Each source
-has a declaration surface, a trigger condition, and a
+§16.1) accepts merges from exactly eight authorization sources.
+Each source has a declaration surface, a trigger condition, and a
 faithfulness posture (§17 preamble matrix).
+
+Sources split into two mechanisms:
+
+- **Direct writers.** The declaration site produces a layer-1
+  merge immediately when parsed. Sources 1, 2, 3, 7, 8 (relation
+  equations, workflow constant injection, algebraic rewrites,
+  closure-policy co-membership, unit-preserving rewrites).
+- **Rewrite-class authorizers.** The declaration installs a
+  rewrite class (or a Layer-3 site record, §16.1) whose merges
+  fire later when a structural or site predicate matches.
+  Sources 4, 5, 6 (`identify` via Layer-3 site records
+  consumed by X2; stdlib-declared function inverses via
+  capability contracts fed into E-group rewrites; named-type
+  conversion via bidirectional rewrite installation).
+
+Both mechanisms are first-class authorization sources; the
+distinction is purely operational (when does the layer-1 merge
+appear). Downstream tooling reads source tags uniformly.
 
 1. **Explicit relation equations.** A `relation { x = expr }` or
    inline `x = expr` asserts an equation; the compiler merges
@@ -2076,9 +2389,13 @@ faithfulness posture (§17 preamble matrix).
    operators. They introduce merges between structurally
    different but equivalent terms (`a + b = b + a`).
 4. **`identify` declarations.** `identify x = y` asserts two
-   already-declared entities are the same thing (§17.2).
-   Merges their e-classes. Distinct from relation `=`, which
-   asserts an equation that holds.
+   already-declared entities are the same thing (§17.2). Module-
+   scope aliases produce a direct layer-1 merge. Geometry-body
+   `identify coord_a <-> coord_b` declarations install a Layer-3
+   site record (§16.1) keyed on the locus path; Appendix C X2
+   consumes the record to emit layer-1 merges for fields over
+   the geometry, tagged with the site's identity. Distinct from
+   relation `=`, which asserts an equation that holds.
 5. **Stdlib-declared function inverses.** Capability contracts
    on stdlib atoms (`Invertible<inv=log>` on `exp`) fire
    rewrites like `log(exp(x)) = x` on qualifying input
@@ -2127,8 +2444,20 @@ differ:
 Use `identify` when two names refer to the same object
 (refactoring, alias establishment, renaming). Use `=` when two
 expressions are equal in value but conceptually distinct
-things. Surface-level: `identify` lives at module scope or
-inside type bodies; relation `=` lives inside relation bodies.
+things. Surface-level: `identify` lives at module scope, inside
+type bodies, or inside geometry bodies (where it declares
+quotient-space identifications; Appendix C X2); relation `=`
+lives inside relation bodies.
+
+Idempotency of `identify` is a property of the resulting merge,
+not of the declaration. Two geometry-body `identify` declarations
+that produce the same layer-1 merge deduplicate at the merge
+level (the e-class is merged once) but both persist in provenance:
+diagnostics (§22) surface every declaration that contributed,
+even when all produced the same merge. This keeps
+`mycoc explain` honest when a modeler writes two `identify`
+calls intending to state different facts that happen to collapse
+to the same layer-1 equation.
 
 #### 17.3 Function Inverses via Stdlib Capability Contracts
 
@@ -2179,9 +2508,9 @@ stdlib algebraic rewrite, which uses the same form as a
 `convert` body. One surface, one discharge procedure
 (e-graph reasoning with refinement + contract lookup).
 
-#### 17.5 Rewrite-Rule Groups A-Y
+#### 17.5 Rewrite-Rule Groups A-Z
 
-**Summary.** Rewrite rules are organized into 25 lettered groups A-Y
+**Summary.** Rewrite rules are organized into 26 lettered groups A-Z
 for inspection, debugging, and `approximate` block referencing.
 Representative groups: A (algebraic), E (equality/merge), Y
 (closure-policy), Z (distribution-family). Full catalog lives in
@@ -2200,7 +2529,7 @@ groups:
 - **Z — Distribution-family** — conjugate posteriors, affine
   closures (§27).
 
-The complete A-Y catalog is large and belongs in an appendix,
+The complete A-Z catalog is large and belongs in an appendix,
 not §17 prose. The appendix is tracked in §34 Chunk-Slotted
 Work and will ship with the stdlib reference; chunk 04 already
 commits partial enumeration. Approximate blocks (§15.1)
@@ -2266,6 +2595,12 @@ the e-graph. Extraction decisions and what they yield. How
 diagnostics reference which view.
 
 #### 19.1 Extraction Cost Model
+
+*Open.* Cost-vector fields here overlap the §14 O2.4 `cost_of`
+inventory and the §14.2 `loss_of` fields. Three surfaces, three
+divergent field sets, no cross-reference today. Unification
+tracked in chunk 12:
+`planning/v2/v2.1_chunk_reports/12_cost_field_unification.md`.
 
 **Summary.** Residual extraction optimizes against a multi-dimensional
 cost vector (precision, latency, memory, approximation class), not a
@@ -2588,6 +2923,18 @@ selection; those are workflow choices (§0.1 projection-free
 compiler). All numeric values (physical constants, fit parameters,
 data series, initial conditions, topology, observations) cross
 this boundary.
+
+**Dumb-data Python layer.** Python never sees `.myco` types as
+Python classes. The compiled artifact exposes a node catalog (path,
+declared type shape, binding role, units); Python verbs (`bind`,
+`observe`, `run`) operate over those path names, not over spore-
+specific symbols. Spore authors ship one artifact (`.myco` sources
+plus `myco.toml`); there is no Python mirror package. The Python
+library grows along one axis only — generic data primitives — not
+along the shape of any particular model. Locked in
+`v2.1_chunk_reports/09_workflow_data_layer.md`; exact syntax for
+node paths, the typing of the catalog, and the observe output-format
+menu remain open (§35).
 
 #### 23.1 Runtime `where` at Workflow Composition
 
@@ -3037,6 +3384,55 @@ MultivariateNormal, Dirichlet, Multinomial. Meta-families: `Truncated<D>`,
 `Mixture<D₁,…,D_N | weights>`. Conjugate-posterior rewrites.
 Tier B approximate rewrites: Delta method, Fenton-Wilkinson, CLT,
 block-maxima → GEV.
+
+**The `Distribution<U>` contract.** Every Tier 1 and Tier 2
+distribution family implements the `Distribution<U>` capability
+contract. The contract has three required methods and a set of
+optional capability sub-contracts that advertise algebraic
+closures used by Tier A dispatch (§13.2).
+
+Required methods:
+
+- `sample(params) -> Scalar<U>` — draw one realization.
+  Required for Tier C opaque handoff and for Tier B rewrites
+  that reduce to sampling at specific call sites. Backend-
+  owned; the `.myco` signature is the contract surface only.
+- `log_pdf(params, x: Scalar<U>) -> Scalar<unitless>` — log
+  density at `x`. Required for likelihood contributions (§13.8
+  `observe`), training emission (§25), and Tier A closed-form
+  posterior construction. Stdlib atoms for Tier 1 families
+  supply closed forms; user-defined distributions compose
+  `log_pdf` from stdlib atoms.
+- `pdf(params, x: Scalar<U>) -> Scalar<unitless>` — density at
+  `x`, provided as a convenience. May be derived from `log_pdf`
+  (default) or given directly when closed-form density avoids
+  a log/exp round-trip.
+
+Optional capability sub-contracts (advertised on the family
+declaration; see §7.2 and §27.1 table):
+
+- `AffineSelfClosed` — `a * X + b` is in the same family with
+  analytically computed parameters.
+- `SumSelfClosed` — `X + Y` for independent same-family draws
+  is in the family (possibly under shared-parameter
+  constraints).
+- `ProductSelfClosed` — same, under multiplication.
+- `ScaleSelfClosed` — scalar scaling preserves the family.
+- `SmoothTransformable` — smooth differentiable transformation
+  admits a Tier B delta-method rewrite; see Appendix C Z-group.
+- `ReparameterizedSampleable` — sampling via a differentiable
+  transform of a base noise source (e.g., MVN via Cholesky;
+  §13.6, Appendix C Z10).
+- `Conj(X)` — conjugate prior to family X. Fires the
+  conjugate-posterior rewrite catalog (§27.3).
+
+User-defined distributions implement `Distribution<U>` by
+supplying the three required methods (composed over stdlib
+atoms; chunk 08 bans user-declared capability annotations).
+The compiler derives which optional sub-contracts hold when
+possible; when it cannot, the user-defined family routes to
+Tier C. This is the only extensibility path — no annotation
+surface for advertising closures.
 
 #### 27.1 Tier 1 Distribution Families, Table
 
@@ -3645,17 +4041,30 @@ matrix heterogeneous-unit resolution, B6 backend abstraction.
 
 ### 34. Chunk-Slotted Work
 
-**Summary.** Five design chunks carry outstanding work: chunk 05
-matrix details, chunk 06 backend abstraction, chunk 07 type-graph
-to e-graph bridge, chunk 08 joint syntax and coupling, chunk 03
-kernels (resumes after substrate lock).
+**Summary.** Outstanding design chunks: chunk 05 matrix details,
+chunk 06 backend abstraction, chunk 07 type-graph to e-graph bridge,
+chunk 08 joint syntax and coupling, chunk 03 kernels (resumes after
+substrate lock), chunk 11 sum types / enums.
 
 - **Chunk 05.** Matrix details (heterogeneous units, envelope flavors,
   subtype lattice, shape refinements, scalar reconciliation).
 - **Chunk 06.** Backend abstraction.
 - **Chunk 07.** Type-graph ↔ e-graph bridge.
-- **Chunk 08.** B2 + B4 joint syntax / coupling.
+- **Chunk 08.** B2 + B4 joint syntax / coupling; user-`fn` ban and
+  parameterized-relation lock (design resolved, §6 / §7 / §8 prose
+  pending application). Canonical reference:
+  `planning/v2/v2.1_chunk_reports/08_relation_fix_whoops.md`.
 - **Chunk 03.** Kernels, resume after substrate lock.
+- **Chunk 11.** Sum types / enums. Motivation and shape locked
+  (§3.10 stub); exact syntax, pattern-matching power, event-
+  triggered variant transitions, lifted-arithmetic sugar, and
+  workflow binding surface open. Resolves the Mode B open in §35
+  and the number-or-distribution materialization question.
+- **Chunk 12.** Cost-field struct unification across `cost_of`
+  (§14), `loss_of` (§14.2), and the §19.1 extraction cost vector.
+  Three divergent field sets, no cross-reference today. Subsumes
+  the §35 "Memory as a `cost_of` field" open. Canonical reference:
+  `planning/v2/v2.1_chunk_reports/12_cost_field_unification.md`.
 
 ### 35. Other Opens
 
@@ -3729,6 +4138,124 @@ question whether these share §28 kernel routing (likely for GPs),
 require a distinct process-family mechanism, or are treated as
 Tier C opaque PPL handoff. No formal tier boundary drawn; design
 not yet scoped to a chunk.
+
+**Memory as a `cost_of` field.** The `cost_of(expr)` extraction-cost
+struct (§14, §19.1) carries the five O2.4 fields `compute`,
+`approximation`, `condition`, `truncation`, `discretization`. An
+earlier §19.1 draft listed `memory` as a separate dimension; O2.4
+dropped it. Open: is peak allocation a first-class sixth field of
+`cost_of`, or a backend-specific annotation exposed through a
+separate surface? Informs whether `run.config.extraction_policy`
+weights a six-field or five-field vector.
+
+**CC5 site-gated strict rewrites: data path resolved.** CC5 locks
+both category and data path for identify-seam merges and pole
+L'Hopital rewrites. Category (locked 2026-04-20): site-gated strict
+(Appendix C X). Data path (locked 2026-04-22): Layer-3 adjacent
+keyed state (§16.1) mediates firing. Appendix C X splits into X1
+(pole L'Hopital / removable-singularity operator substitution) and
+X2 (identify / quotient-induced value equality). A geometry-body
+`identify coord_a <-> coord_b` declaration produces a Layer-3 site
+record keyed on the locus path (e.g., `seam@SphereSurface.azimuth`)
+carrying the glue map, site predicate, and declaration provenance.
+X2 consults the record: for field expressions on the geometry
+whose coordinates match the predicate, X2 emits a Layer-1 merge
+tagged with the site's identity. Cross-geometry pollution is
+impossible by construction — a site record on one geometry cannot
+be consulted for fields on another. Layer 3's role as dispatch
+table for per-key state (§16.1) extends cleanly to site-keyed
+records; no new layer mechanism introduced.
+
+**Envelope-narrowing promotion: partition labeling.** A default-off
+rewrite whose declared `error_bound` evaluates to zero over the
+e-class envelope is promoted to default-on for that class (§16.3,
+§17.6). Open: for cost accounting and diagnostics, does the promoted
+rewrite move into the default-on bucket (so its
+`cost_of().approximation` contribution drops to zero and it
+disappears from the approximation-class ledger), or does it stay in
+the default-off bucket with a fire-unconditionally-in-this-context
+flag? The first is cleaner algebraically; the second preserves the
+bookkeeping trail for a reader looking up a `Float64 -> Float32`
+conversion in the approximation ledger. Affects §19.1 extraction-
+cost accounting and §22 `explain` surfaces.
+
+**Approximation cost composition.** Two lossy-model rewrites applied
+within the same extracted plan are not in general independent — they
+may reinforce, partially cancel, or compose non-linearly. Current
+§19.1 draft implicitly sums `approximation` contributions. Open
+whether conservative summation is the locked policy (sound but loose
+bound), whether a richer algebra is needed for cases where stdlib
+rewrites carry known non-independence annotations, or whether the
+extractor should surface a warning when multiple lossy rewrites stack
+on the same expression. Affects §17 rewrite-rule cost annotation
+schema and §19.1 extraction-cost accounting.
+
+**Condition cost representation for multi-output operations.** The
+`condition` field of `cost_of` is scalar-valued in O2.4. Matrix
+solves, eigenproblems, and other multi-output operations carry
+richer conditioning structure than a scalar captures — the §17.1
+tolerance classes (entry-wise, operator-norm, spectral, structural)
+are the right shape. Open whether `condition` stays scalar and the
+extra structure is recorded out-of-band, or becomes a sum-type over
+the tolerance classes, or splits into separate fields per class.
+Affects §14 `cost_of` signature and §19.1 extraction-cost
+accounting.
+
+**Stdlib canonical inventory.** The set of stdlib atoms (fn) and
+stdlib-shipped parameterized relations is referenced throughout the
+spec but not enumerated in one place. Deferred to a dedicated chunk
+that locks: the full list of axiomatic primitives (`exp`, `log`,
+`sin`, `cos`, `sqrt`, arithmetic, `smooth_max`, etc.), the
+classification of each surface (fn vs parameterized relation), the
+capability contracts and abstract cost tags for each, and the
+classification of distributions (`log_pdf` / `sample`) and kernels.
+Cross-refs §6, §7, §13.8, §14, §28, §30.
+
+**Mode B: per-instance heterogeneous contract binding.** Chunk 08
+pins three modes for pluggable behavior: Mode A (concrete type),
+Mode B (contract-typed field, heterogeneous across instances of a
+population), Mode C (generic type parameter, homogeneous within a
+type instantiation). Mode B is only usable if `.myco` has a
+mechanism for declaring that different instances of the same
+population can carry different contract implementations, since the
+Python dumb-data layer cannot drive per-instance type dispatch
+(chunk 09 principle). Resolution path: chunk 11 (sum types / enums,
+§3.10 stub) introduces tagged unions as the core mechanism; a
+contract-typed variant field inside an enum lets a population carry
+mixed VC families or any other contract-bound heterogeneity, with
+the compiler picking compile-time specialization when the
+discriminant is static and a runtime discriminant-tagged kernel
+when per-instance. Open items live in chunk 11: the exact syntax,
+event-triggered variant transitions (FSM / life-stage dynamic
+topology), workflow binding surface for enum-typed fields, and
+whether v2.1 ships the full mechanism or a minimum viable subset.
+Cross-refs chunk 08 (three modes), chunk 09 (dumb-data Python),
+chunk 11 (sum types), §3.10 (enum stub), §7 (contracts), §12
+(collections / populations).
+
+**Package dependency story.** Vocabulary is locked (`spore` for
+packages, `hypha` for the CLI, `myco.toml` manifest, `myco.lock`
+lockfile) and the overall shape follows Cargo + uv conventions
+(chunk 10). Resolver algorithm, version semantics (what counts as
+a breaking change for a parameterized relation, a contract, or a
+capability shift), feature model, build-script / codegen surface,
+workspace ↔ Python interaction, cross-spore relation visibility
+(`pub(crate)`-style private relations), registry story, and
+platform / backend metadata in the manifest are all open. None of
+this blocks the core language lock; full spec-level prose is
+deferred post-v2.1 per chunk 10. Cross-refs §2, §36, §37.
+
+**Event scheduling-policy Python API signature.** §10.1 commits to
+the contract (a Python-side policy orders competing firings; three
+stdlib policies ship: priority, random-with-seed, FIFO) but defers
+the exact Python API signature to §24 (workflow verbs) since it is
+a workflow-layer concern. Open: the canonical signature for custom
+policies (e.g., `policy(pending_firings, state) -> List[Firing]`
+vs. a class-based interface with explicit hook methods), how custom
+policies interact with determinism and reproducibility guarantees,
+and the exact menu of state the policy sees. Should be resolved
+when §24 workflow verbs are fleshed out during Phase 1 batch 5
+(§20-§24 audit).
 
 ---
 
@@ -3861,27 +4388,37 @@ values, units, functions, contracts, relations, constraints, events,
 geometry, stdlib calls, workflow-boundary syntax). Placeholder for
 a later pass.
 
-### Appendix C — Rewrite Catalog (A–Y)
+### Appendix C — Rewrite Catalog (A–Z)
 
 **Summary.** Appendix C is the concrete rule surface of the e-graph
-rewrite system: 25 lettered groups (A through Y), each tagged with a
+rewrite system: 26 lettered groups (A through Z), each tagged with a
 faithfulness class (strict, fuzzy-model, fuzzy-tolerance, one-way,
-N-way extraction, forbidden) and an orientation (bidi, uni). LOCKED
-rules ship now; OPEN rules pend a named design item. Every rule
-routes through one of the eight §17 merge sources.
+N-way extraction, forbidden, distribution-family) and an orientation
+(bidi, uni). LOCKED rules ship now; OPEN rules pend a named design
+item. Every rule routes through one of the eight §17 authorization
+sources.
 
 Enumerates the rewrite rules the compiler applies over the e-graph
-substrate (§16, §17). Organized into 25 lettered groups. Each group
+substrate (§16, §17). Organized into 26 lettered groups. Each group
 carries a faithfulness tag (strict / fuzzy-model / fuzzy-tolerance /
-one-way / N-way extraction / forbidden) and an orientation tag (bidi /
-uni). Rules marked **LOCKED** ship now. Rules marked **OPEN** are in
-scope for the current design envelope but pend resolution of a named
-design item. Cross-cutting flags (CC1-5) appear in-line; see §0.1 for
-their normative disposition.
+one-way / N-way extraction / forbidden / distribution-family) and an
+orientation tag (bidi / uni). Rules marked **LOCKED** ship now. Rules
+marked **OPEN** are in scope for the current design envelope but pend
+resolution of a named design item. Cross-cutting flags (CC1-5) appear
+in-line; see §0.1 for their normative disposition.
 
-Merge-source correspondence: the eight merge sources of §17 are
-canonical shapes; the A–Y catalog enumerates the concrete rule surface.
-Every rule below routes through one of the eight sources.
+Authorization-source correspondence: the eight authorization sources
+of §17.1 are canonical shapes; the A–Z catalog enumerates the concrete
+rule surface. Every rule below routes through one of the eight
+sources.
+
+**Catalog closure.** The A–Z catalog is closed for v2.1. New rewrite
+rules are not expressible in `.myco`; the compiler is not a
+user-facing rewrite-authoring surface. Post-v2.1 extensibility lands
+via a Rust-side plugin system invoked from workflow, not via new
+in-language keywords or annotations. Additions to the catalog
+proceed by spec edit and compiler release, on the same cadence as
+stdlib atoms.
 
 ---
 
@@ -4081,9 +4618,12 @@ checking; directional because names cannot be re-inferred. LOCKED.
 **V. Observation injection.** Ground-truth data pinning (§13.9).
 LOCKED.
 
-- V1. `observe(path, data)` installs `path = data` as a forward
-  observation factor; data does not get rewritten by inferred
-  constraints
+- V1. `observe(path, data)` attaches observed data as a layer-2
+  envelope fact on `path`'s e-class (§13.8, §13.9); `log_pdf(data)`
+  contributes to the training loss (§25). Not an equational merge:
+  `path` is not rewritten to `data` in layer 1, and the same `path`
+  elsewhere remains stochastic. Data is never rewritten by inferred
+  constraints.
 
 **W. Obligation retraction.** Deletion, not rewrite. OPEN (chunk 04
 O4.1, cross-ref §8.10, §10.5, §15, §16, §35).
@@ -4092,14 +4632,26 @@ O4.1, cross-ref §8.10, §10.5, §15, §16, §35).
   the compiler-generated `balance(axial_flux)` at the named locus and
   substitutes the user equation
 
-**X. Structural-predicate-gated strict.** Strict/lossless but gated on
-a structural predicate, not value bounds. LOCKED (O4.2 resolved
-2026-04-20).
+**X. Site-gated strict.** Strict/lossless but gated on a site or
+geometric predicate, not value bounds. LOCKED (O4.2 resolved
+2026-04-20; data path locked 2026-04-22 as Layer-3 mediated).
 
-- X1. Pole L'Hopital: at any mesh node coinciding with declared locus
-  pole, rewrite `laplacian(f)` from naive `1/sin(θ)` form to the
-  L'Hopital limit. Also characterizes `identify`-induced merges gated
-  on coordinate predicates.
+- X1. Pole L'Hopital (removable-singularity operator substitution).
+  At any mesh node coinciding with a declared locus pole, rewrite
+  `laplacian(f)` from naive `1/sin(θ)` form to the L'Hopital limit.
+  Operator form changes; value equality is incidental. LOCKED.
+- X2. Identify (quotient-induced value equality). A geometry-body
+  `identify coord_a <-> coord_b` declaration installs a Layer-3 site
+  record (§16.1) keyed on the locus path (e.g.,
+  `seam@SphereSurface.azimuth`) carrying the glue map, site predicate,
+  and declaration provenance. X2 consults the record: for field
+  expressions on the geometry whose coordinates match the predicate,
+  X2 emits a Layer-1 merge to the coordinate-translated counterpart,
+  tagged with the site's identity. Cross-geometry pollution is
+  impossible by construction (site records are owned by the
+  geometry). Supports non-identity glue maps (Möbius-style orientation
+  flips, lens-space identifications) via the record's glue-map field.
+  LOCKED.
 
 ---
 
@@ -4130,24 +4682,69 @@ config.
 
 ---
 
+**Distribution-family rewrites (Tier A closed-form propagation).**
+
+**Z. Distribution-family rewrites.** Analytical envelope propagation
+through stochastic e-classes. Fires from capability contracts on Tier
+1 families (§27.1). Each rule is strict in the distributional sense
+(closed-form parametric image) and monotonic in envelope accumulation
+(§16.2). Tier A analytical-first ordering (§13 preamble) depends on
+this group.
+
+- Z1. Affine closure: `a * X + b` for `X ~ D` with `D :
+  AffineSelfClosed` produces another `D`-draw with analytically
+  derived parameters. LOCKED. Normal, Cauchy, MVN satisfy.
+- Z5. Exp/log transform: `X ~ Normal(μ, σ)` → `exp(X) ~
+  LogNormal(μ, σ)` and the inverse. LOCKED.
+- Z10. MVN Cholesky reparameterization: `X ~ MultivariateNormal(μ,
+  Σ)` rewrites to `X = μ + L @ ε` with `L L^T = Σ` and `ε ~
+  Normal(0, I)` (§13.6). LOCKED.
+- Z11. Pushforward under invertible differentiable map: for
+  `f : Scalar<U_X> -> Scalar<U_Y>` satisfying `Invertible + Differentiable`
+  (both advertised via stdlib capability contracts; §7.2, §17.3)
+  and `X ~ D_X`, the image `Y = f(X)` carries a distributional
+  envelope fact computed by change-of-variables:
+  `log_pdf_Y(y) = log_pdf_X(f⁻¹(y)) - log |det J_f(f⁻¹(y))|`.
+  Produces a `Distribution<U_Y>` envelope fact on `Y`'s e-class
+  without routing to Tier B/C when the Jacobian determinant
+  simplifies symbolically. Falls through to Tier B (delta method
+  via `SmoothTransformable`) when the Jacobian does not simplify,
+  and to Tier C when neither route applies. LOCKED. Bridges
+  invertibility machinery (§17.3) to distributional envelope
+  machinery without a new mechanism.
+
+Intermediate Z-numbers (Z2-Z4, Z6-Z9) are reserved for
+conjugate-posterior rewrites (§27.3 catalog) and approximate
+closures (Tier B: Delta, Fenton-Wilkinson, CLT, block-maxima →
+GEV). The enumeration is closed for v2.1.
+
+---
+
 **Summary table by faithfulness × orientation.**
 
 | faithfulness | bidi | uni | total |
 |---|---|---|---|
-| Strict | ~24 (A1-10, B1-2, C1-4, D1-3, E1-2, F1, G1-3, H1-2, I1) | ~4 (D4-5, X1, J1 forbidden) | ~28 |
+| Strict | ~24 (A1-10, B1-2, C1-4, D1-3, E1-2, F1, G1-3, H1-2, I1) | ~5 (D4-5, X1, X2, J1 forbidden) | ~29 |
+| Distribution-family | ~3 (Z1, Z5, Z10) | ~1 (Z11) | ~4 |
 | Fuzzy-model | — | ~2 (L1-2) | 2 |
 | Fuzzy-tolerance | ~7 (K1-3, M1-2, N1, Q1-2) | ~3 (O1, P1, M2) | ~10 |
 | One-way (lossless uni) | — | ~11 (R1-3, S1-2, T1, U1-3, V1, W1) | ~11 |
 | N-way extraction | — | ~6 (Y1-6) | 6 |
 | Forbidden | 1 (J1 temporal) | — | 1 |
 
-Grand total approximately 58 rules, depending on sub-rule counting.
+Grand total approximately 63 rules, depending on sub-rule counting
+and on how many Z-slots (Z2-Z4, Z6-Z9) the v2.1 conjugate-posterior
+enumeration ultimately occupies.
 
 **Cross-cutting items (flags, not rewrites).** CC1-5 are absorbed
 into normative spec text: CC1 literal-numerics (§4, §4.1), CC2 sanity
 inverses (§5.2 round-trip), CC3 per-residual training emission (§20;
 open as O4.3), CC4 stochastic `~` rewrite blank (§13.8 resolved
-2026-04-20), CC5 pole L'Hopital category (§16.4 resolved 2026-04-20 as
-X-group).
+2026-04-20), CC5 site-gated strict rewrites (§17, Appendix C X):
+category and data path resolved 2026-04-22 — X1 pole L'Hopital
+(removable-singularity operator substitution) and X2 identify
+(quotient-induced value equality), site-indexed via Layer-3 adjacent
+keyed state with provenance tagging; cross-geometry pollution
+impossible by construction.
 
 ---
