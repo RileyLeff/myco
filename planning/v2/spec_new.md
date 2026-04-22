@@ -1503,6 +1503,45 @@ Horse/fly composition pattern for spatial frames. `bind_topology` at
 workflow time for concrete meshes. `on locus:` clause applies
 symmetrically to `relation` and `temporal`.
 
+#### 11.0 Foundations
+
+**Summary.** `geometry` is a first-class language construct. `Domain<G>` is
+the composite-type annotation that binds geometric behavior to a declared
+geometry. The `as` clause attaches named coordinates, units, and extents to
+a domain type. Together these three surfaces express the spatial structure of
+a type without encoding coordinate names or units inside the reusable geometry
+definition.
+
+`geometry G { ... }` declares a first-class language construct. The block
+names the topology class, the coordinate chart, the metric tensor, and any
+named loci for a geometric space. Geometries are reusable across many domain
+types: the same `Euclidean<Dim = 2>` geometry serves a pasture, an image
+domain, or a leaf surface. The geometry body may contain `chart` (local
+coordinate binders for internal readability), `topology`, `metric`, `locus`,
+`requires` (scalar per-instance coefficients the metric depends on), and
+`identify` (periodic seam declarations). Full vocabulary for these keywords
+is given in §11.11.
+
+`Domain<G = SomeGeometry>` is an ordinary Myco composite-type annotation that
+binds a type's geometric behavior to a declared `geometry`. A horse type
+annotated `Domain<G = Euclidean<Dim = 2>>` inherits flat 2D spatial
+semantics; all §11.1 spatial operators (`grad`, `diverg`, `laplacian`, `curl`,
+`normal_grad`, `trace`) applied to fields on that type route through the bound
+geometry's metric. The annotation does not introduce a new kind; it is a
+type-system extension point that provides the compiler with the geometric
+context needed to lower spatial operators to concrete discretized forms at
+workflow composition time.
+
+The `as` clause attaches named physical coordinates, units, and extents to a
+domain-typed composite type. Example: a type declared
+`Domain<G = Euclidean<Dim = 1>> as (depth: Scalar<meter>)` binds the single
+chart coordinate as `depth` with meter units. The mapping is positional: the
+first `as` name binds to the first `chart` binder in the referenced geometry,
+the second to the second, and so on. The `as` clause is required on every
+domain type; the compiler rejects domain types without it. Edge-length units
+supplied in `bind_topology` (§11.5) are validated against the `as`-clause
+coordinate units and a mismatch is a compile error.
+
 #### 11.1 Spatial Operators
 
 **Summary.** Stdlib-recognized spatial operators on locus-scoped
@@ -1610,6 +1649,19 @@ The solid-vs-manifold distinction is load-bearing; using `Sphere`
 interchangeably for the surface and the solid region is a
 category error the compiler rejects.
 
+The `Sphere` geometry carries an `identify` seam declaration for its
+periodic longitude coordinate (`identify phi = 0 <-> phi = 2 * pi`).
+Without `identify`, the compiler would treat the seam as a pair of fake
+boundaries and demand boundary conditions there; `identify` tells the
+compiler those two coordinate values name the same edge. For v2.1,
+`identify` is guaranteed for scalar fields only. Vector and tensor fields
+at a seam may require component remapping or orientation flips (for
+example, tangent vectors on a non-orientable surface); those transforms
+are deferred beyond v2.1 (§35). The `identify` declaration is the surface
+expression point in §11; the underlying mechanism is an X2-group rewrite
+that installs a Layer-3 site record keyed on the seam locus, from which
+Layer-1 merges are derived (§17).
+
 Coordinate-system parameterization lives on the `as` clause, not
 as separate geometry types. `Disk as (r, θ)` expresses a disk in
 polar coordinates; `Ball as (r, θ, φ)` expresses a ball in
@@ -1654,7 +1706,9 @@ unless the modeler writes an explicit merge.
 **Summary.** Geometry becomes a mesh at workflow composition via
 `bind_topology`: resolution, element type (FDM/FVM/FEM), refinement
 policy, boundary identification. Compiler receives a concrete mesh;
-no auto-refinement or adaptation.
+no auto-refinement or adaptation. Network topologies (`rooted_tree`,
+`metric_graph`) require a data schema described below; manifold
+geometries receive mesh resolution via `experiment.compile` instead.
 
 A geometry becomes a mesh at workflow composition. `bind_topology`
 supplies discretization: mesh resolution, element type (FDM /
@@ -1662,6 +1716,44 @@ FVM / FEM basis), refinement policy, boundary identification.
 The compiler receives a concrete mesh and lowers spatial
 operators against it. The compiler does not auto-refine or adapt;
 mesh is a workflow decision.
+
+**Schema for `rooted_tree` and `metric_graph`.** When `bind_topology`
+is called with a network topology, the supplied data object must
+provide:
+
+- **Vertex IDs.** Contiguous non-negative integers starting from zero.
+  IDs must be stable across all workflow bindings that reference this
+  topology instance; the compiler uses them as canonical indices for
+  locus-scoped field arrays and plan inspection output.
+- **Edge list.** A list of vertex-ID pairs. For `rooted_tree`, the
+  direction implied by each pair is parent-to-child, consistent with
+  the anatomical direction away from the root. For `metric_graph`,
+  edges are undirected; an explicit `edge_orientation` map may be
+  supplied to set the canonical sign convention for oriented operators;
+  if omitted the compiler assigns a canonical orientation deterministically.
+- **Edge-length units.** Each edge carries a numeric length value with
+  units. Those units must match the coordinate units declared in the
+  domain type's `as` clause. A unit mismatch is a compile error reported
+  at workflow composition.
+- **Vertex tags.** A map from vertex ID to key-value metadata. Every tag
+  key referenced in a `where`-predicate locus in the geometry (for
+  example `on terminal where role = "leaf"`) must appear as a key in the
+  supplied tag map for every vertex of the relevant locus class. Missing
+  tag coverage is a compile error with a diagnostic naming the undeclared
+  key and the locus predicate that requires it.
+- **Root vertex** (`rooted_tree` only). A single vertex ID designating
+  the root. Required; omission is a compile error.
+
+**Validation.** Missing tag coverage, unit mismatch on edge lengths, gaps
+in vertex IDs, missing root (for `rooted_tree`), or cycles in a
+`rooted_tree` are all compile errors surfaced at workflow composition, not
+at `.myco` parse time.
+
+**Manifold geometries.** `Euclidean<Dim>`, `Interval`, `Rectangle`, `Disk`,
+`Sphere`, `Box`, and `Ball` do not use `bind_topology`. Mesh resolution for
+these geometries is supplied via `experiment.compile(spatial_config=...)`.
+Providing a `bind_topology` call for a manifold domain type is a compile
+error.
 
 #### 11.6 Compiler Discretization Defaults
 
@@ -1703,6 +1795,21 @@ carry a locus-scoped conductance alongside an edge-interior
 water potential. The two declaration styles are not convertible
 to each other and do not merge in the e-graph.
 
+**Subdimensional fields (`over` keyword).** A field may vary over
+fewer dimensions than its containing domain using the form
+`field name: Type over coord`. The named coordinate must appear in the
+domain type's `as` clause. The compiler treats the field as a function
+of the named coordinate(s) only; the value is constant in the
+orthogonal directions. For example, in a 3D `Box` domain with
+`as (x: Scalar<meter>, y: Scalar<meter>, z: Scalar<meter>)`, the
+declaration `field soil_moisture: Scalar<volume_fraction> over z`
+produces a field that varies only with depth while remaining uniform in
+the horizontal plane. Spatial operators applied to a subdimensional field
+operate in the subspace spanned by the declared coordinates; applying
+`grad` orthogonal to the declared coordinates yields zero by definition.
+Multiple coordinates may be listed to form a multi-dimensional
+sub-field (`over (x, y)` in a 3D domain, for instance).
+
 #### 11.8 Default Junction Conditions
 
 **Summary.** Junction default is balance only: conserved-flux sums
@@ -1724,6 +1831,35 @@ modeling choice imposes (continuity) is opt-in. This matches
 the conservation-first posture throughout the language and
 prevents silent assumptions about field matching across
 junctions.
+
+**Locus-scoped relations with `replaces` obligation keys.** When a
+locus-scoped relation replaces a compiler-generated default, it names
+the obligation it replaces using a stable semantic obligation key, not a
+user-chosen relation name. The obligation key is the same canonical
+identifier the compiler uses in plan inspection output. Example:
+`relation leaky_junction on junction replaces balance(axial_flux): ...`
+names `balance(axial_flux)` as the obligation key. The key form is
+`verb(field_name)` where the verb is drawn from the compiler's
+recognized default-generation vocabulary (`balance` for flux-sum-zero).
+Using a stable obligation key ensures `replaces` targets are
+unambiguous across refactoring: renaming the user relation does not
+affect which default it suppresses. Obligation-key semantics are defined
+in §8.10; the `replaces` monotonicity rule (suppression, not retraction)
+is in §10.5.
+
+**Stdlib junction helpers.** `continuous(field)` and
+`kirchhoff(potential, flux)` are stdlib convenience functions, not
+compiler magic. `continuous(f)` expands to a `requires: left.f = right.f`
+continuity condition across all incident edges at a junction.
+`kirchhoff(potential, flux)` bundles `continuous(potential)` with the
+auto-generated `balance(flux)`, expressing the standard Kirchhoff pair
+for a potential-driven network. Users may always write the explicit trace
+equations instead; the stdlib helpers are opt-in shorthand for the common
+case.
+
+Locus-scoped `temporal name on locus:` blocks follow the same
+`on locus:` clause symmetry as locus-scoped relations; they are covered
+in §9.4.
 
 #### 11.9 Embedding Fields Are Regular Fields
 

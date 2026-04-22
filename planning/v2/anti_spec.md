@@ -48,6 +48,7 @@ gap-review stale list, subsequent design locks.
 | homotopy continuation as language feature | workflow Python recipe | belongs on workflow side |
 | stdlib physical constants (`R`, `Avogadro`, etc.) | workflow-injected via `assume_constant` | physical constants are values; values live workflow-side |
 | literal numerics in `.myco` value position | CC1: banned except in unit defs, affine conversion bodies, structural positions (shape tuples / indices / arity) | no two-trust-posture split; all `.myco` files obey one rule |
+| terrain-as-field on irregular domain boundaries (v2.1) | terrain-as-field on a flat domain (the supported v2.1 pattern) | irregular-boundary terrain treatment is an elegance and efficiency concern, not a correctness concern; the flat-domain plus terrain-field composition covers all practical v2.1 use cases; irregular boundaries deferred beyond v2.1 |
 | dimensionless-ratio literal carve-out (`0.5`, `2.0` in a dimensionless expression) | CC1 applies uniformly: bind the ratio as a universal | earlier drafts allowed "obvious" dimensionless ratios inline; CC1 is now position-based not dimensionality-based, so no carve-out exists |
 | universals carrying values (`universal R: Scalar<U> = 8.314`) | `universal R: Scalar<U>` declaration only; value from workflow | CC1 scope |
 | contract composition alias (`contract C := A + B`) | nothing | multi-contract satisfaction (`: A + B + C`) + supertraits already cover the bundle case; alias adds a second spelling with no new expressive power |
