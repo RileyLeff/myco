@@ -183,10 +183,10 @@ Stale-doc-only: §8 C1, C2. Contract-default-relations note merged with §7 H3.
 
 | ID | Finding | Recommendation | Status | Notes |
 |---|---|---|---|---|
-| H1 | `when` clause and edge-triggered event semantics missing | add §10.0 or §10.1 note on `when` trigger surface | ACC | |
-| H2 | Concrete-output-type requirement for events targeting `impl`-typed collections (`event oak_recruit: -> Tree<FarquharC3>`) missing | add to §10.2 | ACC | |
+| H1 | `when` clause and edge-triggered event semantics missing | add §10.0 or §10.1 note on `when` trigger surface | ACC/W | §10.0 "Event Triggers" added before §10.1. Covers: `when` as the trigger surface; Boolean-valued expression referencing participant and container fields; edge-triggered semantics (fires on false-to-true transition only); falling-and-rising fires twice; persistently-true fires once. Illustrative snippet uses workflow-bound universal in threshold comparison (CC1-clean). Probabilistic `when` clause cross-refs §13.1. |
+| H2 | Concrete-output-type requirement for events targeting `impl`-typed collections (`event oak_recruit: -> Tree<FarquharC3>`) missing | add to §10.2 | ACC/W | "Concrete output type for `impl`-typed collections" named paragraph added to §10.2 body. States the rule, gives an `oak_recruit` example, explains that generic event expansion produces concrete types by construction, and declares omission a compile error. |
 | H3 | Specific Python scheduling policy API (`policy(pending_firings, state) -> List[Firing]`) and three stdlib policies not stated | extend §10.1 with API shape + stdlib policies | ACC/W | (b) §10.1 commits to the contract and names the three stdlib policies (priority-based, random-with-seed, FIFO); Python API signature deferred to §24 (workflow verbs) since it's a workflow-layer concern. Open-question entry added in §35 tracking the signature resolution for Phase 1 batch 5 |
-| S1 | v2.1_in_progress "within-event index-order tiebreak" stale | add row to anti_spec: §10.4 three-case analysis replaces index-order tiebreak | ACC | |
+| S1 | v2.1_in_progress "within-event index-order tiebreak" stale | add row to anti_spec: §10.4 three-case analysis replaces index-order tiebreak | ACC/W | Row added to anti_spec.md "Retired architectural framing" table: retired = "within-event index-order tiebreak"; replacement = "§10.4 three-case exhaustive analysis"; why = ordering not needed once the three cases are classified. |
 | C1 | §10.4 "no within-event ordering" vs v2.1_in_progress "tiebreak by index order" | no action on §10; archival plan + S1 handle it | SKIP | stale-doc; S1 covers it |
 | C2 | §10.1 omits the resolved API shape that open_questions has | overlaps H3 | SKIP | covered by H3 |
 

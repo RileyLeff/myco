@@ -1331,6 +1331,39 @@ monotonicity live here.
 things do not know they are dead. Events add facts; no tombstoning, no
 retraction.
 
+#### 10.0 Event Triggers
+
+**Summary.** The `when` clause is the event trigger surface. It
+specifies a Boolean-valued condition that must become true for the
+event to fire. Semantics are edge-triggered: the event fires at the
+moment the condition transitions from false to true, not continuously
+while the condition holds.
+
+An event declaration carries an optional `when` clause whose body is
+a Boolean-valued expression. The expression may reference fields on
+the event participants and on their enclosing container.
+
+```
+event seedling_recruit(plot: Plot):
+    when: plot.canopy_openness > plot.light_threshold
+    -> Tree<SomeConcreteCanopy>
+```
+
+The condition is evaluated at each tick against the current state of
+the referenced quantities. When the condition is false at tick T and
+true at tick T+1, the event fires once at T+1. A condition that
+remains true across consecutive ticks does not re-fire. A condition
+that falls back to false and then rises again fires a second time at
+the second rising edge. One rising transition equals one firing.
+
+A `when` clause with a deterministic threshold (comparing a field to
+a workflow-bound universal) produces one firing per rising-edge
+crossing per eligible participant group. Probabilistic conditions
+(`when: canopy_openness ~ Bernoulli(p)`) are handled under the
+aleatoric scope rules of §13.1 and still obey edge-triggered
+semantics: the sampled outcome is resolved each tick and an edge is
+detected on the resolved Boolean sequence.
+
 #### 10.1 Firing-Order Policy
 
 **Summary.** Firing order for multiple matching events is a
@@ -1379,6 +1412,25 @@ event per T-satisfier. Multi-parameter generic events
 satisfier sets. Each expanded path has its own obligation key
 (§9.2) and participates in firing-order dispatch (§10.1)
 independently.
+
+**Concrete output type for `impl`-typed collections.** An event that
+emits a new entity into a collection typed `[T<impl Contract>; some]`
+must name the concrete output type in the event signature. The
+compiler requires this so that it can route the newly created entity
+to the correct type pool at instantiation time.
+
+```
+event oak_recruit(plot: Plot):
+    when: plot.canopy_openness > plot.light_threshold
+    -> Tree<OakCanopy>
+```
+
+A generic event (`event new_tree<C: Canopy>(plot: Plot): -> Tree<C>`)
+is the shorthand that expands to one concrete event per in-scope
+implementation of `Canopy` (§10.2 cartesian-product rule). Each
+expanded variant carries a concrete output type by construction.
+Omitting the concrete type when targeting a heterogeneous `impl`
+collection is a compile error.
 
 #### 10.3 Cross-Container Events
 
