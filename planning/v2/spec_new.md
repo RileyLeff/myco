@@ -3378,8 +3378,9 @@ dimensions:
 Extraction returns a Pareto front in the cost space by default;
 workflow configuration selects a specific point
 (latency-first, precision-first, or weighted). No default
-scalar weighting — the compiler does not assume one dimension
-dominates.
+scalar weighting; the compiler does not assume one dimension
+dominates. Extraction policy is selected workflow-side (§24)
+via a config surface naming the axis preference.
 
 Consequence: the same e-graph yields different residuals under
 different workflow policies. The residual graph is a projection
@@ -3407,6 +3408,11 @@ representative term per e-class subject to the cost vector
   codegen decisions.
 - **Envelope carriage.** Which layer-2 facts propagate into the
   residual as runtime assertions, which stay compile-time-only.
+- **Name preservation.** Extracted residuals carry their original
+  relation names (CC3 / O4.3); training emission (§25) depends on
+  per-residual identity for loss exposure. Aggressive algebraic
+  collapse that erases relation names is forbidden in the extractor.
+  Open tracking in §35.
 
 The mechanism is stable in broad strokes; the specific
 heuristics are chunk 04 Tier 0 Phase 2 work and remain open.
@@ -3465,11 +3471,28 @@ bound. Scheduling and termination guarantees:
   closure-policy last. Order affects extraction choice but
   not correctness; the final e-graph is determined by the
   rewrite set, not the order.
+- **Closure-policy timing.** Closure-policy selection (Y1-Y6,
+  §8.7) operates at extraction time. During saturation, multiple
+  closure-policy candidates coexist as alternative e-class
+  representations; selection among them happens when the extractor
+  commits to a single residual term, guided by the workflow's
+  closure-policy configuration.
+- **Site-gated strict rewrites.** Site-gated strict rewrites
+  (Appendix C X1 pole L'Hopital operator substitution; X2
+  identify-via-Layer-3 site records consumed on field expressions
+  over the geometry) fire in the algebraic/unit-preserving tier of
+  the scheduling priority. They are strict, so they do not require
+  `approximate` authorization.
 - **Termination bound.** An absolute rewrite-count cap
   (workflow-configurable) prevents pathological
   non-terminating cases. Hitting the bound is a compile
   warning, not an error; the partial e-graph still extracts
   a residual. Practical models do not approach the bound.
+- **Rational-denominator saturation.** Conjugate-multiplication
+  rewrites on rational arithmetic (§26.3) can produce
+  non-terminating saturation chains in pathological cases; the
+  rewrite-count cap catches these. Open work on a non-cap-based
+  termination argument for rational denominators is tracked in §35.
 
 Non-confluent rewrite sets (rare; only possible via
 `approximate` blocks that introduce oriented lossy rewrites in
