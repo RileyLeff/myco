@@ -2169,7 +2169,10 @@ structure.
   is an unknown constant not observed per time-step (module
   scope, `initial:`, or any `~` whose LHS is neither data-bound
   nor in temporal/event scope). Reduces with observation via
-  Bayesian update; participates in training.
+  Bayesian update; participates in training. Workflow-side
+  prior binding for epistemic `~` uses `assume_prior` (§24.4),
+  which attaches a distributional fact to the e-class at
+  training time.
 
 The classification is compiler-derived, not user-annotated.
 The user writes `~` uniformly; the compiler inspects graph
@@ -2188,7 +2191,10 @@ rewrites (Delta, Fenton-Wilkinson, CLT, GEV). Tier C hands the SCC
 to the backend's opaque PPL.
 
 Three tiers of `~` resolution, tried in order per stochastic
-SCC at compile time:
+SCC at compile time. The `Distribution<U>` contract surface
+(required `log_pdf`, `sample`, `pdf`; optional capability
+sub-contracts) that makes Tier A dispatch possible is specified
+in §27.
 
 1. **Tier A — Exact closed-form.** Capability contracts on
    distribution families (§7.2, §27) advertise algebraic
@@ -2197,7 +2203,12 @@ SCC at compile time:
    `SmoothTransformable`, `ReparameterizedSampleable`). When a
    transformation matches a closure contract, the result is
    another member of the family with analytically computed
-   parameters. Closed-form always wins.
+   parameters. Closed-form always wins. Some closure contracts
+   apply conditionally on parameter alignment (`SumSelfClosed`
+   holds for Gamma only under shared rate parameter, for
+   Binomial only under shared success probability); §27.1
+   records the per-family conditions. The full Z-group rewrite
+   catalog that fires from these contracts is in Appendix C.
 2. **Tier B — Approximate rewrite.** When Tier A does not
    close, approximate-block rewrites (Delta method,
    Fenton-Wilkinson, CLT, block-maxima → GEV; §15) apply if
@@ -2206,7 +2217,10 @@ SCC at compile time:
 3. **Tier C — Opaque PPL handoff.** No closed form, no
    user-permitted approximation. The SCC ships to the
    backend's PPL handler (§31). Samples come back; no envelope
-   facts about the parametric form.
+   facts about the parametric form. Opaque distribution
+   families (log_pdf not available from stdlib atoms) route to
+   Tier C by default; the stdlib policy for what qualifies as
+   opaque is tracked in §33 as open item B1.
 
 The compiler records its chosen tier per SCC; inspection
 surfaces (§22) show which tier each stochastic SCC landed on.
@@ -2233,7 +2247,11 @@ The marginalized form lives as an envelope fact on the
 resulting parent distribution. Failed marginalization falls
 through to Tier B/C dispatch (§13.2). Users who want to forbid
 a particular marginalization attach an `observe`-style tether
-that keeps the latent's value in scope.
+that keeps the latent's value in scope. Markov-structured
+discrete latents (HMM-style temporal dependencies) are a
+compile error with diagnostic guidance; they require structural
+handling (forward-backward, particle filter) as specified in
+§28, and do not fall through to Tier C.
 
 #### 13.4 SDE Convention: Itô vs Stratonovich
 
