@@ -814,9 +814,13 @@ supertraits (`contract B : A`). Contracts apply uniformly to types,
 functions, and distribution families. Parameterized and capability
 variants carry compiler-actionable facts.
 
-Contract declaration. Multi-contract satisfaction (`: A + B + C`).
-Supertraits (`contract B : A`). Contracts apply uniformly to types,
-functions, and distribution families. Named-type comparison rules.
+Contracts apply uniformly to types, functions, and distribution
+families. Contract declaration. Multi-contract satisfaction
+(`: A + B + C`). Supertraits (`contract B : A`). Named-type
+comparison rules. Contract bodies are restricted to typed field
+obligations and supertraits; `initial:`, `temporal:`, `d(x) = ...`,
+`step(x) = ...`, and relation bodies are not valid in a contract
+declaration (see §9).
 
 #### 7.1 Parameterized Contracts
 
@@ -902,6 +906,56 @@ did not introduce the collision.
 No same-name collisions across `A + B` ever reach the impl author.
 By the time `T : A + B` is satisfiable, all obligations are
 uniquely named.
+
+#### 7.5 Default Implementations
+
+**Summary.** A contract may supply a default body for an obligation.
+The default applies only when the implementing type does not supply
+its own. A type-supplied definition always takes precedence; defaults
+never override a type-provided obligation.
+
+A contract obligation may carry a default body that composes from
+other obligations on the same contract:
+
+```myco
+contract Comparable {
+    fn magnitude(self) -> Scalar<dimensionless>
+
+    fn smaller_than(self, other: Self) -> Bool {
+        // default: compare along the magnitude axis
+        self.magnitude() < other.magnitude()
+    }
+}
+
+type Mass : Comparable {
+    grams: Scalar<gram>
+
+    fn magnitude(self) -> Scalar<dimensionless> {
+        value_in(self.grams, gram)
+    }
+
+    fn smaller_than(self, other: Self) -> Bool {
+        self.grams < other.grams   // type-supplied; default is ignored
+    }
+}
+
+type Energy : Comparable {
+    joules: Scalar<joule>
+
+    fn magnitude(self) -> Scalar<dimensionless> {
+        value_in(self.joules, joule)
+    }
+
+    // no fn smaller_than supplied; compiler uses contract default
+}
+```
+
+The fallback rule is unconditional: if the implementing type
+provides the obligation (by name and compatible signature), the
+type body wins and the contract default is not used. If the type
+body omits the obligation, the contract default fills it. Contracts
+never re-examine whether a type-supplied body is "better"; the
+type author is the authority on their own type.
 
 ### 8. Relations and Equality
 
@@ -1103,6 +1157,15 @@ produces distinct e-graph ground terms.
 only for truly cross-entity relations. `d(x) = expr` for ODE form,
 `step(x) = expr` for discrete-update form. No `[t+1]` subscript
 surface.
+
+**Type bodies vs. contract bodies.** `initial:` and `temporal:`
+blocks, `d(x) = ...` equations, and `step(x) = ...` equations appear
+only in type bodies. Contracts are structural: a contract body may
+declare typed field obligations and supertraits, nothing more. A
+contract cannot carry initialization or evolution semantics because
+contracts describe what a type exposes, not how that type evolves over
+time. Any attempt to write `initial:` or `temporal:` inside a contract
+body is a compile error (see §7 for the cross-link statement).
 
 #### 9.1 `dt` Provision
 

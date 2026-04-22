@@ -142,13 +142,13 @@ Stale-doc-only: §6 C1, C2.
 
 ### §7 — Contracts
 
-| ID | Finding | Recommendation | Status |
-|---|---|---|---|
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
 | H1 | Diamond-supertrait same-name field rule missing | one sentence in §7.3 or §7.4 | ACC/W | (a) hard error at contract declaration time. `contract C : A + B` with an unresolvable same-name collision between A and B is rejected immediately. §7.4 rewritten with the two-case split (diamond-via-common-Root = one obligation; different-obligations-colliding-on-name = hard error). Silent-shadow and per-impl-disambiguation rejected |
-| H2 | "Contracts cannot declare `initial`/`temporal`" constraint missing | add to §7 (related to §9 H5) | ACC (pick §9 as canonical home, cross-link from §7) |
-| H3 | Contract default implementations missing | add §7.x (fallback-not-override rule) | ACC |
-| H4 | "Uniform application to types, functions, distribution families" should be promoted to §7 preamble | promote statement | ACC |
-| C1 | open_questions vs anti_spec on `condition_weighted` | update open_questions entry to RESOLVED | ACC |
+| H2 | "Contracts cannot declare `initial`/`temporal`" constraint missing | add to §7 (related to §9 H5) | ACC/W | Canonical paragraph added to §9 body ("Type bodies vs. contract bodies." named paragraph); cross-link sentence added to §7 preamble body. Both state the restriction positively: contracts are structural, type bodies own `initial:`/`temporal:`/`d(x)=`/`step(x)=`. |
+| H3 | Contract default implementations missing | add §7.x (fallback-not-override rule) | ACC/W | §7.5 "Default Implementations" added. Fallback-not-override rule stated; code fragment shows a contract with a default `fn label` and a type that overrides it vs. a type that inherits the default. |
+| H4 | "Uniform application to types, functions, distribution families" should be promoted to §7 preamble | promote statement | ACC/W | §7 preamble body paragraph rewritten: "Contracts apply uniformly to types, functions, and distribution families." is now the leading sentence rather than the fifth. The Summary already had it first; body paragraph now matches. |
+| C1 | open_questions vs anti_spec on `condition_weighted` | update open_questions entry to RESOLVED | ACC/W | `open_questions.md` has been deprecated (`open_questions_deprecated_use_spec_new.md`). No edit to the deprecated file is required. C1 is void; status flipped to reflect that the landing point (spec_new.md) already reflects the resolved state via §8.7 Y4 prose and anti_spec. |
 
 Stale-doc-only: §7 C2.
 
