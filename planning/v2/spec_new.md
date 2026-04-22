@@ -3149,6 +3149,17 @@ The eight are enumerated because downstream tooling
 know which source produced any given merge. Source tags travel
 with merges through the e-graph.
 
+No silent inference. Layer-1 merges arise only via these eight
+authorization sources. The compiler does not infer equality from
+structural shape, type identity, name coincidence, or any signal
+outside the enumerated authorizations. Every merge is traceable
+to a source tag.
+
+`replaces` (§8.10, §10.5) suppresses the default-generation merge
+at the declaration site; it does not retract merges already emitted
+before the declaration was processed. Broader retraction semantics
+are tracked as §35 O4.1.
+
 #### 17.2 `identify` vs Relation `=`
 
 **Summary.** Both produce e-class merges but differ in user-facing
@@ -3251,7 +3262,10 @@ debugging, and approximate-block referencing. Representative
 groups:
 
 - **A — Algebraic** — commutativity, associativity,
-  distributivity, identity elements.
+  distributivity, identity elements. Symbolic-math intrinsics
+  (`deriv`, `integrate`; §14.3, §14.4) participate via
+  A-group rewrites on compositions of `Differentiable` atoms
+  and stdlib integration-by-parts rules (Appendix C).
 - **E — Equality / merge** — source-specific rewrites
   following the eight-source enumeration.
 - **Y — Closure-policy** — the Y1-Y6 policies (§8.7).
@@ -3289,11 +3303,23 @@ buckets:
   tolerance rewrites that exceed the default precision.
 
 The partition is what gives `.myco` its conservative default
-posture — a model compiles with zero authorized
-approximations if the modeler wrote none, and any lossy
-rewrite is traceable to a specific block. Default-off
-rewrites fire one-at-a-time, scoped to the block's `body`;
-they do not compose across blocks without explicit nesting.
+posture. A model compiles with zero authorized approximations if
+the modeler wrote none, and any lossy rewrite is traceable to a
+specific block. Default-off rewrites fire one-at-a-time, scoped
+to the block's `body`; they do not compose across blocks without
+explicit nesting.
+
+Extracted residuals preserve their original relation names under
+the CC3 / O4.3 constraint, so training-emission diagnostics
+(§25) can expose per-residual loss contributions; §35 O4.3
+tracks the open tension with strict algebraic collapse.
+
+Envelope-narrowing corollary. A default-off rewrite is promoted
+to default-on at sites where envelope metadata (§16.1 Layer 2)
+collapses its certified error bound to zero. The mechanism is
+canonical in §15.3; this partition treats such a site as
+effectively default-on for the narrowed context without requiring
+an explicit `approximate` declaration.
 
 ### 18. The Type Graph
 
