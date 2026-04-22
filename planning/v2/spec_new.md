@@ -1918,8 +1918,8 @@ geometries ship via stdlib (§11.3), not via new keywords.
 
 **Summary.** Collections via `impl Contract` (heterogeneous element
 type, static monomorphization) and `some` (runtime sizing).
-Iteration patterns, aggregation primitives (`sum`, `product`, `any`,
-`all`, `count`, `argmin`, `argmax`), and narrowing with
+Iteration patterns, aggregation primitives (`sum`, `product`, `max`,
+`min`, `any`, `all`, `count`, `argmin`, `argmax`), and narrowing with
 `where x is T`. Aggregations are stdlib-only.
 
 `impl Contract` (heterogeneous element type, static monomorphization)
@@ -1928,10 +1928,10 @@ Narrowing with `where x is T`.
 
 #### 12.1 Aggregation Primitives
 
-**Summary.** Named stdlib aggregations: `sum`, `product`, `any`,
-`all`, `count`, `argmin`, `argmax`. Units-aware and conservation-
-group-aware. Compose under stdlib-declared e-graph rewrites
-(linearity, distributivity, `sum(map(f, xs))` fusions). No
+**Summary.** Named stdlib aggregations: `sum`, `product`, `max`,
+`min`, `any`, `all`, `count`, `argmin`, `argmax`. Units-aware and
+conservation-group-aware. Compose under stdlib-declared e-graph
+rewrites (linearity, distributivity, `sum(map(f, xs))` fusions). No
 user-declared aggregation surface.
 
 Named stdlib aggregations over collections:
@@ -1939,8 +1939,15 @@ Named stdlib aggregations over collections:
 - `sum(xs)`, `product(xs)` — arithmetic. Units-aware;
   conservation-group-aware (§3.7 blocks cross-sibling sums
   without an explicit `convert`).
+- `max(xs)`, `min(xs)` — scalar extrema. Reduce a collection of
+  unit-compatible scalars to a scalar of the same unit.
+  Differentiability class: subgradient (same as `argmin`/`argmax`;
+  see §12.2). For empty-collection behavior, see §12.3.
 - `any(xs)`, `all(xs)` — boolean.
-- `count(xs)` — cardinality, `Scalar<dimensionless>`.
+- `count(xs)` — number of alive elements, `Scalar<dimensionless>`.
+  For event-time (`some`-sized) collections backed by a bitmask-
+  liveness array, `count` sums the liveness bits, not the backing-
+  array capacity (§12.4).
 - `argmin(xs)`, `argmax(xs)` — handle of the extremal element;
   see §12.2 for the heterogeneous case.
 
@@ -1971,25 +1978,57 @@ internal machinery; surface syntax is the same `argmax` call in
 both cases. The type of the returned handle depends on the
 collection's static element-type structure.
 
+**Tie-break rule.** When two or more elements produce the same
+extremal value, `argmin` and `argmax` return the one with the
+earliest index in the canonical index order of the collection
+(deterministic, no runtime randomness).
+
+**Differentiability class.** `argmin` and `argmax` are subgradient-
+differentiable. Gradient flows through the currently-selected
+element and is undefined at tie points (discontinuous switchover).
+This class drives A-group rewrite routing (§17); callers requiring
+smooth selection should use a soft alternative (tracked §35).
+
 #### 12.3 Empty-Collection Defaults
 
 **Summary.** Aggregations with identity elements use them on empty
-collections (`sum = 0`, `product = 1`, `all = true`, etc.). `argmin`
-and `argmax` have no identity, so empty-reachable calls are compile
-errors; callers must prove non-emptiness or guard.
+collections (`sum = 0`, `product = 1`, `all = true`, etc.). `max`
+returns `-inf` (properly-typed sentinel) and `min` returns `+inf` on
+empty collections. `argmin` and `argmax` have no identity, so
+empty-reachable calls are compile errors; callers must prove
+non-emptiness or guard.
 
 Aggregations behave on empty collections as follows:
 
 - `sum(empty) = 0`, `product(empty) = 1`, `count(empty) = 0`.
 - `any(empty) = false`, `all(empty) = true`.
+- `max(empty)` returns the additive identity element of the
+  extrema lattice: `-inf` (a properly-typed unit-carrying infinity,
+  not a numeric literal). `min(empty)` returns `+inf` by the same
+  convention. These are the correct identity elements for max/min
+  reductions and compose correctly with any subsequent `max`/`min`
+  combining step.
 - `argmin(empty)`, `argmax(empty)` are a **compile error**.
 
 Identity-element defaults on `sum`/`product`/`any`/`all`/`count`
-enable algebraic rewrites without branch logic. `argmin` and
-`argmax` have no identity element, so the compiler rejects
-empty-reachable calls at compile time; the caller must
+enable algebraic rewrites without branch logic. `max` and `min`
+use `-inf`/`+inf` as their identity elements for the same reason.
+`argmin` and `argmax` have no identity element, so the compiler
+rejects empty-reachable calls at compile time; the caller must
 statically prove non-emptiness or guard with a `count > 0`
 check that the compiler can refine against.
+
+**Sentinel injection for masked slots.** In collections that use
+bitmask-liveness lowering (the GPU-batched array-pool design for
+event-time `some`-sized collections; §12.4, §21), aggregation
+kernels cannot skip inactive slots directly: on JAX and PyTorch,
+`jax.numpy.where`/`torch.where` evaluates both branches regardless
+of the condition. The backend emitter therefore injects sentinel
+values into inactive slots before reduction: `-inf` for `max` and
+`argmax` operations, `+inf` for `min` and `argmin` operations. This
+ensures the reduction produces the correct result over alive elements
+and never returns a value from a dead slot. Users observe only the
+alive-element semantics; the sentinels are a lowering artifact.
 
 #### 12.4 Bind-Time vs Event-Time Dynamism
 

@@ -213,11 +213,11 @@ Stale-doc-only: §8 C1, C2. Contract-default-relations note merged with §7 H3.
 
 | ID | Finding | Recommendation | Status | Notes |
 |---|---|---|---|---|
-| H1 | `max` and `min` as collection aggregation primitives missing | add to §12.1 + §12.3 (chunk 02 §4.2 settled) | ACC | |
-| H2 | Backend sentinel injection (`-inf`/`+inf` for masked invalid slots) missing | add to §12.3 or §21 lowering prose | ACC | |
-| H3 | `count` alive-element vs backing-array-length distinction missing | note in §12.1 or §12.4 | ACC | |
-| H4 | `argmin`/`argmax` tie-break rule (deterministic, index order) missing | add to §12.2 | ACC | |
-| H5 | `argmin`/`argmax` differentiability class (`subgradient`) missing | add to §12.2 or §12 compiler-role note | ACC | |
+| H1 | `max` and `min` as collection aggregation primitives missing | add to §12.1 + §12.3 (chunk 02 §4.2 settled) | ACC/W | `max`/`min` bullet added to §12.1 primitive list (scalar extrema, unit-compatible, subgradient); §12.1 Summary updated; §12 preamble Summary updated. §12.3 Summary updated; `max(empty) = -inf`, `min(empty) = +inf` bullet added to §12.3 body list; identity-element prose paragraph updated to name `max`/`min`. |
+| H2 | Backend sentinel injection (`-inf`/`+inf` for masked invalid slots) missing | add to §12.3 or §21 lowering prose | ACC/W | "Sentinel injection for masked slots" named paragraph added at end of §12.3 body. Covers bitmask-liveness lowering context, JAX/PyTorch both-branches-evaluated behavior, `-inf` injection for `max`/`argmax` and `+inf` for `min`/`argmin`, alive-element semantics preservation. |
+| H3 | `count` alive-element vs backing-array-length distinction missing | note in §12.1 or §12.4 | ACC/W | `count(xs)` bullet in §12.1 expanded: "number of alive elements"; added sentence that for bitmask-liveness collections `count` sums liveness bits, not backing-array capacity, with cross-ref §12.4. |
+| H4 | `argmin`/`argmax` tie-break rule (deterministic, index order) missing | add to §12.2 | ACC/W | "Tie-break rule" named paragraph added to §12.2 body after the IR sum-type paragraph. States earliest index in canonical index order wins; deterministic, no runtime randomness. |
+| H5 | `argmin`/`argmax` differentiability class (`subgradient`) missing | add to §12.2 or §12 compiler-role note | ACC/W | "Differentiability class" named paragraph added to §12.2 body after the tie-break paragraph. States subgradient-differentiable, gradient flows through selected element, undefined at tie points, drives A-group rewrite routing (§17), soft alternative tracked §35. `max`/`min` also noted as subgradient in their §12.1 bullet with cross-ref to §12.2. |
 | C1 | §12.3 empty-collection table structurally inconsistent with chunk 02 re: min/max | fixed by H1 | SKIP | covered by H1 |
 
 ### §13 — Probabilistic Programming
