@@ -574,10 +574,60 @@ CC1 enforcement actionable instead of cryptic.
 **Summary.** Base units, derived units, affine conversions,
 dimensional algebra, and unit-generic types. The `convert` declaration
 (four variants), round-trip verification, and `value_in` operator are
-the modeler surface.
+the modeler surface. Unit-normalization rewrites live in the e-graph
+machinery (§17, Appendix C group C); §5 covers the declaration surface
+and the modeler-facing invariants.
 
-Base units, derived units, affine conversions, dimensional algebra,
-unit-generic types.
+#### 5.0 Unit System Fundamentals
+
+**Summary.** `base_unit` introduces an orthogonal dimension axis.
+`Scalar<U>` is the unit-parameterized quantity primitive. Derived units
+are products, quotients, and scalar multiples of existing units.
+Internally, all computation uses base-SI magnitudes; declared units are
+a presentation layer. No implicit unit inference: every `Scalar<U>`
+must have its unit established syntactically or by workflow binding.
+
+A `base_unit` declaration introduces a new orthogonal axis in the
+dimension exponent vector. Example:
+
+```myco
+base_unit meter
+base_unit second
+base_unit kilogram
+```
+
+`Scalar<U>` is the built-in parameterized type for "a real number
+measured in unit U". Derived units are defined as products, quotients,
+and scalar multiples of existing units:
+
+```myco
+unit meter_per_second = meter / second
+unit pascal = kilogram / (meter * second^2)
+```
+
+**Base-unit storage invariant.** Internally, all computation happens in
+base units. Declared units are a user-facing layer; the compiler never
+stores a pascal-magnitude and a kilogram-per-meter-second^2-magnitude
+as distinct objects.
+
+**No implicit unit inference.** The compiler does not infer units from
+context. Every `Scalar<U>` must have its unit established either
+syntactically or by workflow binding; a bare numeric literal in a
+unit-typed position is a compile error.
+
+**Expression-level unit annotation.** A parenthesized expression
+followed by a unit name attaches the unit to the result:
+
+```myco
+(0.1579 + 0.0017 * T_c) mol_m2_s
+```
+
+This is syntactic sugar for multiplying by the unit's base-SI scale
+factor. The result has dimension `mol / (m^2 * s)`.
+
+Unit-normalization rewrites (literal-with-unit to base SI, dimension
+exponent arithmetic, dimensionless collapse) are e-graph rules, not §5
+machinery (§17, Appendix C group C).
 
 #### 5.1 Convert Declarations — Four Variants
 
@@ -613,15 +663,64 @@ compile error with the offending value; exhausted bound accepts.
 #### 5.3 The `value_in` Operator
 
 **Summary.** `value_in(unit)` extracts the raw numeric magnitude of a
-quantity in a named unit (`temperature.value_in(celsius)`). Use
-positions: interop with unit-naive stdlib atoms and external-library
-arguments. Unit must be dimensionally compatible with the receiver.
+quantity in a named unit (`temperature.value_in(celsius)`). Returns
+`Scalar<dimensionless>`. Use positions: interop with unit-naive stdlib
+atoms and external-library arguments. Unit must be dimensionally
+compatible with the receiver. Because internal storage is always in
+base units (§5.0), `value_in` is the only path to a named-unit
+magnitude; no other operator exposes this conversion.
 
 `value_in(unit)` extracts the raw numeric magnitude of a quantity in
 a named unit. Example: `temperature.value_in(celsius)` pulls the
-celsius magnitude from a `Scalar<kelvin>`. Use positions: interop
-with unit-naive stdlib atoms, external-library arguments. Units of
-the argument must be dimensionally compatible with the receiver.
+celsius magnitude from a `Scalar<kelvin>`. The return type is
+`Scalar<dimensionless>`. Use positions: interop with unit-naive stdlib
+atoms, external-library arguments. The argument unit must be
+dimensionally compatible with the receiver.
+
+#### 5.4 Affine Unit Semantics
+
+**Summary.** Affine units (Celsius, gauge pressure) have an offset
+relative to their absolute counterpart. Multiplication and division of
+affine quantities require conversion to the absolute unit first.
+Subtraction of two affine quantities yields a base-unit difference.
+No silent coercion occurs; the compiler rejects disallowed forms.
+
+Temperature in Celsius is an affine unit: its zero point differs from
+Kelvin's. Arithmetic on affine quantities follows these rules:
+
+- `20°C * 2` is not `40°C`. Multiplication by a dimensionless scalar
+  requires converting to Kelvin first: `(20°C.to_base() * 2).value_in(celsius)`.
+- `20°C - 5°C` yields `15 K`, not `15°C`. Subtracting two affine
+  quantities of the same affine unit produces a base-unit difference
+  (the offsets cancel).
+- Adding an affine quantity to a base-unit difference is defined:
+  `20°C + 5 K` is `25°C`.
+- Adding two affine quantities directly is a compile error.
+
+The compiler enforces these rules statically. No silent coercion
+converts between affine and absolute forms.
+
+#### 5.5 Workflow-Boundary Unit Parameter
+
+**Summary.** External data enters with a declared unit via
+`assume_series(..., unit='K')`. The workflow layer converts from the
+declared unit to base units at the binding boundary. See §24 for the
+full workflow-verb inventory.
+
+External data sources are unit-naive (raw floats, CSV columns). The
+`assume_series` verb accepts a `unit` keyword argument naming the
+unit in which the data is expressed:
+
+```python
+experiment.assume_series('atm.temperature', data_in_kelvin, unit='K')
+experiment.assume_series('atm.pressure', data_in_mpa, unit='MPa')
+```
+
+When the dimension of the declared unit matches the declared type of
+the bound field, the workflow layer converts to base units at the
+binding boundary. A dimension mismatch is an error at composition
+time. See §24 for the full workflow-verb inventory and gradient-flow
+implications of `assume_series`.
 
 ### 6. Functions
 

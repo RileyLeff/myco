@@ -113,18 +113,18 @@ Stale-doc-only: §4 C1 (chunk 04 vs §4 exception-3 naming) becomes moot once H1
 
 ### §5 — Units
 
-| ID | Finding | Recommendation | Status |
-|---|---|---|---|
-| H1 | §5 has no preamble; jumps into `convert` with no def of `base_unit`, `Scalar<U>`, derived units | add §5.0 preamble (or forward-reference §3) | ACC |
-| H2 | Affine unit semantics missing (`20°C * 2` rules, subtraction to base-unit diff) | add as §5.4 or fold into preamble | ACC |
-| H3 | Base-unit internal storage invariant missing (why `value_in` exists) | one sentence in §5.3 or preamble | ACC |
-| H4 | Workflow-boundary unit parameter (`assume_series(..., unit='K')`) unplaced | add to §5.3 or §5.5 | ACC |
-| H5 | No-implicit-unit-inference policy not stated | one-line policy note in §5 | ACC |
-| H6 | Named-type arithmetic/comparison coercion rules unplaced | pick a home (§3 or §5); overlaps §3 H2 | ACC/W (via §3.3; §5 should cross-link) |
-| H7 | Expression-level unit annotation syntax `(expr) mol_m2_s` missing | add to §5.0 or §5.4 | ACC |
-| H8 | Forward-reference from §5 to §17 (unit-normalization rewrites) missing | one-line forward reference | ACC |
-| C1 | §5.1 "Required for conservation-group siblings" ambiguous | reword; bare `<->` always legal between same-dimension types | ACC |
-| C2 | §5.3 omits `value_in` return type | state `Scalar<ratio>` or `Scalar<dimensionless, T>` | ACC |
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | §5 has no preamble; jumps into `convert` with no def of `base_unit`, `Scalar<U>`, derived units | add §5.0 preamble (or forward-reference §3) | ACC/W | §5.0 "Unit System Fundamentals" added (spec_new.md §5.0); covers `base_unit`, `Scalar<U>`, derived unit syntax, storage invariant, no-inference policy, expression annotation, §17 forward-ref |
+| H2 | Affine unit semantics missing (`20°C * 2` rules, subtraction to base-unit diff) | add as §5.4 or fold into preamble | ACC/W | §5.4 "Affine Unit Semantics" added; covers multiply-requires-base, subtraction yields base-unit diff, add-diff-to-affine, compile error on affine+affine |
+| H3 | Base-unit internal storage invariant missing (why `value_in` exists) | one sentence in §5.3 or preamble | ACC/W | "Base-unit storage invariant" named paragraph in §5.0; §5.3 Summary cross-refs §5.0 to motivate `value_in` |
+| H4 | Workflow-boundary unit parameter (`assume_series(..., unit='K')`) unplaced | add to §5.3 or §5.5 | ACC/W | §5.5 "Workflow-Boundary Unit Parameter" added with `assume_series` example and dimension-mismatch error; cross-refs §24 |
+| H5 | No-implicit-unit-inference policy not stated | one-line policy note in §5 | ACC/W | "No implicit unit inference" named paragraph in §5.0; also reflected in §5 top-level Summary |
+| H6 | Named-type arithmetic/comparison coercion rules unplaced | pick a home (§3 or §5); overlaps §3 H2 | ACC/W (via §3.3; §5 should cross-link) | |
+| H7 | Expression-level unit annotation syntax `(expr) mol_m2_s` missing | add to §5.0 or §5.4 | ACC/W | "Expression-level unit annotation" named paragraph in §5.0 with `mol_m2_s` example |
+| H8 | Forward-reference from §5 to §17 (unit-normalization rewrites) missing | one-line forward reference | ACC/W | Forward-ref sentence at end of §5.0 body and in §5 top-level Summary (spec_new.md §5.0 closing paragraph) |
+| C1 | §5.1 "Required for conservation-group siblings" ambiguous | reword; bare `<->` always legal between same-dimension types | ACC | |
+| C2 | §5.3 omits `value_in` return type | state `Scalar<ratio>` or `Scalar<dimensionless, T>` | ACC/W | §5.3 body and Summary updated: return type is `Scalar<dimensionless>` (consistent with spec-wide usage) |
 
 ### §6 — Functions
 
