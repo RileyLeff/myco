@@ -298,11 +298,11 @@ Stale-doc-only: §8 C1, C2. Contract-default-relations note merged with §7 H3.
 
 | ID | Finding | Recommendation | Status | Notes |
 |---|---|---|---|---|
-| H1 | Chunk 07 three-option coupling framing (A/B/C) not in open_questions.md | add to open_questions.md Tier 0/1 | ACC | |
-| H2 | Chunk 07 Q1-Q4, Q6, Q7 not in open_questions.md | add to open_questions.md Tier 1 with chunk 05 Q7 / chunk 06 cross-link for Q6 | ACC | |
-| H3 | Chunk 07 dependency ordering (after 04/05/06) not recorded in §34 or open_questions.md | add brief dep note to §34 chunk 07 entry | ACC | |
+| H1 | Chunk 07 three-option coupling framing (A/B/C) not in open_questions.md | add to open_questions.md Tier 0/1 | ACC/W | open_questions.md renamed to open_questions_deprecated_use_spec_new.md on 2026-04-22. Canonical tracker is the chunk 07 report (`planning/v2/v2.1_chunk_reports/07_type_graph_in_progress.md`) which holds the full A/B/C framing (§3); §34 Chunk 07 entry now names the three options and cross-refs the report. |
+| H2 | Chunk 07 Q1-Q4, Q6, Q7 not in open_questions.md | add to open_questions.md Tier 1 with chunk 05 Q7 / chunk 06 cross-link for Q6 | ACC/W | Q1-Q7 live in the chunk 07 report (§7). §34 Chunk 07 entry updated to name the report as the canonical tracker. open_questions.md deprecated; spec_new.md §34 plus chunk report are the replacement. |
+| H3 | Chunk 07 dependency ordering (after 04/05/06) not recorded in §34 or open_questions.md | add brief dep note to §34 chunk 07 entry | ACC/W | §34 Chunk 07 entry updated with "Depends on chunks 04 (expression e-graph substrate), 05 (refinement-lattice examples from matrix types), and 06 (backend-dependent conversion-edge costs)". |
 | H4 | §0.1 Conversion-graph cost model paragraph not forward-ref'd from §18 | add when §18 stub is fleshed out; not urgent for stub | SKIP | deferred with chunk 07 |
-| C1 | Stale §18 cross-references in §0.1 conservation-laws paragraph (line ~85) and §0.1 Part II intro (line ~1915-1916) — point to §18 for SCC/residual classification | replace `(§18)` with `(§20)` in both locations; also note conservation-group membership is genuine §18 concern but enforcement thread is §19.3/§20 | ACC | internal-ref fix from renumbering |
+| C1 | Stale §18 cross-references in §0.1 conservation-laws paragraph (line ~85) and §0.1 Part II intro (line ~1915-1916) — point to §18 for SCC/residual classification | replace `(§18)` with `(§20)` in both locations; also note conservation-group membership is genuine §18 concern but enforcement thread is §19.3/§20 | ACC/W | Replaced `(§18)` with `(§20)` at line 85 (conservation-laws paragraph) and line 2849 (SCC classification paragraph). Residual classification is §20's concern; §18 type-graph stub retains its own purpose. |
 
 ### §19 — Residual Graph (Projection)
 

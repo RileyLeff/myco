@@ -82,7 +82,7 @@ without restating it.
 **Conservation laws.** Conserved-group declarations (§3.7) produce
 compile-checked invariants that thread through types, relation
 equality (§8), event firings (§10), and residual classification
-(§18). A conserved group is a compiler property the compiler
+(§20). A conserved group is a compiler property the compiler
 enforces. No user annotation suppresses the check; an explicit
 `constraint` declaration (§8.1) is required if a relation would
 otherwise violate the group.
@@ -2846,7 +2846,7 @@ per level. A deterministic outer iteration wrapping an inner
 stochastic sampler is routine; the outer iteration does not need
 to know what the inner SCC does, only that the inner SCC commits
 to an output e-class. Each SCC carries its own classification
-(§18), residual flavor (§19), and tolerance envelope (§16.4). The
+(§20), residual flavor (§19), and tolerance envelope (§16.4). The
 decomposition is the bridge between the e-graph's global equational
 substrate (§16) and the per-block solver dispatch of Parts II-III.
 
@@ -4804,7 +4804,13 @@ substrate lock), chunk 11 sum types / enums.
 - **Chunk 05.** Matrix details (heterogeneous units, envelope flavors,
   subtype lattice, shape refinements, scalar reconciliation).
 - **Chunk 06.** Backend abstraction.
-- **Chunk 07.** Type-graph ↔ e-graph bridge.
+- **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04
+  (expression e-graph substrate), 05 (refinement-lattice examples
+  from matrix types), and 06 (backend-dependent conversion-edge
+  costs). Three-option coupling framing (A two graphs with
+  explicit bridge / B unified term-e-graph / C type graph compiled
+  to e-graph rules at elaboration) and Q1-Q7 tracked in
+  `planning/v2/v2.1_chunk_reports/07_type_graph_in_progress.md`.
 - **Chunk 08.** B2 + B4 joint syntax / coupling; user-`fn` ban and
   parameterized-relation lock (design resolved, §6 / §7 / §8 prose
   pending application). Canonical reference:
