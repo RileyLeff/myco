@@ -739,7 +739,8 @@ and distributions. Stdlib atoms declare capability contracts like
 `Invertible<_>`, `Differentiable`, `Monotone` that drive e-graph
 rewrites; user functions have no property-declaration surface. The
 compiler derives function properties from body composition plus
-stdlib atom declarations.
+stdlib atom declarations. Functions are also the extensibility
+surface for closure policies (§8.7).
 
 `fn` declarations with parametric generics. Body composition. Contracts
 apply to functions using the same composable machinery used for types
@@ -749,6 +750,61 @@ and distribution families (see §7). Stdlib atoms (`exp`, `log`, `sin`,
 merge sources). User functions carry no property-declaration surface;
 the compiler derives properties from body composition plus stdlib
 atom declarations. No annotation blocks, no `#[...]` attributes.
+
+Kernels are ordinary `.myco` functions that accept two point
+arguments and return a scalar; there is no separate `kernel` keyword
+or kernel kind.
+
+#### 6.1 Generic Functions
+
+**Summary.** Functions may be generic over contracts, including unit
+contracts. A generic function monomorphizes per instantiation at the
+boundary where the generic is concretized.
+
+A unit-polymorphic function uses a contract bound on the type
+parameter:
+
+```myco
+fn arrhenius<U: Unit>(rate_25: Scalar<U>, activation_energy: Scalar<joule_per_mol>, T: Scalar<kelvin>) -> Scalar<U> {
+    rate_25 * exp(-activation_energy / (R * T))
+}
+```
+
+The compiler monomorphizes `arrhenius` once per distinct unit
+instantiation at each call site where the generic `U` is concretized
+to a specific unit. The body is type-checked against the declared
+contract bound; calls that cannot satisfy `U: Unit` are a compile
+error.
+
+#### 6.2 Compiler Roles for `fn` Bodies
+
+**Summary.** The compiler treats a `fn` body as source material for
+several analyses. User functions require no annotation to participate.
+
+What the compiler does with a `fn` body:
+
+- **Dimensional analysis.** Unit-checks every subexpression in the
+  body. A dimension mismatch in the body is a compile error.
+- **Symbolic differentiation.** Bodies participate in `deriv`
+  lowering: the compiler symbolically differentiates the body
+  expression using stdlib-atom capability contracts (`Differentiable`,
+  `Invertible<_>`) to produce the A-group rewrites (§17, Appendix C
+  group A).
+- **Solver emission.** Bodies enter the e-graph as rewrite candidates.
+  The compiler may apply B-group and E-group rewrites to a function
+  call when the called function's stdlib atoms carry the necessary
+  contracts.
+
+**Closure-policy extensibility.** Functions are the extensibility
+surface for closure policies (§8.7, policy Y5). Any `.myco` function
+that accepts a candidate-value collection and user hyperparameters
+and returns a forward value qualifies as a user-defined custom policy.
+
+**User recourse when the compiler cannot infer an inverse.** If the
+compiler cannot derive an inverse for a `fn` body, refactor the
+monolithic function into smaller composable pieces whose inverses the
+compiler can infer from stdlib capability contracts; see `Invertible<_>`
+(§7).
 
 ### 7. Contracts
 

@@ -131,12 +131,12 @@ Stale-doc-only: §4 C1 (chunk 04 vs §4 exception-3 naming) becomes moot once H1
 | ID | Finding | Recommendation | Status |
 |---|---|---|---|
 | H1 | `fn` vs `relation` distinction not stated | add paragraph to §6; or forward-ref to open_questions | O/W | Design decision resolved in chunk 08 (`08_relation_fix_whoops.md`): user `fn` banned in favor of parameterized relations; contract methods become required parameterized relations; kernels become parameterized relations. Spec prose in §6 still describes the prior `fn`-as-first-class surface — stale relative to the lock but full prose rewrite is a chunk-08 application, not a one-line fix. Canonical tracking: §6 inline `*Open (pending application).*` note + §34 Chunk 08 bullet. Applied 2026-04-22 |
-| H2 | Generic function example (`arrhenius<U: Unit>`) missing | add example + one-sentence monomorphization | ACC |
+| H2 | Generic function example (`arrhenius<U: Unit>`) missing | add example + one-sentence monomorphization | ACC/W | §6.1 "Generic Functions" added with `fn arrhenius<U: Unit>(...)` example and monomorphization rule (spec_new.md §6.1) |
 | H3 | Function visibility / module packaging not stated | one sentence cross-ref to §2 (pending visibility subagent) | ACC/W (visibility abolished; no cross-ref needed) |
-| H4 | Compiler roles for `fn` bodies (dimensional analysis, sym-diff, solver emission) not stated | short list in §6 | ACC |
-| H5 | User recourse for uninferable inverses (refactor-into-composable-pieces) not stated | add sentence | ACC |
-| H6 | "Kernels-as-functions" architectural decision not stated | anti_spec entry "no `kernel` keyword" or sentence in §6 | ACC |
-| H7 | Functions as closure-policy extensibility surface not stated | cross-ref from §6 to §8 closure policy | ACC |
+| H4 | Compiler roles for `fn` bodies (dimensional analysis, sym-diff, solver emission) not stated | short list in §6 | ACC/W | §6.2 "Compiler Roles for `fn` Bodies" added: three bullets covering dimensional analysis, symbolic differentiation (deriv lowering), and solver emission / e-graph rewriting (spec_new.md §6.2) |
+| H5 | User recourse for uninferable inverses (refactor-into-composable-pieces) not stated | add sentence | ACC/W | Named paragraph "User recourse when the compiler cannot infer an inverse" added at end of §6.2; cross-refs `Invertible<_>` (§7) (spec_new.md §6.2) |
+| H6 | "Kernels-as-functions" architectural decision not stated | anti_spec entry "no `kernel` keyword" or sentence in §6 | ACC/W | Sentence added to §6 body: kernels are ordinary `.myco` functions (no `kernel` keyword or kind). Anti_spec row added retiring `kernel` as a hypothetical keyword (anti_spec.md "Retired keywords / syntax" table) |
+| H7 | Functions as closure-policy extensibility surface not stated | cross-ref from §6 to §8 closure policy | ACC/W | Sentence added to §6 Summary; named paragraph "Closure-policy extensibility" added in §6.2 with cross-ref to §8.7 policy Y5 (spec_new.md §6.2) |
 
 Stale-doc-only: §6 C1, C2.
 

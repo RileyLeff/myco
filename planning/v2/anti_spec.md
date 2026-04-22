@@ -28,6 +28,7 @@ gap-review stale list, subsequent design locks.
 | `Sphere` as a solid 3D region | `Sphere` = S² (2-manifold, surface only); `Ball` = solid 3D region | mathematical convention; solid-vs-manifold distinction is load-bearing in §11.3 |
 | `laplace` spelling | `laplacian` | one canonical spelling across stdlib and docs |
 | `trace(f, junction, edge)` overload for directional limit at graph junctions | `limit_from(f, junction, edge)` | `trace` kept for manifold restriction (standard PDE trace operator); overloading two mathematically distinct operations on one name invites confusion |
+| `kernel` keyword or kernel kind | ordinary `fn` accepting two point arguments and returning a scalar | kernels are not a distinct construct; §6 states the design positively |
 
 ## Retired annotations / attributes
 
