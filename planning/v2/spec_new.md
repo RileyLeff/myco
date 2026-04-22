@@ -2861,16 +2861,19 @@ and ownership rules.
 
 The e-graph as the internal equality substrate. Three-layer split:
 (1) equational core, (2) envelope metadata attached to e-classes,
-(3) adjacent keyed state (timesteps, events, identity-tagged copies).
+(3) adjacent keyed state (event firings, SCC results, provider
+bindings, sampling traces, event-trigger flags).
 
 #### 16.1 Three-Layer Scoping Split
 
 **Summary.** Three concentric layers: equational core (union-find
 under monotonic merge, one per-run instance), envelope metadata
-(facts keyed by e-class narrowing without merging), adjacent keyed
-state (temporal/event/identity-indexed structures holding e-class
-references). Merge sources write layer 1; contracts and observations
-write layer 2; timesteps and events index layer 3.
+(facts keyed by e-class narrowing without merging, including
+provenance and merge-edge annotations), adjacent keyed state
+(event firings, SCC decomposition results, provider bindings,
+sampling traces, event-trigger state). Merge sources write layer 1;
+contracts, observations, and backend emulation write layer 2;
+event firings and keyed identifiers index layer 3.
 
 The e-graph is structured as three concentric layers. Each layer
 has its own modification rules and its own consumers. Every
@@ -2887,23 +2890,41 @@ principle is restated in §0 as a structural commitment.
    another. Refinement bounds, distributional metadata from
    `~` (§13.8), capability advertisements from contracts
    (§7.2), observed samples (§13.9), tolerance envelopes
-   (§16.4). Monotonic in aggregate (facts compose; none
+   (§16.4), provenance (declaring construct and rewrite trace
+   for every envelope fact). Merge-edge annotations (faithfulness
+   tag in {strict, fuzzy-model, fuzzy-tolerance,
+   distribution-family, one-way}; orientation tag in
+   {bidirectional, unidirectional}) are layer-2 content attached
+   to the merge edge, not to the merged e-class itself (§15,
+   Appendix C). Monotonic in aggregate (facts compose; none
    retract).
 
-3. **Adjacent keyed state (layer 3).** Structures indexed by
-   temporal subscript, event firing, or identity tag, but
-   holding e-class references internally. `y[1]`, `y[2]`,
-   …; per-event copies; identity-tagged instances. The layer
-   is a dispatch table; per-key updates are independent and
-   do not interact equationally with other keys except via
-   explicit relations (`step(y) = expr` writes `y[t+1]` from
-   `y[t]`).
+3. **Adjacent keyed state (layer 3).** Structures indexed by key
+   (event firing, identity tag, SCC identifier, draw ID, provider
+   handle) holding e-class references internally. Per-key updates
+   are independent; keys do not interact equationally except via
+   explicit relations. Content types:
+
+   - Per-event copies keyed on event firing (§10).
+   - Identity-tagged instances of heterogeneous collections.
+   - SCC decomposition results keyed on SCC identifier; carries
+     class assignment (algebraic / stochastic / training /
+     fixed-point / iterative-solve / stepper; §20).
+   - Workflow provider bindings keyed on the handle identifying
+     which workflow-side component supplied a value, observation,
+     or learned parameter (§24).
+   - Stochastic sampling traces keyed on draw ID (§13).
+   - Runtime event-trigger state keyed on event timestamp for
+     edge-triggered `when` clauses (§10).
+
+   Temporal subscripts (`y[t]`, `y[t+1]`) are layer-1 distinct
+   ground terms; each per-tick copy is its own e-class.
 
 Layer choice is how a construct participates. Merges write
-layer 1; contracts and observations write layer 2; timesteps
-and events index layer 3. Downstream consumers read the layer
-relevant to their task; diagnostics surface which layer a
-fact lives on (§22).
+layer 1; contracts, observations, and backend emulation write
+layer 2; event firings and keyed identifiers index layer 3.
+Downstream consumers read the layer relevant to their task;
+diagnostics surface which layer a fact lives on (§22).
 
 #### 16.2 Monotonicity Invariant
 
@@ -2922,7 +2943,9 @@ the substrate-level version of referential truth (§0 principle
 Consequences:
 
 - `replaces` (§8.10, §10.5) suppresses default generation; it
-  does not retract an already-emitted fact.
+  does not retract an already-emitted fact. Broader retraction
+  semantics (whether `replaces` should admit full fact-level
+  retraction) are tracked as open item O4.1 in §35.
 - Events add facts; they do not remove prior e-classes. Dead
   entities continue to exist equationally; their absence from
   subsequent ticks is a layer-3 keyed-state fact, not a
@@ -2937,14 +2960,14 @@ final state is the union of every fact ever claimed.
 
 #### 16.3 Envelope Ownership
 
-**Summary.** Envelope facts have three writers (stdlib contracts,
-compiler rewrites, workflow `observe`), four readers (Tier A/B
-dispatch, extraction pipeline, diagnostics, plan inspection), and
-no invalidator. Conflicting facts emit a coherence error rather
-than silent preference.
+**Summary.** Envelope facts have four writers (stdlib contracts,
+compiler rewrites, workflow `observe`, backend emulation), four
+readers (Tier A/B dispatch, extraction pipeline, diagnostics,
+plan inspection), and no invalidator. Conflicting facts emit a
+coherence error rather than silent preference.
 
-Envelope facts (layer 2) have three classes of writer, one
-class of reader, and no invalidator:
+Envelope facts (layer 2) have four classes of writer, four
+readers, and no invalidator:
 
 **Writers.**
 - **Stdlib contracts.** Capability advertisements (`Invertible`,
@@ -2955,6 +2978,10 @@ class of reader, and no invalidator:
   induction from `{ conserved }`.
 - **`observe` verb (workflow).** Attaches observation envelope
   facts at workflow composition time (§13.8, §13.9).
+- **Backend emulation.** When a backend emulates a missing
+  capability under workflow authorization (§31.1), the
+  emulation path's error class attaches as a layer-2
+  lossy-tolerance envelope fact on the affected e-classes.
 
 **Readers.**
 - **Tier A/B dispatch** (§13.2) consumes capability facts to
@@ -2963,6 +2990,11 @@ class of reader, and no invalidator:
   facts to choose projection flavors.
 - **Diagnostics / `mycoc explain`** (§22) reads every envelope
   fact and surfaces provenance.
+- **Plan inspection** reads envelope facts to report the
+  derivation chain visible to workflow tooling.
+
+Provenance composes by set union when two envelope facts merge
+onto the same e-class; no provenance is dropped.
 
 **Invalidators.** None. The monotonicity invariant (§16.2)
 forbids retraction; envelope facts are as permanent as
@@ -3004,7 +3036,10 @@ by sub-multiplicativity; spectral by Weyl-style inequalities;
 structural by set intersection. `approximate` blocks (§15.1)
 declare flavor in `tolerance_class`; Tier B rewrites
 (§13.2) route via flavor to the appropriate approximation
-family.
+family. The composition rules as stated cover the scalar case;
+tensor-shape extension (how tolerance envelopes compose across
+tensor-valued expressions) is tracked in chunk 05 §3.3 (matrix
+and tensor types).
 
 ### 17. Equality-Introducing Machinery
 
