@@ -2472,6 +2472,23 @@ on lowering choice). The two can diverge, and `condition_of`
 makes the distinction inspectable. Primary consumer: the Y4
 `condition_weighted` closure policy (§8.7).
 
+Extraction ranking (§19 cost/extraction) consumes Level I and
+Level II only. Level III requires runtime numerical computation
+and is unavailable to closure policies at extraction time.
+Diagnostic surfaces (§22) can expose Level III at post-run
+inspection.
+
+The algorithmic-vs-problem duality is concrete in practice.
+`(exp(x) - 1) / x` and `expm1(x) / x` compute the same
+mathematical value: at small `x` the problem is well-conditioned
+(Level I tight), but the naive algorithm suffers catastrophic
+cancellation (Level II loose); the `expm1` algorithm holds
+Level II tight. For a linear solve `A x = b`, Level I
+conditioning is κ(A); Level II depends on the algorithm the
+compiler chose: Gaussian elimination tracks pivot quality,
+QR tracks the Q factor. The distinction is inspectable at
+compile time without running the model.
+
 #### 14.2 `loss_of` — Named-Field Return
 
 *Open.* Field inventory overlaps `cost_of` (§14) and the §19.1
@@ -2527,6 +2544,37 @@ collapse at compile time. Distinct from SDE stochastic integration.
 
 `integrate` is distinct from SDE-style stochastic integration
 (§13.4), which has its own Itô/Stratonovich convention.
+
+#### 14.4 `deriv` — Symbolic, Algorithmic, Runtime
+
+**Summary.** `deriv(f, x)` returns the derivative of `f` with
+respect to `x`. The compiler resolves it through three ordered
+lowering modes: symbolic (e-graph closes it at compile time),
+algorithmic (compile-time chain-rule expansion via capability
+contracts), and runtime (backend autodiff for SCCs the compiler
+cannot expand symbolically).
+
+- **Symbolic.** Stdlib atoms carry `Differentiable` capability
+  contracts (§7.2); composition rules fire as A-group rewrites
+  (§17, Appendix C). `deriv(sin(x), x)` rewrites to `cos(x)`
+  at compile time. No runtime cost; the derivative collapses
+  entirely in the equational core (Layer 1).
+- **Algorithmic.** When the expression composes `Differentiable`
+  atoms but symbolic simplification does not terminate (e.g.,
+  deeply nested compositions), the compiler emits a structural
+  chain-rule expansion using the atom-level derivatives.
+  Still compile-time; no runtime AD. Materializes as A-group
+  rewrites.
+- **Runtime.** When the SCC exceeds a size threshold or contains
+  unexpanded closure policies, `deriv` lowers to the backend's
+  autodiff facility. Fallback for large SCCs; gated on §33 B6
+  backend-AD ownership. Runtime AD does not participate in the
+  equational core.
+
+The chosen mode is inspectable via `.mode` on the `deriv`
+return, matching `condition_of`'s accessor pattern. `deriv`
+is valid only on expressions composing `Differentiable`-tagged
+atoms.
 
 ### 15. Approximate Blocks
 
