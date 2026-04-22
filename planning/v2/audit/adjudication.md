@@ -450,3 +450,119 @@ Batch 5 (§20-§24) raised the following new cross-cutting items:
 - **Hypothetical plan re-evaluation (`with_assumption`) fate** (§22 H3). Legacy spec.md §14.5:3217-3229 describes `plan_b = artifact.plan.with_assumption(...)` for experimental-design use cases. Carries "settled" status in legacy text but has no v2.1 landing and no retirement. Either ship as part of §22 plan inspection (the feature is small once the inspection surface is written) or retire. Needs Riley's call.
 - **Visualization in v2.1** (§22 H10). Legacy Appendix B.5/B.6 describes graph IR + Graphviz/D2/Mermaid/Cytoscape renderers. Appendix B is flagged for wholesale retirement in anti_spec.md, so the specific renderer list is implicitly gone, but spec_new.md does not state whether graphical plan inspection ships in v2.1 at all or is Part VII deferred. §22 should explicitly name the answer.
 - **Per-collection bind-static vs module-wide dynamic classification** (§21 C2). §21.1 classifies whole modules as dynamic if any event exists. v2.1_in_progress:1660-1666 allows per-collection bind-static inference: `some`-sized collections with no targeting events can skip mask-update machinery even in otherwise-dynamic modules. Two different granularities of the same concept. Needs Riley's call: either §21 adopts the per-collection form (and §21.4 gains a "bind-static skips mask emission" bullet) or the per-collection form retires explicitly.
+
+---
+
+## Batch 6 (§25-§29) — pre-adjudicated
+
+### §25 — Training Emission
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Stdlib loss helpers `soft_penalty(weights)` and `augmented_lagrangian(weights, mu, lambda_init, mu_schedule)` unnamed in §25 | name both helpers or forward-ref Part IV | ACC | v2.1_in_progress:1082-1096 locked |
+| H2 | Dual-state API shapes for `augmented_lagrangian` (PyTorch-mutable vs JAX-pure) | workflow-side; §25 cross-ref | ACC | v2.1_in_progress:1089-1093 |
+| H3 | `model.residuals` workflow surface (`Residual` object shape) unnamed | name or cross-ref §31 | ACC | v2.1_in_progress:1076-1080 |
+| H4 | Refinement-type bounds as workflow-visible projection-target metadata | sentence in §25 | ACC | v2.1_in_progress:1057-1060 |
+| H5 | Negative list ("not auto-emitted": projection flavor, loss aggregation, dual updates, annealing) | add 4-item bullet | ACC | v2.1_in_progress:1104-1106 |
+| H6 | Pre-training against hand-coded heuristic | workflow recipe; no §25 mention needed | SKIP | v2.1_in_progress:1098-1102 |
+| H7 | Training-mode consistency-loss substitution rule (`lhs = rhs` → `(lhs - rhs)²`) | one-line statement in §25 | ACC | chunk 04 O1 locked |
+| H8 | Opaque-callable gradient-flow in training-SCC | cross-ref §24.2 | ACC | chunk 06 §4.5 tracked |
+| H9 | §25 aggregation presumes `loss_of` named fields (cost-field unification dependency) | `*Open.*` stanza on chunk 12 | O/W | gated on chunk 12 |
+| H10 | Long-rollout gradient regime (checkpointing, truncated BPTT) | forward-ref workflow section or retire | REVIEW | see cross-cutting |
+| H11 | Study-level training / multi-experiment joint loss | cross-ref or note out-of-scope | ACC | workflow-side per chunk 09 |
+| H12 | PINN physics-residual-factor pattern (`learn_trajectory` + temporal equation) | name in §25 or cross-ref §24 | ACC | spec.md §16.4 settled |
+| S1 | Compiler auto-emitted admissibility projections | already anti_spec'd | SKIP | |
+| S2 | Two-phase gradient regime with convergence-penalty non-convergence fallback | decide retain vs retire | REVIEW | see cross-cutting |
+| S3 | Compiler-emitted fixed loss-function menu (`obs_loss`/`consistency_loss`/etc.) | add anti_spec.md row | ACC | superseded by `loss_of` |
+| S4 | Per-experiment `set_weight` Python API | workflow-side; flag-only | SKIP | study-weighting open per chunk 09 |
+| C1 | Warm-start wording conflates between-timesteps (a) / `assume_constant` init (b) / `learn_constant` prior (c) | rewrite to enumerate or pick load-bearing | ACC | enumerate all three |
+| C2 | Constraint enforcement collapses training-time penalty vs runtime projection into single "runtime projection otherwise" | split into three discharge regimes | ACC | compile-time / training-penalty / runtime-projection |
+
+### §26 — Numeric Types
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Fixed-width signed/unsigned integer widths (`Int{8,16,32,64}`, `UInt{8,16,32,64}`) vs single `Integer` row | split or state intent | ACC | chunk 04 §8 granular |
+| H2 | `BigInt`/`BigDecimal` extension-module status not stated in §26.1 | add note | ACC | chunk 04 settled item 14 |
+| H3 | Compiler-internal e-graph use of `Rational` for constant folding | §26.3 bullet naming internal use | ACC | origin of saturation concern |
+| H4 | `Complex` total-ordering resolution invalidates one §35 open sub-item | tidy §35 open-list wording | ACC | follow-up §35 edit |
+| H5 | `§31.1` `host` fallback mode as opt-in escape from Rational-GPU hard error | cross-ref §31.1 | ACC | one-line addition |
+| H6 | AD-ownership citation (chunk 06 B6) bookkeeping | optional parenthetical | SKIP | low priority |
+| H7 | Scalar-level precision downcast (bare `convert`) vs tensor-level (requires `approximate`) | covered by C1 | SKIP | subsumed |
+| S1 | User-facing `Dual<T>` numeric representation | already anti_spec'd | SKIP | |
+| S2 | `Dual<T>` in chunk 04 hierarchy | covered by S1 | SKIP | |
+| S3 | spec.md §4.3 one-parameter `Scalar<U>` | already anti_spec'd wholesale | SKIP | |
+| S4 | Dimensionless-ratio literal carve-out | already anti_spec'd | SKIP | |
+| C1 | §26.2 authorizes `Float64 -> Float32` via bare `convert`; chunks 04/05 require `approximate ... tolerance_class` | decide single authorizing surface | REVIEW | see cross-cutting |
+| C2 | §26.1 single `Integer` row collapses fixed-width hierarchy | split into `Int{8..64}`/`UInt{8..64}` stdlib + `BigInt` extension | ACC | covered by H1 resolution |
+
+### §27 — Distribution Families (Z-group)
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Per-family capability table footnotes (StudentT ν > 2 `SmoothTransformable`, Cauchy/HalfCauchy/Lévy infinite-variance exclusion) | add footnote block or per-row condition annotation | ACC | chunk 04 §11 settled |
+| H2 | Discrete Tier 1 roster (Binomial/Geometric drop) | covered by C1 | SKIP | subsumed |
+| H3 | Multivariate gating: only MVN needs B5; Dirichlet/Multinomial are vector-valued | refine §27.1 B5-gate footnote | ACC | chunk 04 §11 settled |
+| H4 | B1 opaque log_pdf design items (α-stable driving case, 3 sub-questions) | extend §33 B1 entry | ACC | §33 gap, not §27 gap |
+| H5 | NormalInverseGamma + Gamma-Gamma conjugates promoted in chunk 04 but absent from §27.3 | covered by C2 | SKIP | subsumed |
+| H6 | B4 copula-coupling suppresses `SumSelfClosed`/`ProductSelfClosed`/`AffineSelfClosed` firing | add sentence to §27 or §13.2 Tier A | ACC | chunk 04 §8 locked |
+| H7 | v2.2+ deferrals (Matrix-Normal, generalized Wishart, Sklar-copula decomposition) | add §27.5 Tier 2 sentence | ACC | chunk 04 §9 explicit |
+| H8 | StudentT `Reparam` (RSVI implicit reparameterization) marking elision | covered by C2 | SKIP | subsumed |
+| S1 | `Distribution<U>` two-optional-methods shape (pre-chunk-04) | add anti_spec.md row | ACC | superseded by 3-required + sub-contracts |
+| S2 | v2.1_in_progress stdlib distribution list (pre-promotion) | supersession is legitimate; Binomial/Geometric drop is Conflict | SKIP | covered by C1 |
+| S3 | MVN "deferred pending vector/matrix story" | already anti_spec'd | SKIP | |
+| S4 | VI reparameterization as optional method | add anti_spec.md row | ACC | promoted to `ReparameterizedSampleable` sub-contract |
+| C1 | §27.1 discrete roster (5) drops Binomial+Geometric vs chunk 04 (7) / v2.1_in_progress (6); Binomial referenced downstream (§27.3 Beta-Binomial, §13.2 shared-p) | add Binomial row; decide Geometric fate | ACC | re-add Binomial; Geometric drops with anti_spec.md entry |
+| C2 | §27.1 capability rows elide chunk 04 tags (StudentT `AffineSC`, LogNormal `R`/`Sc`, Poisson `S`, etc.) | exhaustive list OR state `A ⇒ Sc` implication | ACC | exhaustively list; reconciliation target is chunk 04 |
+| C3 | §27.3 "catalog is closed" contradicted by chunk 04 promoted NormalInverseGamma + Gamma-Gamma | covered by cross-cutting below | REVIEW | see cross-cutting |
+| C4 | §27 `pdf` as required method (vs v2.1_in_progress + chunk 04 contract shape) | mark default-derived OR state why required | ACC | default-derived from `log_pdf` |
+| C5 | §27 `log_pdf` return type `Scalar<unitless>` vs `Scalar<dimensionless>` rest of spec | rename to `dimensionless` | ACC | spelling consistency |
+
+### §28 — Kernels
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Compact-support / characteristic-length declaration surface (contract vs refinement vs workflow) | three-option bullet in §28.3 or §35 | REVIEW | see cross-cutting |
+| H2 | `condition_of` cross-reference for ill-conditioned Gram matrices | one-line §28.3 or preamble cross-ref to §14 + §30 | ACC | low urgency |
+| H3 | K2 separability declared-vs-inferred open-question cluster forward-ref | one-line §28.1 or §28.3 pointer | ACC | chunk 04 sub-q 5 |
+| H4 | §28 has no pointer from surface to §32 K rewrite cluster or §15.1 `approximate` blocks | final paragraph cross-ref | ACC | reader-orientation |
+| H5 | Fuzzy vs strict equality for kernel equivalences | post-substrate-lock tracker | SKIP | implied open |
+| H6 | K3 low-rank not acknowledged in §28.3 even as deferred | add K3 to §28.3 (third deferred concern) | ACC | chunk 04 §8 |
+| H7 | Riley property-note closed | no action | SKIP | |
+| H8 | K2 separability → Kronecker-structured Gram matrices (chunk 05 gap) | §28.2 sentence OR §30 Kronecker deferred-refinement note | ACC | adjacent chunk 05 gap |
+| S1 | v2.1_in_progress "NEW: Coupling & Kernels" legacy chunk | add anti_spec.md row | ACC | stale in legacy docs |
+| S2 | spec.md coupling-as-kernel references | covered by existing spec.md wholesale retirement | SKIP | |
+| S3 | deprecated-open-questions coupling cluster | globally superseded | SKIP | |
+| C1 | `Stationary` / `Isotropic` derivation mechanism underspecified | §6 / chunk 03 flag; §28.1 consistent with derivation principle | SKIP | not a §28 conflict |
+| C2 | §28.3 defers "to chunk 03" but sparsity actually defers to chunk 05, integration to chunk 03 resume post chunk 04, low-rank to chunk 03 / v2.2 | tighten §28.3 venue naming | ACC | internal precision |
+| C3 | §28 preamble "pending e-graph substrate lock" stale (chunk 04 locked 2026-04-20) | rewrite preamble 2nd paragraph | ACC | separate chunk 03 resume from substrate lock |
+
+### §29 — Units Library
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Ecophys spore content inventory (water potential, gas-exchange, PPFD, LAI, soil water) | optional example list | SKIP | dev_notes carries detail |
+| H2 | Unit-system mechanics live in §5, not §29 — forward-ref not explicit | one-sentence summary pointer | ACC | matches §30 pattern |
+| H3 | Non-SI systems (CGS, imperial) out-of-scope implicit | add to out-of-scope enumeration | ACC | project-vs-language separation |
+| H4 | Stdlib math constants (π, e) — §4 commits bindings but §29 has no pointer | one-line disambiguation | ACC | low urgency |
+| H5 | Conversion-graph cost-model cross-reference to §0.1 / §35 | cross-reference | ACC | unit-conversion edges sourced from §29 |
+| H6 | Same theme as H5 from chunk 07 side | covered by H5 | SKIP | subsumed |
+| H7 | `Scalar<U, T = Float64>` two-parameter form interaction with core units | no action | SKIP | §26 + §5 carry forms separately |
+| S1 | spec.md `units::si` compound-unit catalog (`J_mol_K`, `mol_m2_s`, etc.) | add anti_spec.md row for scope narrowing | ACC | low urgency tidy |
+| S2 | Stdlib physical constants (`R`, Stefan-Boltzmann) | already anti_spec'd | SKIP | |
+| S3 | mock_sperry `use physics::constants` import | covered by mock flag | SKIP | |
+| S4 | mock_sperry inline-valued universal `R = 8.314` | already anti_spec'd | SKIP | |
+| C1 | Derived-unit ship-list scope narrowing (compound units now in ecophys spore, mocks still import from `units::si`) | resolves on mock rewrite | SKIP | not §29 action |
+| C2 | "Standard affine conversions between equivalent SI-derived spellings" wording imprecise — affine conversions are offset-based (Celsius↔Kelvin), not spelling aliases | reword to "between SI-derived units with offset" | ACC | precision |
+| C3 | π/e + R/Stefan-Boltzmann split coherent but §29 does not mediate "where does the units library ship constants?" | one-line disambiguation | ACC | covered by H4 |
+
+---
+
+Batch 6 (§25-§29) raised the following new cross-cutting items:
+
+- **Precision-downcast authorizing surface** (§26 C1). §26.2 authorizes `Float64 -> Float32` via bare `convert` with automatic tolerance envelope emission. Chunk 04 §7 places this rewrite in the 2×3 lossy-tolerance × bidirectional cell, authorizing it via `approximate ... tolerance_class precision_downcast`. Chunk 05 §3.5 states `convert` refuses precision downcast on matrices; `approximate` handles it. Three options: (a) bare `convert` emits tolerance envelope automatically — §26.2 framing, consistent with §15.3; (b) `approximate ... tolerance_class:` required — chunk 04/05 framing, consistent with 2×3 matrix; (c) scalar allows bare `convert`, tensor requires `approximate`, distinction stated explicitly. Leaning (a) for uniform surface unless there is a load-bearing reason for scalar/tensor asymmetry. Needs Riley's call before §26.2 writeback.
+- **Distribution catalog-closure claim vs promoted conjugates** (§27 C3). §27.3 states "the catalog is closed for this release." Chunk 04 §11 explicitly promotes Normal-InverseGamma, NormalInverseGamma (joint μ, σ²), and Gamma-Gamma as shipping in v2.1. §27.3 ships six; chunk 04 promotes eight. Either §27.3 is stale (add two rows) or chunk 04 is stale on two promotions (record in anti_spec.md). The joint NormalInverseGamma case carries a flagged "verify rewrite-pattern language handles joint priors" check; if that check is unresolved, NormalInverseGamma is a legitimate gate. Leaning: ship Gamma-Gamma now; gate NormalInverseGamma on the rewrite-pattern-language check and keep it out of §27.3 with a §35 pointer. Needs Riley's call.
+- **Compact-support / characteristic-length declaration surface** (§28 H1). Wendland and other compact-support kernels have no declarative home. Three candidate surfaces: (a) capability contract `CompactSupport(radius)` on the kernel function, (b) refinement type on the output value, (c) workflow-layer annotation. Chunk 03 deferred to post-substrate-lock (now lock is in). Leaning (a): compact support is a claim about the function, and the refinement-on-output surface doesn't fit (the output is just a scalar; support is a property of the domain). Workflow-layer moves a statically-checkable fact to runtime. Needs Riley's call; affects §28.1 contracts list, §32 K1 rewrite firing condition, and the chunk 03 resume agenda.
+- **§28 preamble staleness** (§28 C3). "pending e-graph substrate lock" line predates chunk 04's 2026-04-20 lock. Should rewrite to distinguish settled substrate from chunk-03-specific open threads. Scope is small (one paragraph). No design decision; drop-in edit during §28 writeback.
+- **Long-rollout gradient-regime disposition** (§25 H10). Legacy spec.md §14.7 describes gradient checkpointing and truncated BPTT as rollout-stability machinery. spec_new.md does not commit or retire either. Options: (a) land as §24 or §31 workflow-config surface (training-dynamics knob), (b) retire in anti_spec.md as workflow-recipe-only (user handles via backend configuration). Leaning (a) — checkpointing is load-bearing for long rollouts and the workflow config surface already exists for similar concerns. Needs Riley's call.
+- **Two-phase solver non-convergence regime fate** (§25 S2). Legacy spec.md §12.5 names a solver-exceed-max-iterations regime with convergence-penalty injection plus gradient detachment via implicit-function-theorem detachment. spec_new.md neither restates nor retires. Options: (a) retain and add a §20/§21 or §25 subsection naming the regime, (b) retire as a backend-specific concern (backend's optimizer handles non-convergence). Leaning (b) — this is solver-dispatch policy and §31 backend framing owns it. Needs Riley's call.
