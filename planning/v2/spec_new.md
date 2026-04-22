@@ -1193,25 +1193,131 @@ special verb. Two cases:
   workflow binding via `assume_constant("config.dt", ...)` or
   `assume_series(...)`. No `bind_dt` verb.
 
+Within a `step(·)` equation, unsubscripted RHS references read the
+prior-tick value and the LHS writes the current-tick value.
+Consequently, `step(a) = b` and `step(b) = a` together form a swap,
+not a cycle, because both RHSs read the pre-tick values of `a` and
+`b` before any assignment takes effect.
+
+Both `d(·)` and `step(·)` forms may appear in the same model.
+`d(·)` variables are advanced by the integrator between ticks;
+`step(·)` variables update at tick boundaries. The compiler composes
+the two update disciplines without user-level coordination.
+
 Time itself (`t`) is not a universal either; temporal indexing
 produces distinct e-graph ground terms (`y[1]`, `y[2]`, …) with
 structural relations between them (§16).
 
-#### 9.2 Per-Path Uniqueness After Generic Expansion
+#### 9.2 Per-Path Uniqueness After Expansion
 
-**Summary.** Generic events and relations expand at compile time to
-one instance per satisfier (cartesian product over generic
-parameters). Duplicate obligation keys across expanded paths are a
-compile error, not a closure-policy situation. Overdetermination
-analysis runs on the fully expanded constraint set.
+**Summary.** Two expansion sources produce per-path obligation keys:
+generic parameter expansion (cartesian product over satisfiers) and
+type-body per-instance expansion (one declaration per instantiation
+of the type). An obligation key is the canonical fully-qualified path
+string (`type_instance.field` with generic parameters bound)
+identifying a unique temporal, initial, or relation obligation after
+all expansion. Duplicate keys from either source are a compile error.
+Overdetermination analysis runs on the fully expanded constraint set.
 
-A generic event or relation (`event<T: Species>(…)`) expands at
-compile time to one concrete instance per T-satisfier (cartesian
-product over all generic parameters). Each expansion path must
-yield a unique obligation key; duplicate keys across paths are a
-compile error, not a closure-policy situation. Overdetermination
-and underdetermination analyses run on the fully expanded
-constraint set, so uniqueness is a pre-analysis hygiene check.
+Two distinct sources produce obligation keys at compile time.
+
+**Generic expansion.** A generic event or relation
+(`event<T: Species>(…)`) expands to one concrete instance per
+T-satisfier (cartesian product over all generic parameters). Each
+expansion path yields one obligation key. Duplicate keys across
+expanded paths are a compile error, not a closure-policy situation.
+
+**Type-body per-instance expansion.** A type that declares
+`initial:` or `temporal:` blocks expands to one per-instance
+declaration per instantiation of that type. If a module-scope
+declaration resolves to the same fully-qualified path as a
+per-instance expansion, or if two per-instance expansions (via
+nested types or multiple instantiation sites) resolve to the same
+path, the compiler emits a diagnostic naming both sources. Duplicates
+from this source are also a compile error, not a closure-policy
+situation.
+
+Overdetermination and underdetermination analyses run on the fully
+expanded constraint set after both sources are resolved, so
+uniqueness is a pre-analysis hygiene check.
+
+#### 9.3 Initialization
+
+**Summary.** Four mutually exclusive mechanisms initialize the value
+of a temporal quantity at the start of a simulation. The compiler
+emits a diagnostic for any fully-expanded temporal quantity path that
+lacks exactly one of the four. Workflow verbs for the three non-
+inline mechanisms are defined in §24.
+
+Every fully-expanded temporal quantity path must have exactly one
+initialization mechanism. The four options are:
+
+- **`initial:` block in a `.myco` type body.** The value is fixed at
+  compile time as a structural expression (free of numeric literals
+  per CC1). This is the inline form: the initialization lives in the
+  same `.myco` source as the temporal declaration.
+
+  ```
+  type SoilColumn {
+    moisture: Scalar<volume_fraction>
+
+    temporal: {
+      d(moisture) = infiltration_rate - evaporation_rate
+    }
+
+    initial: {
+      moisture = moisture_field_capacity
+    }
+  }
+  ```
+
+  Here `moisture_field_capacity` is a universal or workflow-bound
+  quantity.
+
+- **`assume_initial(path, value)`.** A workflow verb that injects a
+  fixed constant as the initial value. The path is the
+  fully-qualified obligation key. The value is workflow-supplied and
+  not written into `.myco` source.
+
+- **`learn_initial(path, prior)`.** A workflow verb that declares the
+  initial value as a learnable parameter, initialized from the given
+  prior and trained via the standard gradient pipeline.
+
+- **`learn_trajectory(path, ...)`.** A workflow verb that declares
+  the full time trajectory as a learned function, not just the t=0
+  slice. This subsumes initialization: the trajectory model is
+  responsible for predicting the state at every timestep.
+
+The four mechanisms are mutually exclusive per path. If a path
+receives more than one, the compiler emits a diagnostic naming the
+conflicting declarations. If a fully-expanded path receives none, the
+compiler emits a missing-initialization diagnostic naming the path
+and its declaration site. Detailed verb semantics for
+`assume_initial`, `learn_initial`, and `learn_trajectory` are in
+§24.
+
+#### 9.4 Locus-Scoped Temporal Blocks
+
+**Summary.** `temporal name on locus:` is legal by symmetry with
+`relation name on locus:` (§11). State evolution that applies only at
+a specific locus of a domain is expressible as a locus-scoped
+temporal block, separate from the bulk temporal declarations that
+govern the domain interior.
+
+The `on locus:` clause applies symmetrically to both `relation` and
+`temporal`. A locus-scoped temporal block declares state evolution
+equations that fire only at the named locus of the enclosing domain.
+The locus mechanism, locus vocabulary, and geometry machinery are
+defined in §11.
+
+A common use case is boundary-specific evolution: a soil domain may
+have bulk diffusion governed by one `temporal` block in the type body,
+and surface evaporation governed by a separate `temporal
+surface_drying on top_boundary:` block that applies only at the
+domain's top locus. The compiler treats the two blocks as distinct
+obligation keys (§9.2) because their paths include the locus
+qualifier. No user-level coordination is required to compose them;
+the compiler assembles the full update from the resolved keys.
 
 ### 10. Dynamic Topology and Events
 

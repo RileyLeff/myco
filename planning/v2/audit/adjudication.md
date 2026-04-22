@@ -165,15 +165,15 @@ Stale-doc-only: §8 C1, C2. Contract-default-relations note merged with §7 H3.
 
 ### §9 — State and Time
 
-| ID | Finding | Recommendation | Status |
-|---|---|---|---|
-| H1 | Four initialization mechanisms (`initial` block, `assume_initial`, `learn_initial`, `learn_trajectory`) and mutual exclusion missing | add §9.x; largest gap in §9 | ACC |
-| H2 | `step(·)` pre-tick RHS / current-tick LHS semantics + swap-not-cycle consequence missing | two sentences in §9 | ACC |
-| H3 | Mixing `d(·)` and `step(·)` coexistence rule missing | one sentence in §9 | ACC |
-| H4 | Per-path uniqueness for type-body instance expansion missing | expand §9.2 to cover both expansion sources | ACC |
-| H5 | No-override rule (contracts cannot carry `initial`/`temporal`) missing | add to §9; cross-link from §7 H2 | ACC (§9 is canonical; §7 H2 cross-links here) |
-| H6 | Locus-scoped `temporal name on locus:` missing | add §9.x | ACC (also resolves §2 H3 and §11 H10 — temporal is legal on loci, so temporal is not a module-scope-only construct) |
-| C1 | §9.2 never defines "obligation key" despite §10.2 citing it | add definition to §9.2 | ACC |
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Four initialization mechanisms (`initial` block, `assume_initial`, `learn_initial`, `learn_trajectory`) and mutual exclusion missing | add §9.x; largest gap in §9 | ACC/W | §9.3 Initialization added. Four mechanisms listed as bullets with mutual-exclusion rule, compiler diagnostic for missing/duplicate initialization, and cross-ref to §24 for verb semantics. Code snippet uses `moisture_field_capacity` (workflow-bound universal, no CC1 violation). Workflow verbs `assume_initial`, `learn_initial`, `learn_trajectory` already appear in §24 preamble. |
+| H2 | `step(·)` pre-tick RHS / current-tick LHS semantics + swap-not-cycle consequence missing | two sentences in §9 | ACC/W | Two sentences added to §9.1 body after the discrete-form bullet: pre-tick RHS / current-tick LHS rule, then swap-not-cycle consequence. |
+| H3 | Mixing `d(·)` and `step(·)` coexistence rule missing | one sentence in §9 | ACC/W | One paragraph (three sentences) added to §9.1 body immediately after the H2 sentences: both forms legal in same model, update discipline distinction, compiler composes without user coordination. |
+| H4 | Per-path uniqueness for type-body instance expansion missing | expand §9.2 to cover both expansion sources | ACC/W | §9.2 retitled "Per-Path Uniqueness After Expansion". Body expanded: generic expansion paragraph retained; new "Type-body per-instance expansion" paragraph covers per-instance expansion colliding with module-scope or other per-instance expansions, with compile-error diagnostic naming both sources. |
+| H5 | No-override rule (contracts cannot carry `initial`/`temporal`) missing | add to §9; cross-link from §7 H2 | ACC/W | Subsumed by §7 H2 landing. §9 already carries the "Type bodies vs. contract bodies." paragraph (spec_new.md lines 1169-1176) added during the §7 H2 edit. No further §9 edit needed. |
+| H6 | Locus-scoped `temporal name on locus:` missing | add §9.x | ACC/W | §9.4 Locus-Scoped Temporal Blocks added. States `on locus:` applies symmetrically to `relation` and `temporal`; boundary-specific evolution example (bulk diffusion vs. surface evaporation at top_boundary); cross-ref to §11 for locus machinery; obligation-key distinction cross-ref to §9.2. Also resolves §2 H3 and §11 H10. |
+| C1 | §9.2 never defines "obligation key" despite §10.2 citing it | add definition to §9.2 | ACC/W | One-sentence definition added to §9.2 Summary paragraph: obligation key is the canonical fully-qualified path string (`type_instance.field` with generic parameters bound) identifying a unique temporal, initial, or relation obligation after all expansion. |
 
 ---
 
