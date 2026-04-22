@@ -813,31 +813,32 @@ prior-binding (deferred) have all been designed.
 
 ## Literal constants in `.myco`
 
-Current spec permits literal scalar constants and universals at module
-scope in `.myco` (e.g., `universal R: Scalar<J_mol_K> = 8.314`). Question:
-should `.myco` have any literal values at all, or should every value
-enter via a workflow binding verb?
+RESOLVED. CC1 (spec §4, anti_spec "Dropped features") bans literal
+numerics in value position. Physical constants and mathematical
+constants (π, e, `R`, `stefan_boltzmann`, etc.) are ordinary
+stdlib-declared universals whose values enter at compile time via
+the workflow binding verbs. The stdlib ships default bindings for
+mathematical constants so users do not write them by hand. See
+spec_new.md §4 and the CC1 cluster in anti_spec.md.
 
-Motivation for removing them: `.myco` would become purely structural —
-types, contracts, variables, relations, with zero concrete numerical
-content. Every value the experimenter brings to the model (physical
-constants, parameter guesses, starting conditions, measured data) would
-arrive through the same mechanism (a binding verb). This is a stronger
-form of "the `.myco` describes what is true, the workflow describes what
-you assume" — physical constants like `R` or `stefan_boltzmann` are also
-measured and assumed, just at humanity's scale rather than the
-experimenter's.
+---
 
-Motivation for keeping them: certain values (dimensional constants, unit
-conversions, exact rationals) are intrinsic to the mathematical structure
-and awkward to require binding for. Also clarity: a formula like
-`value_25 * exp(E / (R * T))` reads naturally with `R` as a universal; it
-becomes noisier if `R` must be bound per experiment.
+## Module packaging and distribution
 
-Revisit after more Tier 2 locking. Touches the workflow API design and
-the question of whether "what the experimenter supplies" and "what humans
-have collectively measured over centuries" are meaningfully different
-categories.
+The §2 surface commits to file-as-module with path-based imports
+(`use path::to::symbol`) and a DAG import graph. Still open:
+
+- Filesystem-to-module-path mapping. How does `use a::b::c` resolve
+  to a file on disk? Fixed convention (`./a/b/c.myco`), configurable
+  project root, or registry lookup?
+- Distribution / registry. Is there a first-class package registry
+  (a "spore" system) for sharing Myco modules, or does distribution
+  piggyback on Python packaging?
+- Versioning and dependency resolution rules for transitive imports.
+
+None of these block the language semantics of §2 (which are
+path-name resolution rules only). Revisit once the workflow
+packaging story is settled.
 
 ---
 ---
