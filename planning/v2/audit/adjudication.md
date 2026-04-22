@@ -566,3 +566,108 @@ Batch 6 (§25-§29) raised the following new cross-cutting items:
 - **§28 preamble staleness** (§28 C3). "pending e-graph substrate lock" line predates chunk 04's 2026-04-20 lock. Should rewrite to distinguish settled substrate from chunk-03-specific open threads. Scope is small (one paragraph). No design decision; drop-in edit during §28 writeback.
 - **Long-rollout gradient-regime disposition** (§25 H10). Legacy spec.md §14.7 describes gradient checkpointing and truncated BPTT as rollout-stability machinery. spec_new.md does not commit or retire either. Options: (a) land as §24 or §31 workflow-config surface (training-dynamics knob), (b) retire in anti_spec.md as workflow-recipe-only (user handles via backend configuration). Leaning (a) — checkpointing is load-bearing for long rollouts and the workflow config surface already exists for similar concerns. Needs Riley's call.
 - **Two-phase solver non-convergence regime fate** (§25 S2). Legacy spec.md §12.5 names a solver-exceed-max-iterations regime with convergence-penalty injection plus gradient detachment via implicit-function-theorem detachment. spec_new.md neither restates nor retires. Options: (a) retain and add a §20/§21 or §25 subsection naming the regime, (b) retire as a backend-specific concern (backend's optimizer handles non-convergence). Leaning (b) — this is solver-dispatch policy and §31 backend framing owns it. Needs Riley's call.
+
+---
+
+## Batch 7 (§30-§34) — pre-adjudicated
+
+### §30 — Matrix and Tensor Primitives
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Opaque-primitive e-graph semantics unspecified (leaf node, capability contracts as class-level metadata, rewrite rules consume those facts) | add paragraph to §30 (or §15) stating the opaque-node handling rule | ACC | stable design implication of the capability-contract framing |
+| H2 | `inverse(A) * b -> solve(A, b)` rewrite unclassified against §17 taxonomy | classify as D-group default-on algebraic rewrite; forward-ref §17 | ACC | parallel to scalar inverse rewrites |
+| H3 | `det(Matrix<U, n, n>) -> Scalar<U^n>` unit signature not stated; `trace` absent entirely | note return-type units gated on chunk 05 §3.2; add `trace` with "(unit TBD)" annotation | O/W | `trace` needed by Wishart/InverseWishart log_pdf |
+| H4 | `condest` missing from §30 despite chunk 04 O2.4 lock | add `condest(A) -> Scalar<dimensionless>`; cite §14.4 Level III `condition_of` consumer | ACC | settled commitment, not open |
+| H5 | `norm`, `rank`, `least_squares`, constructor family (`zeros`/`ones`/`identity`/`diag`/`stack`) absent | add forward-looking note as tentative pending chunk 05 | ACC | scopes the stub accurately |
+| H6 | Structural-subtype stripping rules (`transpose(Symmetric) -> Symmetric`, `inverse(PosDef) -> PosDef`, `A·Aᵀ -> PosSemiDef`) unenumerated in §3.9 or §30 | note enumeration deferred to chunk 05 §3.4 | O/W | matrix analogue of named-type U1-U3 stripping |
+| H7 | §3.9 sparse deferral conflates storage-format (chunk 06 backend) with pattern-as-type-vs-envelope (chunk 05 type system) | split the two deferral notes | ACC | pattern-vs-envelope affects §30's dispatch rule |
+| H8 | Dynamic matrix shapes: open item in deprecated file, silent in §30; chunk 05 §3.8 defers to v2.2 | add scope note: v2.1 tensor shapes compile-time known | ACC | chunk 05 §3.8 settled |
+| H9 | Scalar reconciliation lean (`Scalar<U> := Tensor<U, ()>`) in chunk 05 §3.1 not propagated to §3.8 | record lean as direction note or flag explicitly as blocker | ACC | chunk 05 lean is (i) |
+| H10 | Envelope flavors for matrix quantities open (four flavors in chunk 05 §3.3) | cross-ref §13.6 (cholesky positive-diagonal fact) as concrete example | O/W | chunk 05 §3.3 open |
+| S1 | Legacy spec.md §12 JAX-centric solver emission | wholesale-supersede covers | SKIP | anti_spec.md covers |
+| S2 | Legacy spec.md §12.6 incidence-matrix as compiler-internal | covered by wholesale supersede | SKIP | |
+| S3 | deprecated MVN "deferred pending vector/matrix story" | already covered by §13.6 | SKIP | |
+| C1 | `PositiveDefinite` (§3.9) / `Matrix<_, PositiveDefinite>` (§30) / `PosDef<U, n>` (chunk 05) three-way naming + `Matrix<_, prop>` vs `Matrix<U, m, n>` argument-count mismatch | pick one name; pick one type-constructor form | REVIEW | see cross-cutting |
+| C2 | `inverse(A)` (§30) vs `inv(A)` (chunk 05) naming; §30 omits return-type `Matrix<U^(-1), n, n>` | pick one name; add return-type unit | REVIEW | see cross-cutting |
+| C3 | `eigen` "square A" (§30 general with `Complex` deferral) vs chunk 05 `eigen(Symmetric<U, n>)` only | restrict v2.1 to `Symmetric` input; general-square as "(pending §26.1 Complex lock)" | ACC | chunk 05 is the tighter scope |
+
+### §31 — Backend Trait Surface
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | AD-ownership fork (Option A Myco-owned / B backend-delegate / C hybrid) pros/cons not in §31 or §32 | add §32.3 "AD Ownership Fork" summarizing options + Option C lean + consistency obligation | O/W | chunk 06 §4.3 design venue |
+| H2 | Minimum backend trait API boundary (which ops required vs capability-advertised — e.g. is dense Cholesky required?) not named | add §32 open item citing chunk 06 §4.1 Q2 | O/W | determines how fat the trait is |
+| H3 | PPL return-side message schema (sample values with provenance, gradient estimates, MCMC traces, ESS/R-hat/divergence) absent from §31.2 | expand §31.2 to enumerate return-side schema from chunk 06 §4.4 | ACC | locked design, not open |
+| H4 | PPL protocol open questions: whole-model vs per-factor visibility; sample re-entry as new envelope facts | add to §32 (record sample-re-entry as design lean) | O/W | chunk 06 §4.4 |
+| H5 | Opaque-callable Q1-Q4 (which backend runs callable, training-SCC gradient flow, Matrix/Tensor I/O backend, cross-run portability) | enumerate in §32; record Q1/Q3 lean same-backend, Q2/Q4 genuinely open | O/W | chunk 06 §4.5 |
+| H6 | Framework-specific adapters (NumPyro-style, Pyro-style, Turing.jl, Stan-style) absent from §31.2 | one-sentence acknowledgment in §31.2 | ACC | communicates trait-symmetric mechanism |
+| H7 | `supports_dynamic_shapes` capability absent from §31.1 examples; JAX/PyTorch dynamic-shape difference unaddressed | add `supports_dynamic_shapes` to §31.1 capability examples | ACC | needed for §21 alive-mask lowering |
+| H8 | Chunk 06 §8 Q2/Q3/Q4/Q7 partial coverage (Q2 minimum API, Q3 fallback default, Q4 PPL form, Q7 versioning) | covered by H1-H5, H7, and versioning verification | SKIP | subsumed |
+| S1 | spec.md §13.2 / §13.3 JAX-emitter-primary framing | already anti_spec'd | SKIP | |
+| S2 | spec.md §13.3 slot-based backend interface method list | already anti_spec'd via slot retirement | SKIP | |
+| S3 | v2.1_in_progress PyTorch-primary / JAX-secondary ordering | already anti_spec'd | SKIP | |
+| S4 | spec.md §14.7 `jax.checkpoint` specifics | covered by JAX-emitter retirement | SKIP | |
+| C1 | §31 summary pre-commits autodiff as minimum-API responsibility while §32 lists AD ownership as open (implicitly assumes Options B or C) | qualify summary: autodiff joins minimum API under hybrid/full-delegation | REVIEW | see cross-cutting (couples with §32 C2) |
+| C2 | §31.3 "threads gradients back through Python" + §24.2 "via backend's AD facility (§31)" form a loop without resolving the mechanism | expand §31.3 to state §31 owns backend-side mechanism vs §24.2 model-side gradient semantics | ACC | direction of authority needs stating |
+| C3 | §31.1 "Conservative default" for `error` fallback vs chunk 06 §4.2 "Open question: default policy" | formally lock `error` as default OR move to §32 as explicit open | REVIEW | see cross-cutting |
+
+### §32 — Open Backend Items
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | AD ownership A/B/C details not enumerated | add §32.3 | O/W | covered by §31 H1 cross-cutting |
+| H2 | PPL message-schema specifics not enumerated | add §32.4 (or expand §31.2) | O/W | dedup with §31 H3/H4 |
+| H3 | `bind_controller` opaque-fn fallback (non-differentiable callable in training-time SCC) residue | add §32.5 bullet: stop-gradient / compile error / workflow opt-in | O/W | lean same-backend already in §32.1; fallback is the residue |
+| H4 | Backend versioning status — per dev_notes §31.4 complete | verify §31.4 contains policy; if so chunk 06 Q7 resolved | ACC | cleanup-only per dev_notes |
+| H5 | Capability advertising / fallback policy — per dev_notes §31.1 complete | verify §31.1 writing complete; if so chunk 06 Q2/Q3 resolved | ACC | cleanup-only; default-mode lock separately under §31 C3 |
+| H6 | Cross-backend callable interop (cross-run portability) not surfaced in §32 body | add forward-ref in §32.1 or §32 preamble to §35 | ACC | distinct from intra-run single-backend |
+| H7 | Minimum backend trait API surface not named | add §32.6 bullet — dense Cholesky required vs advertised | O/W | dedup with §31 H2 |
+| S1 | spec.md §13.2 JAX-primary + spec.md §13.3 slot-based interface | already anti_spec'd | SKIP | |
+| S2 | v2.1_in_progress backend-targets ranking | already anti_spec'd | SKIP | |
+| S3 | spec.md §13.3 slot-based backend interface | covered by slot retirement | SKIP | |
+| S4 | chunk 06 §2 "Enzyme + Rust long-term" framing | reframed (not retired) as "one possible backend" per chunk 06 §6 | SKIP | no anti_spec row needed |
+| C1 | §32.1 "workflow-layer glue" escape hatch vs chunk 06 §4.6 v2.2 SCC-level dispatch — ambiguous whether glue is user-managed (two runs) or compiler-managed | add parenthetical: glue is user-managed isolation, not within-run SCC handoff | ACC | prevents compatibility trap with v2.2 |
+| C2 | anti_spec.md `Dual` retirement reason "Part V commits backend-delegated AD" implies Option B while §32 leans Option C | rewrite retirement reason option-neutral: "redundant with backend AD in all three options; risks conflicting representation" | REVIEW | see cross-cutting (couples with §31 C1) |
+
+### §33 — Design Blockers
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | B1 α-stable driving case + three sub-questions (stdlib admissibility, AD infrastructure, Tier C routing) absent from §33 B1 | expand §33 B1 to name driving case + three sub-questions | ACC | chunk 04 §11; §27 H4 flagged same gap |
+| H2 | B2 three candidate syntax shapes (coupled-`~`, `JointCopula`, explicit latent-uniform); B4 blocked-on-B2+B5+B6; distribution-contract-shape gate from chunk 08 | expand §33 B2 with three syntax candidates; expand B4 with dependency chain + chunk-08 contract-shape gate | ACC | chunk 04 §11 + chunk 08 deferred list |
+| H3 | B5 sub-questions in dependency order (heterogeneous-unit → shape refinement → envelope flavors ∥ structural subtypes ∥ scalar reconciliation) not in §33 | enumerate per chunk 05 §7 return-path ordering | ACC | chunk 05 §7 ordering is settled |
+| H4 | B6 central fork (AD ownership) + PPL protocol detail not named in §33 or cross-ref'd | expand §33 B6 to name AD fork (lean hybrid) + PPL protocol | ACC | covered by cross-cutting; naming in §33 is local |
+| H5 | B3 absence from §33 explained (absorbed into B6); should appear as anti_spec.md retirement row, not spec entry | add anti_spec row "B3 as PPL-protocol-only blocker \| absorbed into B6" | ACC | per feedback-memory: no history in spec prose |
+| S1 | chunk 04 §11 "Recommended ordering" dependency reasoning | design-process, not spec content; omit from §33 correctly | SKIP | lives in chunk report |
+| S2 | B3 labeled "Tier C PPL backend protocol" in old list | absorbed 2026-04-20 into B6 | SKIP | covered by H5 anti_spec row |
+| C1 | §33 doesn't assign B2 chunk; §34 assigns chunk 08; chunk 04 §11 still says "future chunk 07" | reconcile chunk assignment (chunk 07 is now type-graph; B2+B4 slot reassigned) | REVIEW | see cross-cutting (couples with §34 C2) |
+| C2 | §33 B2/B4 listed as parallel bullets; chunk 04 §11 says B4 blocked on B2 | add parenthetical to §33 B4 noting it is blocked on B2 closing first | ACC | dependency is settled |
+
+### §34 — Chunk-Slotted Work
+
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Chunk 09 (workflow data layer) missing from §34 | add Chunk 09 entry with locked principles + open items (node-path syntax, catalog type repr, observe format menu, Mode B, parameter-inference API) | ACC | chunk 09 is live locked-principle work |
+| H2 | Chunk 10 (package dependencies) missing from §34 | add Chunk 10 entry noting vocabulary + approach locked; resolver / version semantics / feature model / workspace-Python / registry open; not blocking v2.1 | ACC | chunk 10 partial-lock |
+| H3 | §34 Chunk 03 "resume after substrate lock" is stale — chunk 04 substrate commitment is in spec_new.md §15-§17 | rewrite Chunk 03 entry: substrate commitment present; chunk 03 can resume; name actual open items (unified machinery design, cost model, rewrite-rule declaration, tolerance plumbing, sparsity/characteristic-length, integration semantics) | ACC | chunk 04 O4.1/O4.3/O4.6 are not kernel prerequisites |
+| H4 | Chunk 03 K2/K3 sub-work depends on chunk 05 matrix primitives (Gram assembly, SVD); not stated | add one-line note to §34 Chunk 03 | ACC | chunk 03 §7 + chunk 05 §5 |
+| H5 | §34 Chunk 07 "Depends on chunks 04, 05, 06" overbroad — only substrate commitment is needed; chunk 04 O4.x don't block | refine dependency clause to "substrate commitment (§15-§17, chunk 04 open O4.x don't block), chunk 05 refinement-lattice, chunk 06 conversion-edge costs" | ACC | precision fix |
+| H6 | Chunk 12 (cost-field unification) dependency on locked chunk 04 O2.4 `cost_of` five-field struct not stated | add sentence: "chunk 04 O2.4's five-field `cost_of` is a locked input; option (a) would absorb `loss_of` and §19.1 vector into it" | ACC | makes the constraint visible |
+| S1 | chunk 03 §2 "kernels are ordinary `.myco` functions" framing | superseded by chunk 08 "parameterized relations" lock; anti_spec.md row still uses interim "ordinary `fn` accepting two point arguments" framing | REVIEW | see cross-cutting |
+| S2 | chunk 04 §11 "B2+B4 remain paired for future chunk 07" framing | slot reassigned; chunk 07 is now type-graph, B2+B4 moved out | SKIP | numbering note, not spec construct |
+| C1 | §34 Summary enumerates 6 chunks (body has 7 — chunk 12 missing from summary line) | add "chunk 12 cost-field unification" to Summary sentence | ACC | within-§34 editorial gap |
+| C2 | §34 Chunk 08 label carries stale "B2 + B4 joint syntax / coupling;" prefix — chunk 08 is fn-ban + parameterized-relation only; no B2/B4 content | remove "B2 + B4 joint syntax / coupling;" prefix from Chunk 08 label | ACC | stale carry-over from pre-renumbering plan |
+
+Stale-doc-only conflicts (not tabled): spec.md §12-§13 solver/emitter framing (covered by wholesale spec.md supersede); v2.1_in_progress backend-targets paragraph and "NEW:" chunk stubs (covered by wholesale stale note); deprecated-open-questions MVN / dynamic-matrix / cross-backend-callable entries (already flagged for wholesale retirement).
+
+---
+
+Batch 7 (§30-§34) raised the following new cross-cutting items:
+
+- **AD-ownership fork disposition** (§31 H1 + §31 C1 + §32 H1 + §32 C2 + §33 H4). The three-way fork (Option A Myco-owned / B backend-delegate / C hybrid) has three symptoms in this batch: (i) §31 summary pre-commits AD to the minimum trait API (implicitly Options B/C) while §32 calls the fork open; (ii) §32's preamble names the fork without enumerating pros/cons; (iii) anti_spec.md's `Dual` retirement reason cites "Part V commits backend-delegated AD" which reads as Option B decided; (iv) §33 B6 has a single-phrase entry that doesn't name the fork. Chunk 06 §4.3 records the Option C lean with rationale. Two possible paths: (a) formalize Option C lean in §31.3 / §32.3 with pros/cons + consistency obligation stated, rewrite §31 summary to qualify "autodiff joins minimum API under hybrid/delegation," rewrite anti_spec.md `Dual` reason option-neutral, expand §33 B6 with the fork + PPL protocol; (b) leave fork fully open in §32, rewrite §31 summary to remove AD from the minimum-API commitment entirely. Leaning (a) — the Option C lean is already concrete enough in chunk 06 to formalize. Needs Riley's call.
+- **Matrix naming and argument-count reconciliation** (§30 C1). Three inconsistent spellings for positive-definite matrix type across spec_new.md and chunk 05: §3.9 uses `PositiveDefinite` as a lattice property name; §30 writes `Matrix<_, PositiveDefinite>` (two-argument `Matrix` with property as second arg); chunk 05 §3.1 uses `Matrix<U, m, n>` (three-argument, unit + two shape dims) and the alias `PosDef<U, n>` for the specialized form. Two separable decisions: (i) full name `PositiveDefinite` vs short alias `PosDef`; (ii) type-constructor form — is it `Matrix<U, n, n, PositiveDefinite>` (property as fourth argument), `Matrix<U, n, n> where { structural: PositiveDefinite }` (predicate bound), or a named alias `PositiveDefinite<U, n>` standing on its own? §30 currently uses a form (two-argument `Matrix<_, prop>`) inconsistent with chunk 05 §3.1's three-argument form. Leaning: keep full name `PositiveDefinite` (readability + matches §3.9 table); use named alias form `PositiveDefinite<U, n>` as shorthand for `Matrix<U, n, n>` with the structural property attached; `Matrix<U, m, n>` stays three-argument. Needs Riley's call before §30 writeback and §3.9 lattice finalization.
+- **`inverse` vs `inv` naming** (§30 C2). §30 uses `inverse(A)`; chunk 05 §4 uses `inv(A)`. Chunk 05 also specifies the return type `Matrix<U^(-1), n, n>` which §30 omits. Two options: (a) `inv` (short, matches NumPy/LAPACK convention, chunk 05 short-vocabulary rationale); (b) `inverse` (spelled-out, matches §30 current usage). Leaning (a) `inv` — matches both the broader convention and chunk 05's stated short-lowercase-math-vocabulary rationale. Either choice must add the return-type unit `Matrix<U^(-1), n, n>`. Needs Riley's call before §30 writeback.
+- **Fallback-default-mode formal lock** (§31 C3). §31.1 labels `error` with "Conservative default" which implies it is the decided default; chunk 06 §4.2 explicitly marks default-policy selection as open. Three options: (a) formally lock `error` as default with rationale recorded (safest, no silent performance catastrophes); (b) lock `host` (most permissive); (c) move default-policy selection to §32 as explicit open item. Leaning (a) — `error` being default matches Myco's broader "fail loudly at composition" posture. Small decision; just needs a sentence of rationale. Needs Riley's call.
+- **B2/B4 chunk assignment** (§33 C1 + §34 C2). Three positions in corpus: §33 does not assign B2+B4 to any chunk; §34 Chunk 08 bullet carries stale "B2 + B4 joint syntax / coupling" label (actual chunk 08 is fn-ban + parameterized-relation only — confirmed by chunk 08 report deferred list which excludes B2/B4); chunk 04 §11 "Recommended ordering" still says "future chunk 07" (the chunk-07 slot was reassigned to type-graph work). Net state: B2+B4 is not currently assigned to any chunk. Two options: (a) accept this — B2+B4 remains a blocker with no chunk owner; open a placeholder "future chunk 13 (or similar)" for when design starts; update §34 Chunk 08 entry to remove stale "B2+B4" prefix; update chunk 04 §11 to say "chunk TBD" or similar; (b) assign B2+B4 to an explicit chunk number now and treat the fn-ban work in chunk 08 as separable. Leaning (a) — B2+B4 requires B5 + B6 + chunk-08 contract-shape question to close first; premature chunk assignment would just churn. Needs Riley's call on placeholder-chunk convention.
+- **"Kernels as ordinary functions" anti_spec.md row staleness** (§34 S1). Current anti_spec.md retires the `kernel` keyword and says replacement is "ordinary `fn` accepting two point arguments and returning a scalar." That replacement framing predates chunk 08's user-fn ban. Chunk 08's actual replacement is "parameterized relation." One-row edit to anti_spec.md: change the retirement-reason text from "ordinary `fn` accepting two point arguments" to "ordinary parameterized relation" (per chunk 08 lock). No design call; drop-in edit. Flagging as cross-cutting because chunk 03's return-path text ("kernels are ordinary `.myco` functions") also needs updating when chunk 03 resumes.
