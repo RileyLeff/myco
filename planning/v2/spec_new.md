@@ -2585,9 +2585,25 @@ compiler derives expression lossiness from four cumulative sources
 emulation) and cuts it into three tiers: lossless, lossy-model,
 lossy-tolerance.
 
-The 2x2 matrix of approximation flavors: (lossy-model vs
-lossy-tolerance) x (univariate vs bivariate). Syntax, semantics,
-envelope consequences.
+Approximation flavors organize along two orthogonal axes: a
+faithfulness axis (strict / approximate / fuzzy) and an orientation
+axis (bidirectional / unidirectional). The 2x3 matrix these axes
+define covers every `approximate` block the compiler can authorize.
+The strict cell is degenerate (strict rewrites never require an
+`approximate` block), so in practice §15 concerns the approximate
+and fuzzy rows. Within the fuzzy row, fuzzy-model rewrites (L-group,
+M-group lossy-model) carry a modeler-chosen distortion that the
+model's equations encode; fuzzy-tolerance rewrites (K-group,
+M-group tolerance, Q-group) carry a solver-level numerical tolerance
+that is independent of model structure. Appendix C's summary table
+organizes the full A-Z catalog by faithfulness x orientation; each
+cell has concrete examples there.
+
+The three-tier cut of §15.3 is the trust-posture projection of the
+faithfulness axis. Lossless corresponds to the strict row; lossy-model
+to fuzzy-model; lossy-tolerance to fuzzy-tolerance. The three-tier
+labels are the diagnostic and dispatch-relevant names for those
+cells.
 
 #### 15.1 Block Syntax
 
@@ -2610,7 +2626,9 @@ approximate {
 ```
 
 - `under` names which specific approximation is permitted
-  (Delta method, Fenton-Wilkinson, CLT, a named smoothing).
+  (K-group fuzzy-tolerance, M-group, L/Q-group lossy-model,
+  Tier B Z-group conjugates; see Appendix C for the closed
+  catalog).
 - `tolerance_class` declares how error is measured (§16.4).
 - `error_bound` is the user's commitment to acceptable error
   magnitude; the compiler rejects the rewrite if its
@@ -2620,6 +2638,13 @@ approximate {
 - `where` optionally gates applicability on input conditions
   (e.g., `where: variance / mean^2 < 0.1` for Delta-method
   linearization).
+
+Exactly one of `under` and `tolerance_class` is required per
+block. `under` names a specific rewrite and derives the tolerance
+class from that rewrite's certification; `tolerance_class` names a
+class and leaves the rewrite selection to the compiler subject to
+the class. Specifying both is a compile error; specifying neither
+is a compile error.
 
 Blocks compose by nesting. Outside a block's `body`, the
 authorized rewrite does not fire. No global `approximate`
@@ -2653,12 +2678,17 @@ cumulative sources:
 The compiler reports the aggregate lossiness per expression
 via inspection surfaces (§22). The four sources are
 independent contributions; lossiness is a lattice join over
-them, not a single authoritative source. The four sources are
-the *origin* axis of lossiness; the *accounting* axis —
-where in the compile stack the lossiness is quantified — is
-the five-layer stack in §15.4. The two axes are orthogonal: a
-single rewrite carries both a source label (one of four) and
-a layer label (one of five).
+them, not a single authoritative source. Sampling parameters
+used to empirically estimate error bounds (sample count, seed,
+stratification) live workflow-side per CC1; the `.myco`
+`approximate` block names the rewrite and bound, and the
+workflow's `run.config` surfaces the numerical parameters (§24).
+
+The four sources are the *origin* axis of lossiness; the
+*accounting* axis — where in the compile stack the lossiness
+is quantified — is the five-layer stack in §15.4. The two axes
+are orthogonal: a single rewrite carries both a source label
+(one of four) and a layer label (one of five).
 
 #### 15.3 Three-Tier Lossiness Cut
 
@@ -2689,6 +2719,16 @@ floating-point" vs "this output uses a Delta-method
 linearization the modeler authorized" vs "this output is
 a tolerance-gated iterative solve." Three different trust
 postures, surfaced distinctly.
+
+Envelope metadata (§16, Layer 2) can narrow a rewrite's
+effective error class in context. A rewrite that is normally
+lossy-tolerance becomes lossless-in-context when the envelope
+proves the error bound collapses to zero, for example when an
+admissibility bound collapses under a refinement. In that case,
+a block that is default-off (requires an explicit `approximate`
+declaration) becomes default-on for the narrowed context. The
+mechanism is canonical here; §17.6 carries the corresponding
+corollary for the rewrite-predicate language.
 
 #### 15.4 Five-Layer Lossiness Accounting
 
@@ -2745,6 +2785,35 @@ Diagnostic surfaces (§22) render both axes; the layer axis
 tells the reader *where* to look for the distortion's
 bookkeeping, the source axis tells them *why* it was
 introduced.
+
+#### 15.5 Declaration/Derivation Interaction
+
+**Summary.** When a user declares an error bound and the compiler
+derives one independently, three outcomes cover all cases: the
+compiler proves a tighter or exact result (user's declaration is
+recorded; compiler's result is used); the compiler's derived bound
+is looser than the user's but within the declared tolerance
+(authorized); or the compiler's derived bound exceeds the user's
+declaration (compile error with a diagnostic naming both bounds).
+
+The `error_bound` field in an `approximate` block is a user
+commitment. The compiler derives its own bound independently from
+the rewrite's certification and the envelope facts at the call
+site. Three cases exhaust the interaction:
+
+- **(a) Compiler proves exact.** The compiler's derived bound is
+  tighter than or equal to the user's declaration, including the
+  degenerate case where the compiler proves the rewrite is exact
+  in context. The user's declaration is retained in provenance;
+  the compiler's tighter result governs.
+- **(b) Compiler within user declaration.** The compiler's derived
+  bound is looser than the user's declaration but still within the
+  declared tolerance (the derived bound does not exceed the declared
+  one). The block is authorized.
+- **(c) Compiler disproves declaration.** The compiler's derived
+  bound exceeds the user's declaration. The compiler emits a compile
+  error naming both bounds and the rewrite in question. The user
+  must either widen the `error_bound` or choose a different rewrite.
 
 ---
 

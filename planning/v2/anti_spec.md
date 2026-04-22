@@ -29,6 +29,7 @@ gap-review stale list, subsequent design locks.
 | `laplace` spelling | `laplacian` | one canonical spelling across stdlib and docs |
 | `trace(f, junction, edge)` overload for directional limit at graph junctions | `limit_from(f, junction, edge)` | `trace` kept for manifold restriction (standard PDE trace operator); overloading two mathematically distinct operations on one name invites confusion |
 | `kernel` keyword or kernel kind | ordinary `fn` accepting two point arguments and returning a scalar | kernels are not a distinct construct; §6 states the design positively |
+| `approximate A <-> B: under: ...` expr-infix form | `approximate { body: ... under: ... }` block form | chunk 04 earlier draft used an infix-over-equation syntax; block form scopes cleanly to a named body and is what §15.1 locks |
 
 ## Retired annotations / attributes
 
