@@ -969,7 +969,9 @@ three explicit discharge paths.
 Relations as world-claims. Overdetermination is not an error; closure
 policies combine competing claims. Policies Y1-Y6 including
 un-deferred `condition_weighted` (backed by `condition_of`
-Levels I-III). Merge semantics.
+Levels I-III). Every `=` in a `relation` body introduces a Layer-1
+e-class merge in the e-graph substrate (§16, §17 merge source 1).
+Merge semantics.
 
 #### 8.1 `constraint` Declarations
 
@@ -982,9 +984,11 @@ loss penalty on training-classified SCCs.
 Inequality or logical obligations the modeler asserts must hold.
 Distinct from `relation` (equational merge) in that constraints
 don't merge e-classes; they restrict the admissible solution set.
-Discharge paths: compile-time proof via e-graph + refinement
-reasoning, runtime projection (workflow-selected flavor, §25),
-or training loss penalty (SCCs classified training, §20).
+Each `constraint` obligation attaches as Layer-2 envelope metadata
+on the relevant e-class (§16). Discharge paths: compile-time proof
+via e-graph + refinement reasoning, runtime projection (workflow-
+selected flavor, §25), or training loss penalty (SCCs classified
+training, §20).
 
 #### 8.2 `let` Bindings in Relation Bodies
 
@@ -1067,7 +1071,11 @@ applies:
    before the solver.
 
 Closure policies operate only on the redundant case. Inconsistent
-cases are failures, not approximation choices.
+cases are failures, not approximation choices. The same three-way
+classification applies to `where` preconditions on `convert` bodies
+(§5): provably true preconditions are elided, provably false
+preconditions are compile errors, and undecidable preconditions
+emit a runtime assertion.
 
 #### 8.7 Closure Policies Y1-Y6
 

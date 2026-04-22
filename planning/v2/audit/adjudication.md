@@ -154,12 +154,12 @@ Stale-doc-only: §7 C2.
 
 ### §8 — Relations and Equality
 
-| ID | Finding | Recommendation | Status |
-|---|---|---|---|
-| H1 | Named-type equality rule for `=` in relation bodies missing | place once §3/§5/§7 settles; overlaps §3 H2, §5 H6 | ACC/W (via §3.3; §8 should cross-link) |
-| H2 | E-graph merge as explicit mechanism for relation `=` not named | add sentence or cross-ref §16 | ACC |
-| H3 | `constraint` Layer 2 envelope placement missing | cross-ref §8.1 to §16 | ACC |
-| H4 | `where` on `convert` bodies applying three-way classification missing | note in §8.6 or §8.3 | ACC |
+| ID | Finding | Recommendation | Status | Notes |
+|---|---|---|---|---|
+| H1 | Named-type equality rule for `=` in relation bodies missing | place once §3/§5/§7 settles; overlaps §3 H2, §5 H6 | ACC/W (via §3.3; §8 should cross-link) | |
+| H2 | E-graph merge as explicit mechanism for relation `=` not named | add sentence or cross-ref §16 | ACC/W | Sentence added to §8 preamble body: every `=` in a `relation` body introduces a Layer-1 e-class merge (cross-refs §16, §17 merge source 1) |
+| H3 | `constraint` Layer 2 envelope placement missing | cross-ref §8.1 to §16 | ACC/W | Sentence added to §8.1 body: each `constraint` obligation attaches as Layer-2 envelope metadata on the relevant e-class (cross-ref §16) |
+| H4 | `where` on `convert` bodies applying three-way classification missing | note in §8.6 or §8.3 | ACC/W | Sentence added to §8.6 closing paragraph: three-way classification applies to `where` preconditions on `convert` bodies (§5); placed in §8.6 because that section owns the three-way classification machinery |
 
 Stale-doc-only: §8 C1, C2. Contract-default-relations note merged with §7 H3.
 
