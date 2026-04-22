@@ -27,3 +27,5 @@ it.
    and run it with standard tools. But the source of truth is the `.myco` model
    and the binding, not the generated artifact. Reproducibility comes from
    recompilation, not from hand-editing outputs.
+
+6. **Myco itself has absolutely nothing to do with ecosystem simulation or plant physiology.** This is a general-purpose tool for scientific research and simulation, all the plant stuff is just how the author is thinking about his own work and stress-testing the framework. All plant physio-specific stuff will live outside of this repo in implementation, only in here as an example.
