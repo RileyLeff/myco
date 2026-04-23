@@ -28,7 +28,8 @@ gap-review stale list, subsequent design locks.
 | `Sphere` as a solid 3D region | `Sphere` = S² (2-manifold, surface only); `Ball` = solid 3D region | mathematical convention; solid-vs-manifold distinction is load-bearing in §11.3 |
 | `laplace` spelling | `laplacian` | one canonical spelling across stdlib and docs |
 | `trace(f, junction, edge)` overload for directional limit at graph junctions | `limit_from(f, junction, edge)` | `trace` kept for manifold restriction (standard PDE trace operator); overloading two mathematically distinct operations on one name invites confusion |
-| `kernel` keyword or kernel kind | ordinary `fn` accepting two point arguments and returning a scalar | kernels are not a distinct construct; §6 states the design positively |
+| user `fn` declarations | parameterized relations with explicit output slots | user-authored reusable model structure adds graph obligations; expression-position functions are stdlib/compiler-owned atoms |
+| `kernel` keyword or kernel kind | parameterized relation accepting two point arguments and an explicit scalar output slot | kernels are not a distinct construct; §6 and §28 state the design positively |
 | `approximate A <-> B: under: ...` expr-infix form | `approximate { body: ... under: ... }` block form | chunk 04 earlier draft used an infix-over-equation syntax; block form scopes cleanly to a named body and is what §15.1 locks |
 
 ## Retired annotations / attributes
@@ -36,10 +37,10 @@ gap-review stale list, subsequent design locks.
 | retired | replacement | why |
 |---|---|---|
 | `#[verified_externally]` | nothing | no proof-escape-hatch annotations |
-| `#[inverse]` | capability contract (`Invertible<_>`) on stdlib fn | unified contract machinery |
+| `#[inverse]` | capability contract (`Invertible<_>`) on stdlib expression atom | unified contract machinery |
 | four-class invertibility metadata (`bijective` / `injective_restricted` / `lossy` / `opaque`) | capability contracts on fns | same |
 | all `#[...]` attribute annotations | nothing | `.myco` has no annotation surface |
-| user-declared fn invertibility / differentiability / domain | compiler derives from body composition + stdlib atom contracts | no user property-declaration surface; refactor fn if compiler can't derive |
+| user-declared fn invertibility / differentiability / domain | compiler derives relation properties from body composition + stdlib atom contracts | no user property-declaration surface; refactor the relation if compiler can't derive the needed property |
 
 ## Dropped features
 

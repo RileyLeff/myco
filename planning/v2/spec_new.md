@@ -752,100 +752,116 @@ binding boundary. A dimension mismatch is an error at composition
 time. See §24 for the source inventory and gradient-flow implications
 of source objects.
 
-### 6. Functions
+### 6. Parameterized Relations and Stdlib Functions
 
-*Open (pending application).* The design lock in chunk 08 bans user
-`fn` declarations in favor of parameterized relations; contract
-methods become required parameterized relations; kernels become
-parameterized relations. The prose in this section still describes
-the prior `fn`-as-first-class surface and is stale relative to the
-locked design. Canonical reference:
-`planning/v2/v2.1_chunk_reports/08_relation_fix_whoops.md`. Tracked
-in §34.
+**Summary.** User-declared reusable model structure is expressed as
+parameterized relations, not user `fn` declarations. Parameterized
+relations are invoked in statement position with all slots explicit;
+they may be generic over units, contracts, types, and `val`
+parameters. Stdlib expression functions (`exp`, `log`, `sin`,
+`sqrt`, arithmetic atoms, etc.) are compiler-owned primitives that
+may appear inside expressions and carry capability contracts such as
+`Invertible<_>`, `Differentiable`, and `Monotone`.
 
-**Summary.** `fn` declarations with parametric generics. Contracts
-apply to functions via the same composable machinery used for types
-and distributions. Stdlib atoms declare capability contracts like
-`Invertible<_>`, `Differentiable`, `Monotone` that drive e-graph
-rewrites; user functions have no property-declaration surface. The
-compiler derives function properties from body composition plus
-stdlib atom declarations. Functions are also the extensibility
-surface for closure policies (§8.7).
+Myco keeps two surfaces distinct:
 
-`fn` declarations with parametric generics. Body composition. Contracts
-apply to functions using the same composable machinery used for types
-and distribution families (see §7). Stdlib atoms (`exp`, `log`, `sin`,
-`sqrt`, …) declare capability contracts like `Invertible<_>`,
-`Differentiable`, `Monotone`; these drive e-graph rewrites (see §17
-merge sources). User functions carry no property-declaration surface;
-the compiler derives properties from body composition plus stdlib
-atom declarations. No annotation blocks, no `#[...]` attributes.
+- **Parameterized relations.** User-authored, statement-position
+  reusable structure. A relation invocation adds obligations and
+  equations to the graph; it does not return a value expression.
+- **Stdlib functions.** Compiler-owned expression atoms. They may be
+  called inside expressions and may carry axiomatic contracts that
+  drive rewrites (§17, Appendix C). User code cannot declare new
+  expression-position functions.
 
-Kernels are ordinary `.myco` functions that accept two point
-arguments and return a scalar; there is no separate `kernel` keyword
-or kernel kind.
+No annotation blocks, no `#[...]` attributes, no user-declared
+function property surface. If a user needs reusable behavior, they
+write a parameterized relation with explicit input and output slots.
 
-#### 6.1 Generic Functions
+#### 6.1 Generic Parameterized Relations
 
-**Summary.** Functions may be generic over contracts, including unit
-contracts. A generic function monomorphizes per instantiation at the
-boundary where the generic is concretized.
+**Summary.** Parameterized relations may be generic over contracts,
+including unit contracts. A generic relation monomorphizes per
+instantiation at the boundary where the generic is concretized.
 
-A unit-polymorphic function uses a contract bound on the type
-parameter:
+A unit-polymorphic relation uses a contract bound on the type
+parameter and writes into an explicit output slot:
 
 ```myco
-fn arrhenius<U: Unit>(rate_25: Scalar<U>, activation_energy: Scalar<joule_per_mol>, T: Scalar<kelvin>) -> Scalar<U> {
-    rate_25 * exp(-activation_energy / (R * T))
+relation arrhenius<U: Unit>(
+    rate_25: Scalar<U>,
+    activation_energy: Scalar<joule_per_mol>,
+    T: Scalar<kelvin>,
+    rate: Scalar<U>,
+) {
+    rate = rate_25 * exp(-activation_energy / (R * T))
 }
 ```
 
+Invocation is statement-form and all slots are explicit:
+
+```myco
+let rate: Scalar<mol_m2_s>
+arrhenius(rate_25, activation_energy, canopy.temperature, rate)
+```
+
 The compiler monomorphizes `arrhenius` once per distinct unit
-instantiation at each call site where the generic `U` is concretized
-to a specific unit. The body is type-checked against the declared
-contract bound; calls that cannot satisfy `U: Unit` are a compile
-error.
+instantiation at each call site where `U` is concretized. The body is
+type-checked against the declared contract bound; calls that cannot
+satisfy `U: Unit` are compile errors.
 
-#### 6.2 Compiler Roles for `fn` Bodies
+#### 6.2 Invocation and Method-Style Sugar
 
-**Summary.** The compiler treats a `fn` body as source material for
-several analyses. User functions require no annotation to participate.
+**Summary.** A parameterized relation invocation is a statement that
+adds graph structure. It is never an expression. Method-style syntax
+is only sugar for a relation whose first parameter is the receiver.
 
-What the compiler does with a `fn` body:
+Rules:
+
+- `relation_name(a, b, out)` is a statement-form invocation.
+- `let out: T` introduces a fresh e-node that a relation may constrain.
+- `relation_name(a, b)` cannot appear where an expression is expected.
+- `receiver.rel(args..., out)` desugars to `rel(receiver, args..., out)`
+  when the relation's first parameter is the receiver type.
+- Field access remains parenless; parentheses always mean invocation.
+
+This keeps graph growth explicit: relation calls add constraints,
+whereas stdlib functions inside expressions build expression terms.
+
+#### 6.3 Compiler Roles
+
+**Summary.** The compiler treats parameterized relation bodies as
+source material for unit checking, e-graph construction, symbolic
+differentiation, solver emission, and closure-policy extensibility.
+
+What the compiler does with a relation body:
 
 - **Dimensional analysis.** Unit-checks every subexpression in the
-  body. A dimension mismatch in the body is a compile error.
+  body. A dimension mismatch is a compile error.
+- **E-graph construction.** Every `=` in the body emits a Layer-1
+  merge (§16, §17); `constraint` clauses attach Layer-2 envelope
+  metadata (§8.1).
 - **Symbolic differentiation.** Bodies participate in `deriv`
-  lowering: the compiler symbolically differentiates the body
-  expression using stdlib-atom capability contracts (`Differentiable`,
-  `Invertible<_>`) to produce the A-group rewrites (§17, Appendix C
-  group A).
-- **Solver emission.** Bodies enter the e-graph as rewrite candidates.
-  The compiler may apply B-group and E-group rewrites to a function
-  call when the called function's stdlib atoms carry the necessary
-  contracts.
-
-**Closure-policy extensibility.** Functions are the extensibility
-surface for closure policies (§8.7, policy Y5). Any `.myco` function
-that accepts a candidate-value collection and user hyperparameters
-and returns a forward value qualifies as a user-defined custom policy.
+  lowering through stdlib-atom capability contracts
+  (`Differentiable`, `Invertible<_>`) and A-group rewrites (§17,
+  Appendix C group A).
+- **Solver emission.** Relation bodies enter the residual graph when
+  their equations remain unresolved after saturation (§19).
 
 **User recourse when the compiler cannot infer an inverse.** If the
-compiler cannot derive an inverse for a `fn` body, refactor the
-monolithic function into smaller composable pieces whose inverses the
-compiler can infer from stdlib capability contracts; see `Invertible<_>`
-(§7).
+compiler cannot derive an inverse for a relation body, refactor the
+monolithic relation into smaller composable pieces whose stdlib atoms
+carry the needed capability contracts; see `Invertible<_>` (§7).
 
 ### 7. Contracts
 
 **Summary.** Contracts are the single abstraction mechanism in Myco:
 declaration, multi-contract satisfaction (`: A + B + C`), and
 supertraits (`contract B : A`). Contracts apply uniformly to types,
-functions, and distribution families. Parameterized and capability
-variants carry compiler-actionable facts.
+parameterized relations, stdlib atoms, and distribution families.
+Parameterized and capability variants carry compiler-actionable facts.
 
-Contracts apply uniformly to types, functions, and distribution
-families. Contract declaration. Multi-contract satisfaction
+Contracts apply uniformly to types, parameterized relations, stdlib
+atoms, and distribution families. Contract declaration. Multi-contract satisfaction
 (`: A + B + C`). Supertraits (`contract B : A`). Named-type
 comparison rules. Contract bodies are restricted to typed field
 obligations and supertraits; `initial:`, `temporal:`, `d(x) = ...`,
@@ -860,8 +876,8 @@ supertrait chains and satisfaction checks. Principal users are
 capability contracts on stdlib atoms (§6) and distribution families
 (§27).
 
-Contracts take type parameters: `Invertible<T>` (invertible fn with
-inverse type T), `Convert<From, To>` (conversion capability),
+Contracts take type parameters: `Invertible<T>` (invertible stdlib
+atom with inverse type T), `Convert<From, To>` (conversion capability),
 `Distribution<U>` (distribution over units U). Parameters thread
 through supertrait chains and satisfaction checks. Capability
 contracts on stdlib atoms (§6) and distribution families (§27) are
@@ -939,44 +955,48 @@ uniquely named.
 
 #### 7.5 Default Implementations
 
-**Summary.** A contract may supply a default body for an obligation.
-The default applies only when the implementing type does not supply
-its own. A type-supplied definition always takes precedence; defaults
-never override a type-provided obligation.
+**Summary.** A contract may supply a default body for a required
+parameterized relation. The default applies only when the implementing
+type does not supply its own. A type-supplied definition always takes
+precedence; defaults never override a type-provided obligation.
 
 A contract obligation may carry a default body that composes from
 other obligations on the same contract:
 
 ```myco
 contract Comparable {
-    fn magnitude(self) -> Scalar<dimensionless>
+    relation magnitude(self: Self, out: Scalar<dimensionless>)
 
-    fn smaller_than(self, other: Self) -> Bool {
+    relation smaller_than(self: Self, other: Self, out: Bool) {
         // default: compare along the magnitude axis
-        self.magnitude() < other.magnitude()
+        let lhs: Scalar<dimensionless>
+        let rhs: Scalar<dimensionless>
+        self.magnitude(lhs)
+        other.magnitude(rhs)
+        out = lhs < rhs
     }
 }
 
 type Mass : Comparable {
     grams: Scalar<gram>
 
-    fn magnitude(self) -> Scalar<dimensionless> {
-        value_in(self.grams, gram)
+    relation magnitude(self: Self, out: Scalar<dimensionless>) {
+        out = value_in(self.grams, gram)
     }
 
-    fn smaller_than(self, other: Self) -> Bool {
-        self.grams < other.grams   // type-supplied; default is ignored
+    relation smaller_than(self: Self, other: Self, out: Bool) {
+        out = self.grams < other.grams   // type-supplied; default is ignored
     }
 }
 
 type Energy : Comparable {
     joules: Scalar<joule>
 
-    fn magnitude(self) -> Scalar<dimensionless> {
-        value_in(self.joules, joule)
+    relation magnitude(self: Self, out: Scalar<dimensionless>) {
+        out = value_in(self.joules, joule)
     }
 
-    // no fn smaller_than supplied; compiler uses contract default
+    // no relation smaller_than supplied; compiler uses contract default
 }
 ```
 
@@ -1132,20 +1152,20 @@ residual block at workflow composition time. Variants:
 
 #### 8.8 Y5: User-Defined Closure Policies
 
-**Summary.** A Y5 policy is an ordinary `.myco` function satisfying
-the closure-policy interface: candidate values plus hyperparameters
-in, a single forward value out. The compiler inlines the fn body into
+**Summary.** A Y5 policy is a parameterized relation satisfying the
+closure-policy interface: candidate values plus hyperparameters in,
+one explicit output slot. The compiler inlines the relation body into
 the extraction pipeline, so Y5 policies participate in differentiation
-and e-graph reasoning like any other fn.
+and e-graph reasoning like other parameterized relations.
 
-A Y5 policy is an ordinary `.myco` function satisfying the
-closure-policy interface: inputs are the candidate values (one per
-competing claim) plus user-supplied hyperparameters; output is a
-single forward value of the same type. Users register a Y5 policy
-by name; workflows select it per residual block via the same
-mechanism as Y1-Y6. The compiler inlines the fn body into the
-extraction pipeline; Y5 policies participate in differentiation
-and e-graph reasoning like any other fn.
+A Y5 policy is an ordinary parameterized relation whose inputs are
+the candidate values (one per competing claim) plus user-supplied
+hyperparameters, and whose output slot is a single forward value of
+the same type. Users register a Y5 policy by name; workflows select
+it per residual block via the same mechanism as Y1-Y6. The compiler
+inlines the relation body into the extraction pipeline; Y5 policies
+participate in differentiation and e-graph reasoning like other
+parameterized relations.
 
 #### 8.9 Smoothing as a Model Claim
 
@@ -3229,28 +3249,27 @@ even when all produced the same merge. This keeps
 calls intending to state different facts that happen to collapse
 to the same layer-1 equation.
 
-#### 17.3 Function Inverses via Stdlib Capability Contracts
+#### 17.3 Stdlib Inverses via Capability Contracts
 
-**Summary.** Function-inverse merges fire from stdlib-declared
+**Summary.** Inverse merges fire from stdlib-declared
 capability contracts (`Invertible<inv=log, domain=Real>` on `exp`),
 not user annotations. Users extend the catalog by composition, not
 declaration. The inverse catalog is inspectable from stdlib alone.
 
-Function-inverse merges fire from stdlib-declared capability
+Inverse merges fire from stdlib-declared capability
 contracts on atoms, not from user annotations. `exp` declares
 `Invertible<inv=log, domain=Real>`; the e-graph then fires
 `log(exp(x)) = x` wherever `x: Real` holds structurally (and
 symmetrically for `exp(log(x)) = x` on `x: Positive`).
 
-The user has no annotation path to declare a function
-invertible. Option B (§6) commits this: stdlib carries
-capability contracts; user functions have no property-
-declaration surface. If a user function needs inverse
-recognition the compiler cannot derive, the user refactors
-the function into structurally composable pieces using stdlib
-atoms with the requisite contracts.
+The user has no annotation path to declare a relation invertible.
+Stdlib carries capability contracts; user-authored parameterized
+relations have no property-declaration surface. If a user relation
+needs inverse recognition the compiler cannot derive, the user
+refactors it into structurally composable pieces using stdlib atoms
+with the requisite contracts.
 
-Consequence: the function-inverse rewrite catalog is
+Consequence: the inverse rewrite catalog is
 inspectable from the stdlib alone. Users cannot extend it by
 annotation; they extend it by composition.
 
@@ -4433,34 +4452,42 @@ depending on the transformation applied to it.
 
 ### 28. Kernels
 
-**Summary.** Kernels are ordinary functions from locus point pairs
-to scalars, with kernel-ness expressed via capability contracts
-(`PositiveDefinite`, `Stationary`, `Isotropic`) rather than a separate
-type kind. Stdlib ships Matérn, RBF, rational-quadratic, and Wendland;
+**Summary.** Kernels are parameterized relations over locus point
+pairs with one scalar output slot. Kernel-ness is expressed via
+capability contracts (`PositiveDefinite`, `Stationary`, `Isotropic`,
+`CompactSupport(radius)`) rather than a separate keyword or type kind.
+Stdlib ships Matérn, RBF, rational-quadratic, and Wendland;
 composition rules preserve contracts. Sparsity and integration
-operators are deferred to chunk 03.
+operators remain open implementation work.
 
-Chunk 03 unified-machinery thread is pending e-graph substrate lock;
-the surface shape below is committed, internal substrate not.
+Chunk 03 can now resume on the settled e-graph substrate; the kernel
+surface below is committed, while sparse assembly, low-rank rewrites,
+and integration operators remain tracked work.
 
-#### 28.1 Kernels as Functions with Capability Contracts
+#### 28.1 Kernels as Parameterized Relations with Capability Contracts
 
-**Summary.** Kernels are plain functions `fn k(x: Point<L>, y:
-Point<L>) -> Scalar<U>` with no separate keyword or type kind.
-Kernel-ness comes from capability contracts on atoms:
-`PositiveDefinite`, `Stationary`, `Isotropic`. Standard operations
-(sum, product, scaling, radial wrapping) preserve contracts via
-closure rules, so the compiler derives kernel properties from
-composition without user property-declaration surface.
+**Summary.** A kernel is a parameterized relation whose first two
+slots are `Point<L>` values and whose explicit output slot is
+`Scalar<U>`. No separate `kernel` keyword exists. Kernel-ness comes
+from capability contracts on stdlib atoms and derived relation bodies.
 
-Kernels are ordinary functions from pairs of locus points to scalars:
-`fn k(x: Point<L>, y: Point<L>) -> Scalar<U>`. No separate `kernel`
-keyword, no separate type kind. Kernel-ness is a property of the
-function that the compiler verifies from body composition plus
-capability contracts on atoms, mirroring how function invertibility
-and differentiability are derived (§7.2, §6, Anti-Spec "user-declared
-fn invertibility / differentiability / domain"). The relevant
-capability contracts:
+A kernel relation has the shape:
+
+```myco
+relation k<L: Locus, U: Unit>(
+    x: Point<L>,
+    y: Point<L>,
+    out: Scalar<U>,
+) {
+    out = ...
+}
+```
+
+No separate `kernel` keyword, no separate type kind. Kernel-ness is a
+property the compiler verifies from body composition plus capability
+contracts on atoms, mirroring how relation differentiability is
+derived from stdlib expression atoms (§6). The relevant capability
+contracts:
 
 - `PositiveDefinite`. Guarantees the Gram matrix
   `K_{ij} = k(x_i, x_j)` is PSD for any finite point set. Required
@@ -4469,6 +4496,10 @@ capability contracts:
   Implies translation invariance on the ambient locus.
 - `Isotropic`. Guarantees `k(x, y) = k̂(‖x − y‖)` for some `k̂`.
   Supertrait `Stationary` plus rotation invariance.
+- `CompactSupport(radius)`. Guarantees `k(x, y) = 0` whenever the
+  locus distance between x and y exceeds the given radius. The radius
+  is a `val` generic or workflow-bound scalar accepted by the kernel
+  family; it is not a workflow annotation.
 
 Stdlib kernels, Matérn (ν = 1/2, 3/2, 5/2, ∞), squared-exponential
 (RBF), rational-quadratic, Wendland compact-support, satisfy all
@@ -4490,7 +4521,8 @@ specialized kernel type. Product loci compose via `(x1,y1), (x2,y2)`
 arguments with the PositiveDefiniteness closure rule applied.
 
 Kernels take `Point<L>` arguments, where the locus `L` is ambient and
-fixed by where the kernel is called, not by a per-kernel declaration.
+fixed by where the kernel relation is invoked, not by a per-kernel
+declaration.
 This avoids kernel families that only work on one space; e.g.
 squared-exponential is usable on any `L` that admits a norm, and the
 compiler picks up the norm from the locus definition (§11.1). A
@@ -4499,40 +4531,41 @@ requiring `L = Sphere`) expresses that via a contract on the locus,
 not via a specialized kernel type.
 
 Composite kernels compose ambient-locus the same way any other
-function composes. `k_sum = k_a + k_b` is well-formed iff `k_a` and
-`k_b` share an ambient locus; the compiler checks this. Product
-kernels on product loci (`L = L_x × L_y`) are written
-`k((x1, y1), (x2, y2)) = k_x(x1, x2) * k_y(y1, y2)` and the
-PositiveDefiniteness closure rule covers them.
+parameterized relation composes: the composed relation invokes the
+component relations into explicit temporary output slots, then relates
+the final output to their sum, product, or scaling. The compiler
+checks that the component kernels share an ambient locus. Product
+kernels on product loci (`L = L_x × L_y`) use paired point arguments;
+the PositiveDefiniteness closure rule covers them.
 
 #### 28.3 Kernel Sparsity and Integration, Deferred to Chunk 03
 
-**Summary.** Two kernel-adjacent concerns defer to chunk 03: sparse /
-compact-support representation (belongs in matrix assembly, not
-kernel definition) and kernel integration operators (convolution,
-measures, stochastic integrals). Until unlock, kernels support
-direct evaluation, function composition, and use as GP covariances
-via Tier C opaque handoff.
+**Summary.** Three kernel-adjacent concerns remain tracked:
+compact-support sparse matrix assembly, low-rank kernel rewrites, and
+kernel integration operators. Until those close, kernels support
+direct evaluation, relation composition, and use as GP covariances via
+Tier C opaque handoff.
 
 Two kernel-adjacent concerns are deferred:
 
 - **Sparse / compact-support kernel representation.** Wendland and
-  compactly-supported Matérn variants produce sparse Gram matrices,
-  and the backend representation for sparse kernel matrices (`CSR`,
+  compactly-supported Matérn variants produce sparse Gram matrices.
+  The kernel advertises compact support via `CompactSupport(radius)`;
+  the backend representation for sparse kernel matrices (`CSR`,
   `block-sparse`, `k-nearest`) is a matrix-layer concern that belongs
-  in chunk 05 (B5). The kernel surface itself is locus-agnostic about
-  this; sparsity falls out of matrix assembly, not kernel definition.
+  in chunk 05 (B5).
+- **Low-rank kernel rewrites.** Nyström / inducing-point and related
+  low-rank approximations are deferred. Appendix C K3 is explicitly
+  post-current-scope rather than an open Tier-1 rewrite.
 - **Kernel integration operators.** Convolution, integration against
   a measure, and the various ways kernels interact with stochastic
   integrals (for e.g. GP posterior predictives, kernel density
   estimates) are chunk 03 concerns. The stdlib ships the kernel
-  functions themselves; operators that combine kernels with
-  integration machinery wait for the e-graph substrate lock to avoid
-  committing to a representation that the e-graph cannot efficiently
-  normalize.
+  relations themselves; operators that combine kernels with
+  integration machinery wait for the resumed kernel work.
 
 Until those unlocks, kernels support direct evaluation,
-function composition, and use as GP covariances via opaque PPL
+relation composition, and use as GP covariances via opaque PPL
 handoff (§13.2, Tier C). Non-opaque GP handling routes through the
 kernel stdlib when chunk 03 lands.
 
@@ -4996,12 +5029,12 @@ the tolerance classes, or splits into separate fields per class.
 Affects §14 `cost_of` signature and §19.1 extraction-cost
 accounting.
 
-**Stdlib canonical inventory.** The set of stdlib atoms (fn) and
+**Stdlib canonical inventory.** The set of stdlib expression atoms and
 stdlib-shipped parameterized relations is referenced throughout the
 spec but not enumerated in one place. Deferred to a dedicated chunk
 that locks: the full list of axiomatic primitives (`exp`, `log`,
 `sin`, `cos`, `sqrt`, arithmetic, `smooth_max`, etc.), the
-classification of each surface (fn vs parameterized relation), the
+classification of each surface (expression atom vs parameterized relation), the
 capability contracts and abstract cost tags for each, and the
 classification of distributions (`log_pdf` / `sample`) and kernels.
 Cross-refs §6, §7, §13.8, §14, §28, §30.
@@ -5163,10 +5196,9 @@ pattern or pipe use).
 `integrate`, `condition_of`, `value_in`, plus the distribution-
 family names enumerated in §27. The stdlib universal namespace
 reserves `pi`, `e`, and the parametric family `integer<N: val>`
-(target of the integer-literal desugar in §4). User functions
-shadow stdlib atoms at the user's own module scope; stdlib
-dispatch preempts at the
-global scope.
+(target of the integer-literal desugar in §4). User-declared
+parameterized relations occupy the relation namespace; they do not
+shadow stdlib expression atoms.
 
 The full list is normative as of the current lock. Additions are a
 breaking change to the parse surface and follow the source-
