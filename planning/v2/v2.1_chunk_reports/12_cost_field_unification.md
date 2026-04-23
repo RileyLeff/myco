@@ -1,119 +1,73 @@
-# 12 — Cost-Field Struct Unification
+# 12 — Cost / Objective Vocabulary Resolution
 
-Three sections of spec_new.md carry divergent cost-field inventories
-with no cross-reference. This chunk tracks the unification. Status:
-open, no option chosen. Flagged O/ACK in
-`planning/v2/audit/adjudication.md` under the batch-3/batch-4
-cross-cutting item.
+Status: resolved 2026-04-23.
 
-## The divergence
+## Decision
 
-- §14.2 `loss_of(residual)` returns a struct of
-  `{data_fit, constraint_violation, regularization}`. Loss-function
-  terms the workflow aggregates at training emission (§25).
-- §19.1 extraction cost vector is
-  `{precision, latency, memory, approximation class}`. Pareto axes
-  for e-graph residual extraction; workflow picks a point.
-- Chunk 04 O2.4 locks `cost_of(expr)` as
-  `{compute, approximation, condition, truncation, discretization}`.
-  Auto-derived per-expression lossiness. Primary consumer: the
-  extractor cost-vector computation and approximate-block
-  diagnostics.
+Myco keeps two separate surfaces:
 
-Same word "cost" across three surfaces, three different field sets,
-no cross-reference in spec prose today.
+- `cost_of(expr)` is compiler/planner economics. It is consumed by
+  extraction (§19.1), diagnostics, and approximate-block reporting.
+- `objective_terms(residual)` is workflow-facing training-objective
+  decomposition. It is consumed by training emission (§25) and
+  workflow objective helpers.
 
-## Options
+The retired spelling is `loss_of(residual)`. The word "loss" was doing
+too much: likelihood contribution, training objective, planner cost,
+and approximation cost. The new vocabulary keeps those concepts apart.
 
-### (a) One unified struct with O2.4's five fields
+## `cost_of(expr)`
 
-`loss_of` and the §19.1 cost vector both reshape onto
-`{compute, approximation, condition, truncation, discretization}`.
-One concept, one struct, three consumer sites.
+Canonical fields:
 
-Implications:
-- §14.2 stops being a loss-function-terms surface. Training-loss
-  aggregation in §25 rewrites to compose directly from observe
-  likelihoods plus prior log-densities plus unsatisfied
-  `constraint` residuals, rather than reading named fields off a
-  `loss_of` return.
-- §19.1 Pareto axes collapse. `latency` and `memory` fold into
-  `compute` or become separate fields on the unified struct (so the
-  struct grows to six or seven fields). Either choice breaks the
-  O2.4 lock.
-- Extractor and training-emission consume the same inventory.
-  Cleanest for cross-referencing.
+- `compute`
+- `memory`
+- `approximation`
+- `condition`
+- `truncation`
+- `discretization`
 
-### (b) Two intrinsics, distinct fields
+`compute` and `memory` are resource economics. The remaining four are
+faithfulness / numerical-quality economics inherited from the chunk 04
+O2.4 shape, with `memory` added because extraction needs peak
+allocation as a first-class axis.
 
-Keep `loss_of` as the loss-function-terms surface (training
-aggregation). Introduce `cost_of` per O2.4 as the
-per-expression-lossiness surface (extractor input). §19.1 extraction
-cost vector references `cost_of` fields directly and drops its
-private inventory.
+Extraction consumes the full record and returns a Pareto front unless
+workflow config selects a policy:
 
-Implications:
-- Clean separation by consumer. `loss_of` is workflow-facing,
-  `cost_of` is compiler-facing.
-- §19.1 still needs a resolution for `latency` and `memory`, which
-  are not O2.4 concepts. Candidates: separate extractor-policy
-  struct; additional fields on `cost_of`; fold into a generic
-  `resource_of` intrinsic.
-- `loss_of` keeps its name despite overlap; collision between
-  `loss_of.regularization` and `cost_of.approximation` continues
-  as a naming concern only.
+- `compute_first`
+- `memory_first`
+- `faithfulness_first`
+- weighted policy over the named fields
 
-### (c) Rename `loss_of` and keep §19.1 separately
+The config surface is `run.config.extraction_policy`.
 
-Rename §14.2 `loss_of` → `objective_terms` or similar. Acknowledge
-that three concepts with a naming collision exist, break the
-collision, add explicit cross-references for the reader.
+## `objective_terms(residual)`
 
-Implications:
-- Smallest surface change. §14.2 and §19.1 both retain their
-  current field inventories.
-- `approximation` appears in both §19.1 and O2.4 `cost_of`; the
-  overlap stays unreconciled. Readers consulting either section
-  must keep both in mind.
-- Defers the real unification question. May be the right call if
-  the three surfaces are genuinely separate concerns that share
-  vocabulary by accident.
+Canonical fields:
 
-## Load-bearing questions
+- `data_fit`
+- `constraint_violation`
+- `regularization`
 
-1. Is `loss_of` a loss-function surface (training aggregation) or a
-   per-expression extractor-cost surface? Current prose reads as the
-   former. Chunk 04 O2.4's `cost_of` covers the latter. If both
-   exist as distinct intrinsics, option (b); if they collapse,
-   option (a).
-2. Do §19.1 `latency` and `memory` live inside a per-expression
-   `cost_of` struct (making it a seven-field struct) or in a
-   separate extractor-policy struct? O2.4 does not cover them.
-3. Does the extractor consume O2.4 `cost_of` fields directly, or
-   compose them through a §19.1 policy layer that adds latency /
-   memory weighting?
-4. Peak allocation as a first-class `cost_of` field is already open
-   in §35 ("Memory as a `cost_of` field"). This chunk subsumes that
-   open.
-5. Training-emission aggregation in §25 presumes `loss_of` named
-   fields today. A change to option (a) requires rewriting §25's
-   aggregation contract.
+The return is not a scalar. Workflow code chooses which terms to
+aggregate, and helpers such as `soft_penalty(weights)` and
+`augmented_lagrangian(weights, mu, lambda_init, mu_schedule)` consume
+these fields. The config surface for scalarization policy is
+`run.config.objective_policy`.
 
-## Cross-refs
+## Consequences
 
-- §14 preamble (compiler intrinsics)
-- §14.2 `loss_of` named-field return
-- §19.1 extraction cost model
-- §25 training emission (workflow aggregation)
-- §35 "Memory as a `cost_of` field" open (subsumed here)
-- chunk 04 O2.4 `cost_of` named-field struct lock
+- §14.2 owns both intrinsic definitions and their separation.
+- §19.1 no longer carries a private extraction-axis vocabulary.
+- §25 no longer depends on `loss_of` fields.
+- §35's "Memory as a `cost_of` field" open is closed: memory is a
+  first-class field.
+- anti_spec.md retires `loss_of(residual)`.
 
-## Status
+## Remaining Adjacent Opens
 
-Open. No option chosen. Resolution unblocks the ACCEPT items in
-batches 3 and 4 of `planning/v2/audit/adjudication.md`: §14 C1
-(`loss_of` / `cost_of` field inventory reconciliation), §15 H4
-(multi-dimensional cost vector cross-link to named-field
-`loss_of`), §15 H5 (same struct citation in approximate-block
-ordering), §19 H2 (§19.1 cost-dimension divergence from O2.4),
-§19 C2 (same).
+This decision does not close the matrix/backend questions around
+conditioning shape for multi-output operations. `condition` remains a
+single `cost_of` field for now; whether its value is scalar, structured,
+or tolerance-class-indexed belongs with the matrix/backend work.

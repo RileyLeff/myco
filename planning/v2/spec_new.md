@@ -159,7 +159,7 @@ projection operators or solver selection to satisfy a constraint.
 `constraint` declarations (§8.1) carry three explicit discharge
 paths: compile-time proof via e-graph and refinement reasoning,
 runtime projection selected by the workflow via §25's projection-
-flavor policy, or training loss penalty on SCCs classified training
+flavor policy, or training-objective penalty on SCCs classified training
 (§20). The compiler surfaces which discharge path each constraint
 uses, and the workflow picks among projection flavors when that
 path applies. The compiler does not insert projection silently.
@@ -1028,7 +1028,7 @@ Merge semantics.
 Unlike relations, constraints do not merge e-classes; they restrict
 the admissible solution set. Three discharge paths: compile-time
 proof, runtime projection (workflow-selected flavor), or training
-loss penalty on training-classified SCCs.
+objective penalty on training-classified SCCs.
 
 Inequality or logical obligations the modeler asserts must hold.
 Distinct from `relation` (equational merge) in that constraints
@@ -1036,7 +1036,7 @@ don't merge e-classes; they restrict the admissible solution set.
 Each `constraint` obligation attaches as Layer-2 envelope metadata
 on the relevant e-class (§16). Discharge paths: compile-time proof
 via e-graph + refinement reasoning, runtime projection (workflow-
-selected flavor, §25), or training loss penalty (SCCs classified
+selected flavor, §25), or training-objective penalty (SCCs classified
 training, §20).
 
 #### 8.2 `let` Bindings in Relation Bodies
@@ -2360,7 +2360,7 @@ for MVN machinery:
   positive-diagonal refinement — no runtime PD check.
 - Observations against x translate to observations against L
   and ε via the affine relationship; likelihood flows back to
-  the training loss through matrix-calculus rewrites.
+  the training objective through matrix-calculus rewrites.
 
 L can be supplied directly by the workflow as a `Constant` or
 `Trainable` source on L with positive-diagonal refinement, or
@@ -2396,7 +2396,7 @@ positional index access.
 **Summary.** Workflow `observe(path, data)` attaches observed data
 as a layer-2 envelope fact on the observed e-class (no equational
 merge with the data). Downstream samples condition on it; the
-relevant `D.log_pdf(data)` term adds to the SCC's training loss.
+relevant `D.log_pdf(data)` term adds to the SCC's training objective.
 Distinct from `identify`: observation narrows the distribution, not
 the value.
 
@@ -2409,7 +2409,7 @@ uses the following mechanism:
    itself is not merged with a constant.
 2. Downstream relations that read x's sampled value see the
    observation; downstream samples are conditioned on it.
-3. Likelihood `D.log_pdf(data)` contributes to the SCC's loss
+3. Likelihood `D.log_pdf(data)` contributes to the SCC's objective
    during training emission (§25); back-propagation through
    the model graph reaches learnable upstream parameters.
 
@@ -2482,13 +2482,14 @@ current ship surface; Tier 2 primitives land in chunk 08 and
 
 **Summary.** The intrinsics the compiler surfaces to modelers:
 `deriv`, `integrate`, `condition_of` (Levels I symbolic / II
-algorithmic / III runtime), and `loss_of` (named-field return).
-Each intrinsic has defined e-graph interaction and documented
-guarantees.
+algorithmic / III runtime), `cost_of` (planner/extraction economics),
+and `objective_terms` (training-objective decomposition). Each
+intrinsic has defined e-graph interaction and documented guarantees.
 
 `deriv`, `integrate`, `condition_of` (Levels I symbolic / II algorithmic
-/ III runtime), `loss_of`. What each intrinsic means, what the compiler
-guarantees about it, how it interacts with the e-graph.
+/ III runtime), `cost_of`, `objective_terms`. What each intrinsic
+means, what the compiler guarantees about it, how it interacts with
+the e-graph.
 
 #### 14.1 `condition_of` — Levels I, II, III
 
@@ -2540,21 +2541,37 @@ compiler chose: Gaussian elimination tracks pivot quality,
 QR tracks the Q factor. The distinction is inspectable at
 compile time without running the model.
 
-#### 14.2 `loss_of` — Named-Field Return
+#### 14.2 `cost_of` and `objective_terms`
 
-*Open.* Field inventory overlaps `cost_of` (§14) and the §19.1
-extraction cost vector. Three surfaces use the word "cost" with
-three different field sets and no cross-reference. Unification
-tracked in chunk 12:
-`planning/v2/v2.1_chunk_reports/12_cost_field_unification.md`.
+**Summary.** Chunk 12 resolves the cost/loss naming split:
+`cost_of(expr)` is compiler/planner economics for extraction and
+diagnostics, while `objective_terms(residual)` is workflow-facing
+training-objective decomposition. Neither returns a scalar objective
+by default; scalarization is workflow policy.
 
-**Summary.** `loss_of(residual)` returns a struct of named components
-(`data_fit`, `constraint_violation`, `regularization`), not a scalar.
-Users aggregate by name at training emission. The compiler does not
-auto-sum; scalar loss is a workflow composition.
+`cost_of(expr)` returns an extraction-cost record for a compiler
+expression or residual candidate. The canonical fields are:
 
-`loss_of(residual)` returns a struct of named loss components,
-not a scalar. Fields cover the residual's loss sources:
+- `compute` — estimated operation count, memory bandwidth pressure,
+  and backend-kernel availability as a lowering-time resource cost.
+- `memory` — peak allocation and intermediate-buffer pressure.
+- `approximation` — contribution from authorized approximate rewrites
+  (§15, Appendix C).
+- `condition` — conditioning estimate consumed from `condition_of`
+  Levels I/II where available (§14.1).
+- `truncation` — finite-support, quadrature, iteration, or finite-
+  horizon truncation contribution.
+- `discretization` — mesh, timestep, stencil, or sampling-grid
+  discretization contribution.
+
+The first two fields are resource economics; the latter four are
+faithfulness / numerical-quality economics. Extraction (§19.1) uses
+the full record. Approximation diagnostics may project only the
+faithfulness fields.
+
+`objective_terms(residual)` returns named training-objective
+components, not a scalar. Fields cover the residual's training
+sources:
 
 - `data_fit` — likelihood / observation mismatch terms.
 - `constraint_violation` — projection/penalty terms from
@@ -2562,10 +2579,10 @@ not a scalar. Fields cover the residual's loss sources:
 - `regularization` — prior log-densities on learned parameters.
 
 Users select components by name for training (§25) — e.g.,
-`bind_loss(loss_of(residual).data_fit + 0.1 *
-loss_of(residual).regularization)`. Aggregation to a scalar is
-the workflow's call. The compiler does not auto-sum; scalar
-loss is a workflow composition, not a language default.
+`objective_terms(residual).data_fit + 0.1 *
+objective_terms(residual).regularization`. Aggregation to a scalar is
+the workflow's call. The compiler does not auto-sum; scalar objective
+construction is workflow composition, not a language default.
 
 #### 14.3 `integrate` — Domain, Units, E-Graph
 
@@ -2817,7 +2834,7 @@ Lossiness accounting layers:
   here. The layer-3 record carries provenance back to the
   declaring construct.
 - **Layer 4 — Extraction cost.** Distortions that manifest
-  only at residual-projection time: cost-vector-guided
+  only at residual-projection time: `cost_of`-guided
   extraction picks one among multiple valid representations
   (Y-group closure policies, cost-struct tradeoffs §19.1).
   The rewrite itself is layer-1 or layer-2 lossless; the
@@ -3360,7 +3377,7 @@ explicit nesting.
 
 Extracted residuals preserve their original relation names under
 the CC3 / O4.3 constraint, so training-emission diagnostics
-(§25) can expose per-residual loss contributions; §35 O4.3
+(§25) can expose per-residual objective terms; §35 O4.3
 tracks the open tension with strict algebraic collapse.
 
 Envelope-narrowing corollary. A default-off rewrite is promoted
@@ -3389,7 +3406,7 @@ rewrite predicates) is the chunk 07 deliverable.
 ### 19. Residual Graph (Projection)
 
 **Summary.** The residual graph is a user-facing diagnostic view
-projected from the e-graph via cost-vector-guided extraction. It is
+projected from the e-graph via `cost_of`-guided extraction. It is
 not a canonical form: different workflow cost preferences yield
 different residuals. Subsections cover the cost model, projection
 mechanics, residual classification, and saturation scheduling.
@@ -3400,36 +3417,25 @@ diagnostics reference which view.
 
 #### 19.1 Extraction Cost Model
 
-*Open.* Cost-vector fields here overlap the §14 O2.4 `cost_of`
-inventory and the §14.2 `loss_of` fields. Three surfaces, three
-divergent field sets, no cross-reference today. Unification
-tracked in chunk 12:
-`planning/v2/v2.1_chunk_reports/12_cost_field_unification.md`.
-
 **Summary.** Residual extraction optimizes against a multi-dimensional
-cost vector (precision, latency, memory, approximation class), not a
-single scalar. Extraction returns a Pareto front; workflow
-configuration selects a point. The same e-graph can yield different
-residuals under different policies.
+`cost_of` record, not a single scalar. Extraction returns a Pareto
+front; workflow configuration selects a point. The same e-graph can
+yield different residuals under different policies.
 
 Residual extraction from the e-graph optimizes against a
-**multi-dimensional cost vector**, not a single scalar. Cost
-dimensions:
-
-- **Precision.** Aggregate lossiness class (§15.3): lossless
-  preferred over lossy-model preferred over lossy-tolerance.
-- **Latency.** Estimated floating-point cost, memory bandwidth,
-  backend-specific kernel availability.
-- **Memory.** Peak allocation, intermediate buffer count.
-- **Approximation class.** Which `approximate` blocks (§15.1)
-  the extraction activates, if any.
+**multi-dimensional `cost_of` record** (§14.2), not a single scalar.
+The extractor consumes both resource economics (`compute`, `memory`)
+and faithfulness / numerical-quality economics (`approximation`,
+`condition`, `truncation`, `discretization`). The record replaces the
+older private vocabulary of precision / latency / memory /
+approximation-class axes.
 
 Extraction returns a Pareto front in the cost space by default;
 workflow configuration selects a specific point
-(latency-first, precision-first, or weighted). No default
-scalar weighting; the compiler does not assume one dimension
-dominates. Extraction policy is selected workflow-side (§24)
-via a config surface naming the axis preference.
+(compute-first, memory-first, faithfulness-first, or weighted). No
+default scalar weighting; the compiler does not assume one dimension
+dominates. Extraction policy is selected workflow-side (§24) via
+`run.config.extraction_policy`.
 
 Consequence: the same e-graph yields different residuals under
 different workflow policies. The residual graph is a projection
@@ -3438,13 +3444,13 @@ different workflow policies. The residual graph is a projection
 #### 19.2 Residual ↔ E-Graph Projection Mechanics
 
 **Summary.** The extractor walks the e-graph top-down, choosing one
-representative term per e-class under the cost vector. The broad
+representative term per e-class under the `cost_of` record. The broad
 mechanism (root set from workflow-bound variables and observed
 quantities, share-always preference, envelope propagation) is stable;
 specific heuristics remain open under Tier 0 Phase 2 work.
 
 The extractor walks the e-graph top-down, choosing one
-representative term per e-class subject to the cost vector
+representative term per e-class subject to the `cost_of` record
 (§19.1). Open items tracked in §35 (Tier 0 Phase 2 Q3):
 
 - **Root set.** How the extractor identifies which e-classes
@@ -3459,7 +3465,7 @@ representative term per e-class subject to the cost vector
   residual as runtime assertions, which stay compile-time-only.
 - **Name preservation.** Extracted residuals carry their original
   relation names (CC3 / O4.3); training emission (§25) depends on
-  per-residual identity for loss exposure. Aggressive algebraic
+  per-residual identity for objective-term exposure. Aggressive algebraic
   collapse that erases relation names is forbidden in the extractor.
   Open tracking in §35.
 
@@ -3675,7 +3681,7 @@ inspection fact, not a separate module semantic.
 **Summary.** Each SCC class lowers through a distinct path: static
 SCCs fold or prelude-evaluate; dynamic SCCs emit per-tick body code;
 stochastic SCCs route to PPL tiers A, B, or C; training SCCs emit
-gradient-producing computation with per-residual loss exposure. An
+gradient-producing computation with per-residual objective exposure. An
 SCC inherits the most expensive class among its members, with
 diagnostics on promotion so the modeler can refactor or accept.
 
@@ -4189,10 +4195,10 @@ Controllers usually wrap differentiable components (neural nets with
 learnable weights). Gradient semantics:
 
 - **Parameter registration.** A `Controller(..., trainable=True)`
-  registers its internal learnable parameters with the training loss
+  registers its internal learnable parameters with the training objective
   at workflow composition. A workflow may bind the same trained
   controller later with `trainable=False` to freeze it.
-- **Backward pass.** Loss gradients from workflow observations
+- **Backward pass.** Objective gradients from workflow observations
   (§13.8) flow through the model graph to the controller's output,
   into the controller's parameters, via the backend's AD facility
   (§31). The compiler treats the controller as a differentiable black
@@ -4267,6 +4273,15 @@ Representative fields:
   (§9.1).
 - `run.config.gradient_regime`. Long-rollout gradient strategy:
   `full_BPTT`, `truncated_BPTT(k)`, or `checkpointed`.
+- `run.config.extraction_policy`. Preference over
+  `cost_of` fields: compute-first, memory-first, faithfulness-first,
+  or weighted (§19.1).
+- `run.config.objective_policy`. Workflow-side scalarization of
+  `objective_terms` across residuals and studies (§25).
+- `run.config.approximation_estimation`. Sampling parameters used to
+  empirically estimate approximation error bounds (sample count,
+  seed, stratification) when a rewrite's certification requires
+  numerical estimation (§15.2).
 - `run.config.profile`. Execution-profile hints (batch
   size, memory budget).
 - `run.config.capability_overrides`. Explicit workflow authorizations
@@ -4296,8 +4311,8 @@ training (§20). Training emission has three products:
 - A differentiable forward computation for each training SCC.
 - A workflow-visible residual catalog preserving original relation
   names (§19.2).
-- Objective-term hooks that workflow code can aggregate into a scalar
-  objective.
+- `objective_terms(residual)` hooks that workflow code can aggregate
+  into a scalar objective (§14.2).
 
 The compiler does not choose the scalar training objective. It exposes
 the ingredients; the workflow composes them.
@@ -4338,7 +4353,11 @@ consume the residual catalog:
   JAX-like state threading).
 
 Both helpers are workflow conveniences over the same residual catalog,
-not compiler-selected loss functions.
+not compiler-selected objective functions.
+
+Both helpers consume `objective_terms(residual)` values. They may
+choose only `constraint_violation`, combine it with `data_fit`, or
+add `regularization`; the compiler does not privilege a combination.
 
 **What the compiler does not auto-emit.** The compiler does not pick a
 projection flavor, aggregate objective terms, update dual variables,
@@ -4356,7 +4375,7 @@ ways:
 - Runtime projection: the workflow explicitly selects a projection
   strategy for deployment or simulation.
 
-Training-mode consistency-loss substitution is the O-group rule:
+Training-mode consistency-objective substitution is the O-group rule:
 an overconstrained relation `lhs = rhs` may expose a residual term
 proportional to `(lhs - rhs)^2` in training mode (Appendix C O1).
 The e-graph still keeps the relation name so diagnostics and training
@@ -5199,7 +5218,8 @@ matrix heterogeneous-unit resolution, B6 backend abstraction.
 **Summary.** Outstanding design chunks: chunk 05 matrix details,
 chunk 06 backend abstraction, chunk 07 type-graph to e-graph bridge,
 chunk 08 joint syntax and coupling, chunk 03 kernels (resumes after
-substrate lock), chunk 11 sum types / enums.
+substrate lock), chunk 11 sum types / enums. Chunk 12 cost/objective
+vocabulary is resolved and kept here only as a completed reference.
 
 - **Chunk 05.** Matrix details (heterogeneous units, envelope flavors,
   subtype lattice, shape refinements, scalar reconciliation).
@@ -5222,10 +5242,10 @@ substrate lock), chunk 11 sum types / enums.
   triggered variant transitions, lifted-arithmetic sugar, and
   workflow binding surface open. Resolves the Mode B open in §35
   and the number-or-distribution materialization question.
-- **Chunk 12.** Cost-field struct unification across `cost_of`
-  (§14), `loss_of` (§14.2), and the §19.1 extraction cost vector.
-  Three divergent field sets, no cross-reference today. Subsumes
-  the §35 "Memory as a `cost_of` field" open. Canonical reference:
+- **Chunk 12.** Resolved cost/objective vocabulary. `cost_of(expr)`
+  owns planner/extraction economics (§14.2, §19.1);
+  `objective_terms(residual)` owns training-objective decomposition
+  (§14.2, §25). The former open is recorded in
   `planning/v2/v2.1_chunk_reports/12_cost_field_unification.md`.
 
 ### 35. Other Opens
@@ -5233,9 +5253,10 @@ substrate lock), chunk 11 sum types / enums.
 **Summary.** Catalog of smaller open items: `replaces` obligation
 retraction under monotonicity, residual-to-e-graph mechanics, CC1
 diagnostics, GPU-incompatibility of exact numeric types, chunk 04
-carryovers (per-residual loss, heterogeneous `argmax`, event-driven
-topology, spatial operator lowering), Complex contracts, controller-
-interface affordances, and Tier 2/Tier 3 distribution machinery.
+carryovers (per-residual objective exposure, heterogeneous `argmax`,
+event-driven topology, spatial operator lowering), Complex contracts,
+controller-interface affordances, and Tier 2/Tier 3 distribution
+machinery.
 
 `replaces` obligation retraction (monotonicity tension with the
 e-graph; cross-refs §8.10 declaration, §10.5 semantics, §15
@@ -5249,8 +5270,8 @@ model. **Chunk 04 carryovers:** O4.1 `replaces` obligation
 retraction (rewrite group W1 in Appendix C; three candidate
 semantics still open). O4.3 per-residual training emission (CC3
 cross-cut: overconstrained relations must survive extraction with
-original names so training can expose per-residual loss terms;
-tension with strict algebraic collapse; §20 rewrite group O1).
+original names so training can expose per-residual objective terms;
+tension with strict algebraic collapse; §19 extraction policy).
 O4.6 heterogeneous `argmax` tagged handles (closure-policy
 extensibility for collections with tagged alternatives). O4.7
 event-driven topology mutation (incremental saturation strategy
@@ -5300,14 +5321,13 @@ require a distinct process-family mechanism, or are treated as
 Tier C opaque PPL handoff. No formal tier boundary drawn; design
 not yet scoped to a chunk.
 
-**Memory as a `cost_of` field.** The `cost_of(expr)` extraction-cost
-struct (§14, §19.1) carries the five O2.4 fields `compute`,
-`approximation`, `condition`, `truncation`, `discretization`. An
-earlier §19.1 draft listed `memory` as a separate dimension; O2.4
-dropped it. Open: is peak allocation a first-class sixth field of
-`cost_of`, or a backend-specific annotation exposed through a
-separate surface? Informs whether `run.config.extraction_policy`
-weights a six-field or five-field vector.
+**Cost/objective vocabulary resolved.** Chunk 12 is no longer an open
+design item. `cost_of(expr)` owns extraction economics with
+`compute`, `memory`, `approximation`, `condition`, `truncation`, and
+`discretization` fields (§14.2, §19.1). `objective_terms(residual)`
+owns training-objective decomposition (§14.2, §25). Peak allocation is
+therefore a first-class `memory` field of `cost_of`, not a separate
+surface.
 
 **CC5 site-gated strict rewrites: data path resolved.** CC5 locks
 both category and data path for identify-seam merges and pole
@@ -5560,7 +5580,7 @@ pattern or pipe use).
 `abs`, `sign`, `floor`, `ceil`, `round`, `min`, `max`, `sum`,
 `prod`, `mean`, `std`, `var`, `argmin`, `argmax`, `solve`,
 `inverse`, `det`, `trace`, `condest`, `deriv`, `integrate`,
-`condition_of`, `loss_of`, `cost_of`, `value_in`, `grad`, `diverg`,
+`condition_of`, `objective_terms`, `cost_of`, `value_in`, `grad`, `diverg`,
 `laplacian`, `curl`, `normal_grad`, `limit_from`, `smooth_max`,
 `smooth_abs`, `smooth_step`, `soft_select`, `hard_select`,
 `weighted_average`, `condition_weighted`, `soft_clip`, `hard_clip`,
@@ -5759,10 +5779,10 @@ this. OPEN (§35, kernels chunk 03).
 - N1. `integrate(f, var, lo, hi) → quadrature_n(...)` for user-tunable
   `n` when symbolic integration fails
 
-**O. Training-time consistency-loss substitution.** Mode-conditional.
+**O. Training-time consistency-objective substitution.** Mode-conditional.
 OPEN (§35, chunk 04 O4.3 per-residual training emission).
 
-- O1. In train mode, overconstrained `lhs = rhs` becomes `loss += w *
+- O1. In train mode, overconstrained `lhs = rhs` becomes `objective += w *
   (lhs - rhs)²`
 
 **P. Mesh discretization (continuous → discrete).** Tolerance-gated by
@@ -5821,7 +5841,7 @@ LOCKED.
 
 - V1. `observe(path, data)` attaches observed data as a layer-2
   envelope fact on `path`'s e-class (§13.8, §13.9); `log_pdf(data)`
-  contributes to the training loss (§25). Not an equational merge:
+  contributes to the training objective (§25). Not an equational merge:
   `path` is not rewritten to `data` in layer 1, and the same `path`
   elsewhere remains stochastic. Data is never rewritten by inferred
   constraints.
