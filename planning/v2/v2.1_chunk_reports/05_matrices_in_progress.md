@@ -196,82 +196,76 @@ Lean: (i) — unification is cleaner and the ergonomic surface stays
 the same. Users write `Scalar<meters>`, compiler sees
 `Tensor<meters, ()>`.
 
-### 3.2 Heterogeneous-unit question — OPEN (primary blocker)
+### 3.2 Heterogeneous-unit question — RESOLVED: matrix facts
 
-This is the tightest decision because it shapes the whole type
-signature and ripples into envelopes, convert, named types.
+Decision (2026-04-23): Myco does **not** add a second tensor-like
+type (`LinearMap<From, To>`), a `basis` declaration, or user-marked
+matrix role annotations. Heterogeneous-unit matrix meaning is carried
+by compiler-facing graph facts over ordinary `Tensor` / `Matrix`
+values.
 
 **Background.** A Jacobian from multiphysics residual systems has
-per-entry distinct units: `∂force/∂length`, `∂force/∂time`,
-`∂temperature/∂length`, etc. Scalar unit machinery propagates one
-unit per quantity; a matrix-of-Jacobian-entries would need either
-(a) homogeneous (all entries same unit) or (b) heterogeneous
-(per-entry unit).
+per-entry distinct units: `d force / d length`, `d force / d time`,
+`d temperature / d length`, etc. A covariance matrix over mixed
+observations has entries such as `kelvin * pascal`. A geometry metric
+or Gram matrix has its own construction-specific unit law. Units alone
+do not identify the mathematical meaning; the relation graph and
+construction provenance do.
 
-**Option A — Homogeneous-unit tensors only.**
-`Tensor<U, shape>` has one unit `U`. All entries share it.
-Jacobians require dimensionalization at the boundary — user scales
-rows and columns to make the Jacobian dimensionless, operates on
-that, un-scales at output.
+**Resolution.**
 
-Pros:
-- Type signature stays clean.
-- Envelope machinery (entry-wise, norm-based, spectral) all
-  operates on scalar intervals of one unit.
-- Convert semantics trivially extend from scalar.
+- `Tensor<U, shape>` remains the primitive; `Vector` and `Matrix`
+  remain shape-refined aliases.
+- Pure field-set contracts provide reusable axis signatures. No new
+  `basis` syntax is added.
+- The compiler records row / column axes, entry-unit laws, structural
+  facts, construction provenance, and provider-validation evidence as
+  matrix facts.
+- Names such as "covariance", "Jacobian", "metric", "precision", and
+  "Gram" are fact bundles / provenance patterns, not privileged source
+  roles.
+- Operations consume facts. If a required fact is unknown, planning
+  reports an unmet obligation. There is no automatic semantic fallback
+  or opaque handoff.
 
-Cons:
-- Scientifically wrong for most real Jacobians.
-- Pushes unit bookkeeping into user code at SCC boundaries — exactly
-  the kind of bleed that CC1 tried to eliminate.
-- Awkward for condition-number analysis (row/column scaling changes
-  κ non-trivially).
+Example axis source:
 
-**Option B — Heterogeneous-unit tensors.**
-`Tensor<U, shape>` where `U` is itself shape-indexed:
-`Tensor<Units[m,n], m, n>` — a separate unit per entry. Or more
-plausibly: `LinearMap<From, To>` where `From` and `To` are unit
-signatures on each axis, with entry `(i, j)` having unit `To[i] /
-From[j]`.
+```myco
+contract Obs {
+    temp: Scalar<kelvin>
+    pressure: Scalar<pascal>
+}
+```
 
-Pros:
-- Scientifically correct for Jacobians, change-of-basis maps,
-  operators between spaces with distinct unit signatures.
-- Enables typed condition-number analysis that respects unit
-  structure.
-- Matches the mathematical reality (linear maps between dimensioned
-  vector spaces).
+An empirical covariance relation can derive:
 
-Cons:
-- Type signature more complex.
-- Envelope / convert / named-type stripping all need
-  heterogeneous-aware versions.
-- Most user code won't need heterogeneity; we're charging everyone
-  for the 20% use case.
+```
+row_axes(Sigma) = Obs
+col_axes(Sigma) = Obs
+entry_unit(Sigma[temp, pressure]) = kelvin * pascal
+symmetric(Sigma)
+positive_semidefinite(Sigma)   // when the construction/proof supports it
+```
 
-**Option C — Two-track type system.**
-- `Tensor<U, shape>` for homogeneous — the common case.
-- `LinearMap<From_units, To_units>` for heterogeneous — explicit
-  type for Jacobians and unit-mismatched operators.
-- Operations defined on each; conversion rules between.
+A solver SCC can derive a Jacobian coefficient matrix with facts such
+as:
 
-Pros:
-- Common case stays simple; Jacobians have their own correct type.
-- User opts into heterogeneity when they need it.
+```
+jacobian_of(J, residuals, variables)
+entry_unit(J[i,j]) = unit(residuals[i]) / unit(variables[j])
+row_axes(J) = residual fields
+col_axes(J) = variable fields
+```
 
-Cons:
-- Two tensor-like types is the pattern we tried to avoid.
-- Operator-overloading dispatch becomes harder (some ops work on
-  both, some on one).
+These facts are compiler / inspection objects. Users normally write
+relations, constraints, and workflow bindings; they do not annotate
+matrix roles. A constraint such as `positive_definite(A)` creates an
+obligation to prove or validate the fact, not a grant of the fact.
 
-**Preliminary lean:** Option C, with `LinearMap` as a refinement of
-`Tensor` where the unit field is per-entry. Implementation detail:
-`LinearMap<From, To>` desugars to `Tensor<Units[m, n], m, n>` with
-appropriate constraints. Users see a clean two-type surface;
-compiler sees one unified primitive.
-
-**This question should be closed before §3.3-3.6 are drafted** —
-envelopes, convert, named types all key off it.
+This closes the type-signature branch of the heterogeneous-unit
+question. Remaining chunk-05 work is fact propagation: envelope
+flavors, shape refinements, structural fact lattice, sparse-pattern
+facts, and primitive fact contracts.
 
 ### 3.3 Envelope flavors for matrix-valued quantities — OPEN
 
@@ -386,7 +380,7 @@ pattern declaration, named↔structural relabel.
 
 ### 3.6 Shape refinements as type-level predicates — OPEN (prerequisite)
 
-Option C requires the type system to express predicates like
+The locked tensor / matrix constructor shape requires the type system to express predicates like
 `shape = (n, n)` for square matrices. Current refinement-type
 machinery is scalar value predicates (`self >= 0`,
 `self <= 1`).
@@ -405,7 +399,8 @@ Needed extensions:
 This is a **real type-system extension**. Options:
 
 - **Ship with chunk 05.** Shape refinements are fundamental to
-  Option C and every structural subtype. Must ship together.
+  the matrix fact vocabulary and every structural subtype. Must ship
+  together.
 - **Minimal shape language.** Support shape equality (`shape[0] =
   shape[1]`), shape tupling, shape product; defer arbitrary shape
   arithmetic to v2.2.
@@ -516,9 +511,10 @@ math-vocabulary).
 
 ## 5. Interactions with other v2.1 surfaces
 
-- **Units (spec §4).** Heterogeneous-unit question §3.2 primary.
-  Homogeneous unit propagation is the simple part; `LinearMap<From,
-  To>` is the design item.
+- **Units (spec §4).** Heterogeneous-unit accounting is resolved by
+  matrix facts: row/column axes, entry-unit laws, construction
+  provenance, and provider-validation evidence. Homogeneous unit
+  propagation remains the simple case.
 - **Named types (spec §4).** Named-type stripping rules U1-U3
   (chunk 04) extend to structural-subtype-preserving rules for
   tensor ops (`transpose(Symmetric) → Symmetric`, etc.).
@@ -541,9 +537,10 @@ math-vocabulary).
   set and chunk 06's backend execution.
 - **Kernels (chunk 03).** Gram matrices, low-rank approximations
   (K3). Kernel function `K(a, b)` remains scalar; `gram(K, points)`
-  assembles a `Symmetric<U, n, n>` or `PosSemiDef<U, n, n>`. K2
-  separability rule (chunk 04 Bucket 3) directly consumes matrix
-  tensor-product factorization.
+  assembles an ordinary matrix carrying `gram_of`, `symmetric`, and
+  `positive_semidefinite` facts when the kernel construction proves
+  them. K2 separability rule (chunk 04 Bucket 3) directly consumes
+  matrix tensor-product factorization.
 - **Collections (chunk 02).** Distinct primitive per §3.7. Stacks
   of matrices (`[Matrix<U, m, n>; k]`) are meaningful; matrix of
   collections is not.
@@ -552,7 +549,7 @@ math-vocabulary).
   matrix-valued derivatives. Custom VJPs for decompositions
   (standard literature). Execution belongs to chunk 06 (AD
   ownership fork).
-- **Neural controllers (`bind_controller`).** Data contracts with
+- **Neural controllers (`Controller` sources).** Data contracts with
   matrix-valued fields — mechanical extension once tensor types
   exist. Cross-backend interop belongs to chunk 06.
 - **Events / topology.** §3.8 — dynamic matrix shapes deferred
@@ -564,8 +561,8 @@ math-vocabulary).
 
 With this chunk shipped:
 
-- Wishart / InverseWishart distributions (chunk 04 Z-group
-  deferral B5).
+- Wishart / InverseWishart distributions (consume SPD / determinant /
+  trace / factorable-unit matrix facts).
 - Level III runtime `condition_of` concrete primitive target
   (though actual runtime path requires chunk 06).
 - MVN log_pdf and Z10 Cholesky reparameterization.
@@ -583,40 +580,40 @@ With this chunk shipped:
 Items in priority order (later items depend on earlier items
 closing):
 
-1. **Close §3.2 (heterogeneous-unit question).** Primary blocker —
-   shapes the type signature. Lean: Option C two-track
-   (`Tensor<U, shape>` + `LinearMap<From, To>`).
-2. **Close §3.6 (shape refinements).** Prerequisite for §3.4
+1. **Close §3.6 (shape refinements).** Prerequisite for §3.4
    structural subtypes. Lean: minimal shape language (equality,
    tupling, indexing, product).
-3. **Close §3.3 (envelope flavors).** Gates Level III
+2. **Close §3.3 (envelope flavors).** Gates Level III
    `condition_of` machinery. Four flavors, merging rules,
    per-op propagation tables.
-4. **Close §3.4 (structural subtype lattice).** Stdlib subtypes +
+3. **Close §3.4 (structural subtype lattice).** Stdlib subtypes +
    declaration syntax + stripping rules.
-5. **Close §3.5 (convert scope).** Mostly a scope call with small
+4. **Close §3.5 (convert scope).** Mostly a scope call with small
    design consequences.
-6. **Close §3.7 (collections boundary).** Written above as
+5. **Close §3.7 (collections boundary).** Written above as
    clarification; needs one-paragraph commitment in spec.
-7. **Close §3.8 (dynamic topology deferral).** Documentation call.
-8. **Draft primitive list §4 concretely.** Names, signatures,
+6. **Close §3.8 (dynamic topology deferral).** Documentation call.
+7. **Draft primitive list §4 concretely.** Names, signatures,
    errors. Well-trodden; low design risk.
-9. **Write the v2.1 commitment text into the spec.**
+8. **Write the v2.1 commitment text into the spec.**
 
 Parallelizable with chunk 06 (backend abstraction) — chunk 06
 needs this chunk's primitive list to have lowering targets; this
 chunk doesn't need chunk 06's decisions to specify the type system.
 
-This chunk and chunk 06 both must close before the chunk-04
-Z-group Tier-1 promotions (Wishart, MVN, Level III
-`condition_of` runtime) can actually ship.
+This chunk and chunk 06 both must close before the remaining
+matrix-dependent Z-group promotions (Wishart / InverseWishart and
+Level III `condition_of` runtime) can actually ship. MVN consumes
+the matrix fact model directly and depends on the relevant primitive
+fact contracts being established for `Σ`.
 
 ---
 
 ## 8. Open questions (consolidated)
 
-- **Q1.** Heterogeneous-unit question — `Tensor<U, shape>` only,
-  `LinearMap<From, To>` only, or two-track? (§3.2; primary blocker)
+- **Q1.** Heterogeneous-unit question. RESOLVED 2026-04-23:
+  compiler-facing matrix facts over ordinary tensors; no `LinearMap`
+  type, no `basis` syntax, no user-marked matrix role annotations.
 - **Q2.** Shape refinement language — how much shape arithmetic
   ships in v2.1? (§3.6)
 - **Q3.** Envelope flavors and their per-op propagation rules?

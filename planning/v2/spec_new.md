@@ -432,19 +432,130 @@ scope for `convert`: **numeric precision downcasts** (authorized via
 preserving lossless transforms at the type layer and leaves
 representation-level tuning to the backend trait.
 
-#### 3.9 Matrix Structural Subtype Lattice
+#### 3.9 Matrix Facts and Structural Refinements
 
-**Summary.** Matrix structural properties (Symmetric, PositiveDefinite,
-Diagonal, Triangular, Orthogonal, Sparse, Banded) are type-level
-predicates forming a lattice under meet. They drive stdlib primitive
-dispatch: `solve` picks triangular substitution, Cholesky, or general
-LU from the structural subtype of its first argument.
+**Summary.** Matrix intelligence is carried by compiler-facing graph
+facts, not by user-marked matrix roles. Users write ordinary contracts,
+relations, constraints, and workflow bindings; the compiler derives,
+validates, or reports facts such as shape, axes, entry-unit laws,
+symmetry, definiteness, rank, sparsity, conservation, construction
+provenance, and backend representation. Stdlib primitives consume
+required facts (§30). If a required fact is unknown, the result is an
+unmet obligation with diagnostics, not a semantic fallback.
 
-Matrix structural properties are type-level predicates that form a
-lattice under meet (structural intersection). They drive stdlib
+Matrix-shaped values remain ordinary tensors: `Tensor<U, shape>`,
+with `Vector` and `Matrix` as shape-refined aliases (§3). Myco does
+not add a separate user-facing ontology of matrix roles such as
+`LinearMap<State, Residual>` or `Covariance<Obs>`. Those names may
+exist as documentation vocabulary, stdlib relation patterns, or
+inspection labels, but the source of truth is the graph fact set.
+
+Pure field-set contracts already provide the axis-signature vocabulary
+needed for heterogeneous matrix accounting:
+
+```myco
+contract Obs {
+    temp: Scalar<kelvin>
+    pressure: Scalar<pascal>
+}
+```
+
+A matrix whose rows and columns are indexed by `Obs` can carry facts
+such as `row_axes(A) = Obs`, `col_axes(A) = Obs`, and
+`entry_unit(A[temp, pressure]) = kelvin * pascal`. No `basis`
+declaration or role annotation is added.
+
+Canonical matrix facts include:
+
+- **Shape / axis / unit facts.** `rank(A)`, `shape(A)`,
+  `square(A)`, `row_axes(A)`, `col_axes(A)`,
+  `compatible_axes(A, x, b)`, `entry_unit(A[i,j])`,
+  `entry_unit_law(A)`, `factorable_unit_law(A)`, and
+  `dimensionless_under_scaling(A, scaling)`.
+- **Construction / provenance facts.** `jacobian_of(J, residuals,
+  variables)`, `hessian_of(H, scalar, variables)`,
+  `gradient_of(g, scalar, variables)`, `covariance_of(Sigma, x)`,
+  `precision_of(Lambda, x)`, `correlation_of(R, x)`,
+  `gram_of(K, kernel, points)`, `metric_of(G, domain)`,
+  `incidence_of(B, graph)`, `laplacian_of(L, graph_or_geometry)`,
+  `mass_matrix_of(M, discretization)`, and
+  `stiffness_matrix_of(K, operator)`.
+- **Structural facts.** `symmetric(A)`, `skew_symmetric(A)`,
+  `hermitian(A)`, `diagonal(A)`, `scalar_diagonal(A)`,
+  `upper_triangular(A)`, `lower_triangular(A)`, `orthogonal(A)`,
+  `unitary(A)`, `permutation(A)`, `projection(A)` (`A*A = A`),
+  `involution(A)` (`A*A = I`), and `normal(A)`.
+- **Definiteness / spectral facts.** `positive_definite(A)`,
+  `positive_semidefinite(A)`, `negative_definite(A)`,
+  `negative_semidefinite(A)`, `indefinite(A)`,
+  `eigenvalue_bounds(A)`, `singular_value_bounds(A)`,
+  `spectral_radius_bound(A)`, `condition_bound(A)`,
+  `coercive(A)`, and `elliptic(A)`.
+- **Rank / subspace facts.** `rank_value(A)`, `full_rank(A)`,
+  `full_row_rank(A)`, `full_col_rank(A)`, `nullspace_dim(A)`,
+  `left_nullspace_dim(A)`, `row_space(A)`, `col_space(A)`,
+  `range_space(A)`, `kernel_basis(A)`, and
+  `constraint_redundancy(A)`.
+- **Sparsity / pattern facts.** `zero_pattern(A)`, `sparse(A)`,
+  `banded(A, width)`, `block_sparse(A, blocks)`,
+  `block_diagonal(A, blocks)`, `block_triangular(A, blocks)`,
+  `tridiagonal(A)`, `stencil_pattern(A)`, `local_coupling(A)`,
+  and `nearest_neighbor_coupling(A)`. These are mathematical or
+  pattern facts, not storage formats.
+- **Operator / conservation facts.** `self_adjoint(A)`,
+  `adjoint_pair(A, B)`, `conservative_operator(A)`,
+  `row_sum_zero(A)`, `col_sum_zero(A)`, `mass_preserving(A)`,
+  `energy_preserving(A)`, `dissipative(A)`,
+  `monotone_operator(A)`, `m_matrix(A)`, `graph_laplacian(A)`,
+  `incidence_matrix(A)`, and `divergence_gradient_pair(D, G)`.
+- **Positivity / stochastic facts.** `nonnegative_entries(A)`,
+  `nonpositive_offdiagonal(A)`, `diagonally_dominant(A)`,
+  `strictly_diagonally_dominant(A)`, `row_stochastic(A)`,
+  `col_stochastic(A)`, `doubly_stochastic(A)`,
+  `substochastic(A)`, and `markov_generator(A)`.
+- **Numerical / approximation facts.** `discretization_order(A)`,
+  `truncation_error_bound(A)`, `roundoff_sensitivity(A)`,
+  `approximation_source(A)`, `mesh_dependent(A)`,
+  `timestep_dependent(A)`, `scaling_policy(A)`, and
+  `preconditioner_for(P, A)`.
+- **Backend / representation facts.** `preferred_layout(A)`,
+  `supports_csr(A)`, `supports_dense(A)`,
+  `supports_block_sparse(A)`, `backend_kernel_available(op, A)`,
+  `estimated_memory(A)`, and `estimated_compute(A)`. These facts
+  belong to lowering / provider records, not source-language storage
+  declarations.
+
+Facts carry evidence status:
+
+- `proven` — derived from Myco relations, e-graph rewrites, stdlib
+  laws, or construction provenance.
+- `refuted` — contradicted by graph facts or validation evidence.
+- `conditional` — true under named preconditions.
+- `obligation` — required by a constraint, refinement, or primitive
+  use, but not yet discharged.
+- `provider_validated` — checked against workflow-bound data at
+  composition time.
+- `backend_reported` — discovered by lowering, profiling, or backend
+  capability inspection.
+- `unknown` — expressible in the fact vocabulary but not established.
+
+`constraint positive_definite(A)` creates an obligation; it does not
+grant `positive_definite(A)`. The compiler may prove it, validate it
+against a provider-bound matrix, preserve it as a runtime check where
+the enclosing construct allows checks, or report it as unmet.
+
+Operations consume facts. `cholesky(A)` consumes `square(A)`,
+`symmetric(A)` or `hermitian(A)`, `positive_definite(A)`, and
+`factorable_unit_law(A)`. If any required fact is unknown, planning
+reports the missing fact and does not silently choose a different
+semantic path.
+
+Matrix structural properties are therefore facts/refinements rather
+than closed enum cases. They form a lattice under meet (structural
+intersection) where the algebra supports it. They drive stdlib
 primitive dispatch (§30), for example `solve` chooses triangular
 substitution, Cholesky back-substitution, or general LU based on the
-structural subtype of its first argument.
+established fact set.
 
 | structural type | meaning | Cholesky-eligible |
 |---|---|---|
@@ -467,21 +578,20 @@ pairs (e.g. `UpperTriangular ∧ LowerTriangular` outside of `Diagonal`)
 produce `Diagonal` by compile-time reduction or a compile error if
 the context requires a strict non-diagonal type.
 
-Dispatch rule: `solve(A, b)` with `A: LowerTriangular<U, n>`
-calls triangular substitution directly; `A: PositiveDefinite` routes
-through Cholesky; `A: Orthogonal` uses `Aᵀ · b`. The compiler walks
-the lattice to pick the tightest applicable specialization.
+Dispatch rule: `solve(A, b)` with `lower_triangular(A)` calls
+triangular substitution directly; `positive_definite(A)` routes
+through Cholesky; `orthogonal(A)` uses `Aᵀ · b`. The compiler walks
+the fact set to pick the tightest applicable specialization that
+preserves the same semantics.
 
 Deferred to chunk 05:
 
-- **Heterogeneous-unit matrices** (B5). `Matrix<U, m, n>` currently
-  assumes one unit parameter; matrices with entries
-  carrying different units per row or column — e.g. a Jacobian with
-  mixed dimensions — is the chunk-05 gating question. The lattice
-  above assumes scalar-valued entries in a single unit system; how
-  it extends to heterogeneous-unit matrices (and which subtypes like
-  `Symmetric` even make sense when units differ across the diagonal)
-  is the open resolution.
+- **Heterogeneous-unit matrix accounting** (B5). The resolution is
+  graph facts, not new role mechanics: row/column axes and
+  `entry_unit_law` facts carry per-entry units for Jacobians,
+  covariance constructions, metrics, and Gram matrices. Remaining
+  chunk-05 work specifies propagation / inspection detail for those
+  facts.
 - **Shape refinements** (§3 generics). Fixed-shape `Matrix<N, M>` vs
   dynamic-shape `Matrix<?, ?>` interaction with the subtype lattice.
   Fixed-shape in refinement syntax, dynamic in runtime-bound, compiler
@@ -4525,7 +4635,7 @@ Tier 1 univariate continuous families (19): Normal, LogNormal, Uniform,
 Beta, Gamma, Exponential, ChiSquared, Cauchy, Student-t, Laplace,
 HalfNormal, HalfCauchy, InverseGamma, Lévy, Weibull, Pareto, Fréchet,
 Gumbel, GEV. Tier 1 discrete: Bernoulli, Binomial, Categorical,
-Poisson, NegBinomial, Hypergeometric. Tier 1 multivariate (gated on B5):
+Poisson, NegBinomial, Hypergeometric. Tier 1 multivariate:
 MultivariateNormal, Dirichlet, Multinomial. Meta-families: `Truncated<D>`,
 `Mixture<D₁,…,D_N | weights>`. Conjugate-posterior rewrites.
 Tier B approximate rewrites: Delta method, Fenton-Wilkinson, CLT,
@@ -4585,8 +4695,10 @@ surface for advertising closures.
 **Summary.** Tier 1 families ship as capability-tagged stdlib
 declarations with Distribution, Affine/Sum/Product/ScaleSelfClosed,
 SmoothTransformable, ReparameterizedSampleable, and Conj(X) tags.
-Multivariate subset (MVN, Dirichlet, Multinomial) is gated on B5
-matrix heterogeneous-unit resolution for how `Σ` carries units.
+MVN consumes matrix facts for how `Σ` carries axes, entry units,
+symmetry, and positive-definiteness obligations; Dirichlet and
+Multinomial use vector/simplex facts rather than matrix covariance
+machinery.
 
 Tier 1 families ship as capability-tagged stdlib declarations
 (§7.2). Capability columns use shorthand: **D** =
@@ -4630,7 +4742,7 @@ Tier 1 families ship as capability-tagged stdlib declarations
 | `NegBinomial` | ℕ | `r`, `p` | D |
 | `Hypergeometric` | `[max(0, n-(N-K)), min(n, K)]` | `N`, `K`, `n` | D |
 
-**Multivariate (3, gated on B5).**
+**Multivariate (3).**
 
 | Family | Support | Parameters | Capabilities |
 |---|---|---|---|
@@ -4638,10 +4750,12 @@ Tier 1 families ship as capability-tagged stdlib declarations
 | `Dirichlet` | simplex Δᵈ⁻¹ | `α[d]` | D, Conj(Multinomial) |
 | `Multinomial` | `Σⱼ xⱼ = n` | `n`, `p[K]` | D, Conj(Dirichlet) |
 
-B5 (matrix heterogeneous-unit resolution, chunk 05) gates
-how `Σ` carries units in the multivariate group — per-row-unit
-matrices vs globally-scalar-unit matrices. Resolution upstream
-of final MVN shipping.
+MVN requires matrix facts on `Σ`: axis compatibility with `μ`,
+`entry_unit_law(Σ[i,j]) = unit(μ[i]) * unit(μ[j])`, symmetry, and
+positive semidefiniteness / positive definiteness depending on
+sampling vs density use. Unknown required facts become obligations.
+Dirichlet and Multinomial are vector/simplex-valued and do not depend
+on covariance-matrix machinery.
 
 Meta-families (`Truncated<D>`, `Mixture<D₁,…,Dₙ | weights>`),
 conjugate-posterior rewrites, and Tier B approximate rewrites
@@ -4765,7 +4879,8 @@ family catalog:
   conjugacy). The genuinely joint subset: declarations that
   introduce coupling structure directly (B2 syntax), correlated-
   sample coupling machinery (B4), copulas, Wishart / InverseWishart
-  / LKJ (gated on B5 heterogeneous-unit matrix resolution), and
+  / LKJ (gated on matrix fact propagation for SPD matrices,
+  determinant, trace, and factorable unit laws), and
   higher-order distributions routing through kernel machinery
   (§28), remains **open** pending chunk 08 design. Framing is
   "in scope for this design envelope, machinery not yet locked,"
@@ -4884,17 +4999,17 @@ the PositiveDefiniteness closure rule covers them.
 **Summary.** Three kernel-adjacent concerns remain tracked:
 compact-support sparse matrix assembly, low-rank kernel rewrites, and
 kernel integration operators. Until those close, kernels support
-direct evaluation, relation composition, and use as GP covariances via
-Tier C opaque handoff.
+direct evaluation, relation composition, and use as GP covariances
+only when the required Gram-matrix facts are established.
 
-Two kernel-adjacent concerns are deferred:
+Three kernel-adjacent concerns are deferred:
 
 - **Sparse / compact-support kernel representation.** Wendland and
   compactly-supported Matérn variants produce sparse Gram matrices.
   The kernel advertises compact support via `CompactSupport(radius)`;
   the backend representation for sparse kernel matrices (`CSR`,
   `block-sparse`, `k-nearest`) is a matrix-layer concern that belongs
-  in chunk 05 (B5).
+  in chunk 05's sparse-pattern / representation work.
 - **Low-rank kernel rewrites.** Nyström / inducing-point and related
   low-rank approximations are deferred. Appendix C K3 is explicitly
   post-current-scope rather than an open Tier-1 rewrite.
@@ -4905,10 +5020,11 @@ Two kernel-adjacent concerns are deferred:
   relations themselves; operators that combine kernels with
   integration machinery wait for the resumed kernel work.
 
-Until those unlocks, kernels support direct evaluation,
-relation composition, and use as GP covariances via opaque PPL
-handoff (§13.2, Tier C). Non-opaque GP handling routes through the
-kernel stdlib when chunk 03 lands.
+Until those unlocks, kernels support direct evaluation, relation
+composition, and use as GP covariances only when the required
+Gram-matrix facts (`symmetric`, `positive_semidefinite`, axis and
+entry-unit facts) are established. Process-level GP inference
+machinery remains chunk 03 / Tier 3 work.
 
 ### 29. Units Library
 
@@ -4932,43 +5048,38 @@ under the domain's own project maintenance.
 
 ### 30. Matrix and Tensor Primitives (STUB)
 
-**Summary.** Section 30 commits only the stdlib primitive surface for
-linear algebra (cholesky, lu, qr, svd, eigen, solve, inverse, det);
-the base matrix constructor is `Matrix<U, m, n>` and structural
-properties such as `PositiveDefinite` are refinements or aliases, not
-positional constructor arguments. Each
-primitive wraps backend kernels and is opaque at the e-graph layer,
-with invariants declared by capability contract.
+**Summary.** Matrix / tensor primitives are fact consumers and fact
+emitters. They do not ask for a user-marked matrix role. They require
+established graph facts (§3.9), emit new facts with provenance, and
+report unmet obligations when a required fact is unknown. Backend
+kernels are implementation choices that preserve the same semantics,
+not semantic fallbacks.
 
-Chunk 05 (B5 heterogeneous-unit resolution) is the design venue for
-the underlying type layer; this section commits only the stdlib
-function surface. Type content (structural subtypes, shape refinements,
-envelope interaction) lives in §3.9 per the chunk 05 scope decision.
+Chunk 05 is the design venue for the remaining matrix type layer:
+shape refinements, envelope interaction, sparse-pattern facts, and
+fact propagation. This section commits only the stdlib function
+surface and the primitive fact contracts; type content lives in §3.9
+per the chunk 05 scope decision.
 
 The matrix / tensor stdlib ships the linear-algebra primitives that
 the rest of the spec depends on by name, in particular the Cholesky
 factorization used in MVN reparameterization (§13.6, Z10) and the
-kernel Gram-matrix machinery (§28). Committed primitives:
+kernel Gram-matrix machinery (§28). Committed primitives and their
+fact contracts:
 
-- `cholesky(A)`. Lower-triangular factor `L` such that `L · Lᵀ = A`
-  for `A: PositiveDefinite<U, n>` (alias/refinement over
-  `Matrix<U, n, n>`). Returns `LowerTriangular<U, n>`.
-- `lu(A)`. `(L, U, P)` with `P · A = L · U`, for square invertible `A`.
-- `qr(A)`. `(Q, R)` with `A = Q · R`, `Q` orthogonal, `R` upper
-  triangular. Works on rectangular `A` (`m × n`, `m ≥ n`).
-- `svd(A)`. `(U, Σ, Vᵀ)` with `A = U · Σ · Vᵀ`, `Σ` diagonal with
-  nonnegative entries. Works on general rectangular `A`.
-- `eigen(A)`. Eigenvalue / eigenvector pair for
-  `Symmetric<U, n>`. General square-matrix eigen decomposition
-  defers to the `Complex` contract work (§26.1, §35).
-- `solve(A, b)`. Linear solve for `A · x = b`. Dispatches on the
-  structural subtype of `A` (triangular solve, Cholesky back-
-  substitution, general LU) via the §3.9 lattice.
-- `inverse(A)`. Direct inversion for documentation and small cases;
-  the compiler rewrites `inverse(A) · b` to `solve(A, b)` by default
-  to avoid explicit inversion in numeric code.
-- `det(A)`. Determinant. On `Triangular<U, n>` this reduces to
-  diagonal product; on general `A` it routes through LU.
+| primitive | required facts | emitted facts | unmet-obligation behavior |
+|---|---|---|---|
+| `cholesky(A)` | `rank(A)=2`, `square(A)`, `symmetric(A)` or `hermitian(A)`, `positive_definite(A)`, `factorable_unit_law(A)`, backend kernel availability | `lower_triangular(L)`, `positive_diagonal(L)`, `A = L * L^T` (or Hermitian transpose), output `entry_unit_law(L)` | Missing symmetry, definiteness, or factorability is reported as an unmet obligation. PSD alone does not authorize ordinary Cholesky; pivoted or low-rank factorizations are distinct primitives / policies. |
+| `lu(A)` | `rank(A)=2`, `square(A)`, `invertible(A)` or a route to pivoting facts | `(L, U, P)` with `P*A = L*U`, `lower_triangular(L)`, `upper_triangular(U)`, `permutation(P)` | If invertibility or pivot route is unknown, report the missing fact. |
+| `qr(A)` | `rank(A)=2`, numeric entries, and a scaling policy when heterogeneous units make orthogonality unit-dependent | `orthogonal(Q)`, `upper_triangular(R)`, `A = Q*R`, rank report where rank-revealing QR is selected | Missing scaling / rank facts are obligations; no automatic nondimensionalization. |
+| `svd(A)` | `rank(A)=2`, numeric entries, and a scaling policy when heterogeneous units make singular values unit-dependent | `orthogonal(U)`, `diagonal(S)`, `nonnegative_entries(diag(S))`, `orthogonal(V)`, singular-value / rank facts when classifiable | Missing scaling policy blocks interpretation rather than silently producing meaningless units. |
+| `eigen(A)` | `square(A)`; `symmetric(A)` / `hermitian(A)` for the real-symmetric route; Complex support for the general route | eigenvalue / eigenvector facts, `spectral_radius_bound(A)` or `eigenvalue_bounds(A)` when classifiable | General non-symmetric eigen requires the Complex/backend facts to be established. |
+| `solve(A, b)` | `rank(A)=2`, `compatible_axes(A, b)`, and `solvable(A, b)`; specialized routes consume `lower_triangular`, `upper_triangular`, `positive_definite`, `full_rank`, or rank facts | solution axes / units, residual report, `condition_of(solve_block)` facts | Under/overdetermined or ill-conditioned blocks become explicit obligations / diagnostics. Solver orientation is a lowering choice, not source semantics. |
+| `inverse(A)` | `square(A)`, `invertible(A)`, and materialization authorization when the inverse is needed as a value | inverse identities, inverse `entry_unit_law`, condition facts | `inverse(A) * b` may rewrite to `solve(A,b)` because semantics are preserved. Materializing an inverse without required facts is an unmet obligation. |
+| `det(A)` | `square(A)` and determinant-capable scalar / unit facts | determinant unit law, triangular product simplification when `triangular(A)` is established | Missing square or unit facts are reported. |
+| `condition_of(expr)` | expression shape, unit / axis comparability, and norm / scaling policy for matrix-valued expressions | `condition_estimate(expr)`, `condition_mode`, `condition_bound` when available | Heterogeneous units without a scaling policy make condition number interpretation unknown; the diagnostic asks for scaling evidence. |
+| `gram(k, points)` | kernel-domain compatibility and facts proving the Gram construction's symmetry / PSD when consumed as covariance | `gram_of(K,k,points)`, symmetry / PSD facts when provable, `zero_pattern` for compact-support kernels | If PSD is required by a downstream primitive and unknown, the downstream use reports `positive_semidefinite(K)` as unmet. No opaque handoff is automatic. |
+| spatial operator lowering | geometry/domain facts, discretization facts, boundary/locus facts | `stencil_pattern`, `local_coupling`, `discretization_order`, `mesh_dependent`, and conservation facts such as `row_sum_zero` or `graph_laplacian` when proven | Missing conservation / stability facts are visible in inspection; the compiler does not claim preserved physics it cannot establish. |
 
 `Matrix<U, m, n>` is the canonical base constructor. Full structural
 property names such as `PositiveDefinite`, `Symmetric`,
@@ -4977,12 +5088,12 @@ short aliases, if provided by the stdlib, desugar to those full
 refinement names. Forms such as `Matrix<_, PositiveDefinite>` are not
 canonical.
 
-Each primitive carries a capability contract that records what its
-output satisfies structurally (see §3.9). The primitives are opaque
-at the e-graph layer: their invariants are declared by contract, not
-derived from body composition, because they wrap backend linear-
-algebra kernels (BLAS / LAPACK / cuBLAS equivalents via the Part V
-backend trait).
+Each primitive carries a capability contract that records what facts
+it requires and what facts its result satisfies (see §3.9). The
+primitive body may be opaque at the e-graph layer because it wraps
+backend linear-algebra kernels (BLAS / LAPACK / cuBLAS equivalents
+via the Part V backend trait), but its contract is not opaque: inputs,
+outputs, emitted facts, and unmet obligations remain inspectable.
 
 ---
 
@@ -5202,14 +5313,20 @@ consolidation.
 
 ### 33. Design Blockers
 
-**Summary.** Five named B-blockers remain open: B1 opaque log_pdf
-policy, B2 joint declaration syntax, B4 coupling machinery, B5
-matrix heterogeneous-unit resolution, B6 backend abstraction.
+**Summary.** Four named B-blockers remain open: B1 opaque log_pdf
+policy, B2 joint declaration syntax, B4 coupling machinery, and B6
+backend abstraction. B5 matrix heterogeneous-unit resolution is
+closed at the type-mechanics level by the matrix-facts model (§3.9);
+remaining matrix work is chunk-slotted propagation / primitive detail.
 
 - **B1.** Opaque log_pdf stdlib policy.
 - **B2.** Joint declaration syntax.
 - **B4.** Coupling machinery.
-- **B5.** Matrix heterogeneous-unit resolution.
+- **B5.** RESOLVED: heterogeneous-unit matrix accounting uses
+  compiler-facing matrix facts (`row_axes`, `col_axes`,
+  `entry_unit_law`, construction provenance, provider validation)
+  over ordinary tensors; no `basis` syntax or user-marked matrix
+  role types.
 - **B6.** Backend abstraction details beyond the locked hybrid AD
   boundary (see Part V).
 
@@ -5221,8 +5338,10 @@ chunk 08 joint syntax and coupling, chunk 03 kernels (resumes after
 substrate lock), chunk 11 sum types / enums. Chunk 12 cost/objective
 vocabulary is resolved and kept here only as a completed reference.
 
-- **Chunk 05.** Matrix details (heterogeneous units, envelope flavors,
-  subtype lattice, shape refinements, scalar reconciliation).
+- **Chunk 05.** Matrix details. Heterogeneous-unit type mechanics are
+  resolved by matrix facts (§3.9); remaining work covers envelope
+  flavors, fact propagation, primitive fact contracts, shape
+  refinements, sparse-pattern facts, and scalar reconciliation.
 - **Chunk 06.** Backend abstraction.
 - **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04
   (expression e-graph substrate), 05 (refinement-lattice examples
@@ -5306,9 +5425,10 @@ against `Controller` sources (§24.2).
 
 **Tier 2 distribution machinery.** Joint-declaration syntax (B2),
 coupling / correlated-sample machinery (B4), copulas, Wishart /
-InverseWishart / LKJ (gated on B5), higher-order distribution
-routing through kernels. In scope for the current design envelope
-but not yet locked; chunk 08 is the intended design venue. The
+InverseWishart / LKJ (gated on matrix fact propagation for SPD matrix
+families), higher-order distribution routing through kernels. In
+scope for the current design envelope but not yet locked; chunk 08 is
+the intended design venue. The
 multivariate subset that admits factorization or closed-form
 reparameterization (MVN, Dirichlet, Multinomial) already ships in
 Tier 1 so this open does not block the common cases.

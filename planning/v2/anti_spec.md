@@ -32,6 +32,8 @@ gap-review stale list, subsequent design locks.
 | `kernel` keyword or kernel kind | parameterized relation accepting two point arguments and an explicit scalar output slot | kernels are not a distinct construct; §6 and §28 state the design positively |
 | `approximate A <-> B: under: ...` expr-infix form | `approximate { body: ... under: ... }` block form | chunk 04 earlier draft used an infix-over-equation syntax; block form scopes cleanly to a named body and is what §15.1 locks |
 | `loss_of(residual)` intrinsic | `objective_terms(residual)` | "loss" overloaded planner cost, training objective, and likelihood; `objective_terms` is explicitly workflow-facing training decomposition |
+| `basis` declaration for matrix axes | plain contracts / field-set shapes plus compiler-facing matrix facts | axis signatures do not need a new source construct; contracts already name fields and units |
+| user-marked matrix role types (`LinearMap<...>`, `Covariance<...>`, `Precision<...>`) | matrix facts derived from relations, constraints, stdlib construction provenance, and provider validation | roles would be unchecked annotation mechanics; operations consume facts, not labels |
 
 ## Retired annotations / attributes
 
@@ -80,6 +82,7 @@ gap-review stale list, subsequent design locks.
 | workflow must supply `MAX_CAPACITY` for dynamic collections | `.myco` declares N-max with workflow override up to ceiling | capacity is part of the source model's static bound; workflow can specialize within the declared ceiling |
 | compiler-emitted fixed loss-function menu (`obs_loss`, `consistency_loss`, etc.) | residual catalog + workflow-selected objective helpers | training objective composition is workflow policy, not compiler policy |
 | two-phase non-convergence penalty semantics as language feature | backend/runtime failure policy plus workflow-selected objective terms | solver non-convergence is backend/runtime behavior; Myco exposes diagnostics and residuals but does not hard-code convergence-penalty injection |
+| automatic semantic fallback when required matrix facts are unknown | unmet-obligation diagnostics unless the user explicitly writes a different valid operation / workflow policy | unknown `positive_definite`, kernel-PD, scaling, or axis facts do not authorize opaque handoff or "make it work" behavior |
 
 ## Retired open questions (closed or structurally void)
 
@@ -93,7 +96,7 @@ gap-review stale list, subsequent design locks.
 | homotopy continuation | void — not a language feature |
 | `condition_weighted` deferred | resolved — ships via `condition_of` Levels I-III (chunk 04 O4.5) |
 | `~` stochastic as e-graph merge | resolved — `~` is layer-2 distributional metadata, not a merge |
-| MVN "deferred pending vector/matrix story" | reframed — gated on B5 heterogeneous-unit resolution |
+| MVN "deferred pending vector/matrix story" | reframed — consumes matrix facts on `Σ`; B5 type-mechanics question resolved by matrix facts |
 | `d(x)` vs `step(x)` | resolved — both ship |
 
 ## Stale in legacy docs (do not import)
