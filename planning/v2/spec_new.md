@@ -3553,7 +3553,9 @@ elaboration, before saturation runs.
 **Summary.** The compiler decomposes the residual graph into
 strongly-connected components and assigns each SCC a four-way class:
 static, dynamic, stochastic, or training. The class pivots lowering
-strategy, training emission, and backend dispatch.
+strategy, training emission, and backend dispatch. SCCs are formed
+after workflow binding, so one source bundle can produce different
+SCC partitions under different workflows.
 
 After constraint collection, the compiler decomposes the residual
 graph into strongly-connected components. Each SCC receives a four-
@@ -3562,6 +3564,61 @@ way classification: **static** (fully resolved pre-run), **dynamic**
 closed-form marginalization), **training** (gradient-optimized).
 Classification pivots lowering, training emission, and backend
 dispatch.
+
+Formation pipeline:
+
+1. Expand generics, collection pools, events, loci, and workflow
+   source bindings into concrete obligation keys (§9.2).
+2. Saturate the e-graph under the authorized rewrite set (§19.4).
+3. Project the requested residual view (§19).
+4. Build the dependency graph over residual unknowns.
+5. Decompose the graph into SCCs.
+6. Classify each SCC by the strongest execution role visible in it.
+
+Acyclic single-node components lower as forward computations. Coupled
+components lower through the class-dispatched path below: dynamic
+loops, stochastic handoff, training emission, or static prelude solve.
+
+SCC decomposition runs after workflow binding because source objects
+can collapse, expose, or promote dependencies. Binding a value as
+`Constant` may make a component static; binding it as `Trainable` may
+move the same component into training; binding a `Prior` can promote a
+component into stochastic inference. A source bundle therefore has a
+parameterized SCC shape, and each run record stores the actual
+partition used.
+
+Opaque `Controller` source objects join the SCCs that read or write
+their paths as non-symbolic atoms. The compiler sees the controller's
+contracts and dependency edges, not its body. If the SCC trains through
+the controller, §24.3 and §31 own the runtime-gradient boundary.
+
+Hierarchical SCC decomposition is permitted when a differentiable
+outer objective depends on an inner implicit solve. The compiler
+partitions such components into:
+
+- **P.** Parameters and workflow sources held outside the inner solve.
+- **D.** Direct forward computations feeding the solve.
+- **X.** Inner unknowns solved by the implicit block.
+- **Y.** Quantities consumed by the outer objective or downstream SCCs.
+
+If the compiler cannot produce a valid inner/outer split, it emits a
+diagnostic in the E0952 family naming the cycle and the edge that
+prevents decomposition. When the split succeeds, gradients compose
+over the condensation DAG in topological order; implicit-solve
+gradients use the backend's root/linear-solve mechanism under the
+hybrid AD boundary (§31).
+
+Per-entity SCCs over homogeneous populations are vectorization
+candidates: the backend may map independent entity-local SCCs with
+`vmap`/batching on GPU. Cross-entity coupled SCCs remain scalar or
+block-structured solves until the compiler can prove separability.
+Dynamic-shape matrix SCCs are out of v2.1 scope; shapes participating
+in SCC solving must be compile-time known (§30).
+
+SCC-role predicates may feed rewrite guards and diagnostics. For
+example, a rewrite may require "this e-class is inside a training SCC"
+or "this residual comes from an implicit dynamic solve." These facts
+are derived compiler metadata, not user-authored annotations.
 
 Solver-strategy labels such as algebraic, fixed-point,
 iterative-solve, and stepper are lowering sub-dispatch metadata under
@@ -3634,7 +3691,10 @@ The four targets are distinct compilation paths:
   graph's topology; values at tick t depend on values at
   tick t-1 via explicit temporal terms (§21.3). Dynamic SCC
   lowering may sub-dispatch to algebraic, fixed-point,
-  iterative-solve, or stepper strategies.
+  iterative-solve, or stepper strategies. Assembled linear
+  solves dispatch by matrix structural subtype (§3.9, §30):
+  triangular solve, Cholesky back-substitution for positive-
+  definite systems, and LU-style general solve.
 - **Stochastic SCCs.** Lowered to backend PPL primitives
   (§31) or an explicit sampler. Tier A closed-form
   marginals resolve at compile time; Tier B approximate
@@ -3646,7 +3706,9 @@ The four targets are distinct compilation paths:
   propagates through contained stdlib atoms via their
   `Differentiable` contracts (§7.2). Myco owns symbolic and
   algorithmic derivatives; runtime AD delegates to the selected
-  backend (§31).
+  backend (§31). Extracted residuals preserve original relation
+  names through lowering so training emission can expose per-
+  residual objective terms (§19.2, §25).
 
 Class dominance: an SCC inherits the most expensive class
 among its members. A stochastic variable inside an
@@ -3658,6 +3720,11 @@ structurally (by refactoring) or accept the promotion.
 Lowering checks backend capability advertisements (§31.1). Missing
 required capabilities fail by default; `host` and `emulate` fallback
 modes are explicit run-config choices.
+
+A single run targets one backend in the current design scope (§31.6,
+§32.1). Opaque callables execute in that same backend context unless
+the workflow isolates them into a separate run and passes their outputs
+back as sources.
 
 #### 21.3 `y[t]` and `y[t+1]` as Ground Terms
 
@@ -3701,6 +3768,17 @@ once the maximum lookback and requested outputs no longer need them,
 but the plan's symbolic claims and provenance remain reproducible
 from the source bundle and run record.
 
+Long-rollout gradients are workflow-configurable. `full_BPTT`,
+`truncated_BPTT(k)`, and `checkpointed` are backend-agnostic regime
+names exposed through run-config (§24.5); backends choose the concrete
+checkpointing primitive or scan representation.
+
+Event-time topology mutation does not currently trigger incremental
+e-graph resaturation in the middle of a run. The design target is
+tracked as O4.7 in §35. Mesh discretization lowering likewise remains
+an architectural open item (Appendix C P1): whether spatial operators
+become e-graph rewrites or pre-e-graph codegen is not yet locked.
+
 #### 21.4 N-max Slots and Alive Masks
 
 **Summary.** Event-time collections lower to a fixed-capacity array
@@ -3721,6 +3799,11 @@ array plus an alive mask.
   Iteration primitives (§12.6) gate kernel lanes via the
   mask; dead slots contribute no work without introducing
   divergent branches.
+- **Bind-static collections.** In an otherwise dynamic module, a
+  collection with no event-time churn may lower without mask-update
+  machinery. It still lives inside the module's runtime loop if other
+  SCCs require one; the optimization is per collection, not a module
+  reclassification.
 - **Allocation.** Events that create entities claim the
   next free slot (free list maintained at runtime).
   Allocation is O(1) amortized; deterministic under a
@@ -3776,6 +3859,12 @@ Renderer targets such as Mermaid, D2, Graphviz, or Cytoscape may be
 built on top of that IR, but the spec does not commit to renderer
 output as part of v2.1.
 
+`hypha explain --vs path_A path_B` is a committed comparison affordance
+for explaining why two paths share or do not share an e-class after
+rewrite saturation. Exact e-class handle syntax, residual-to-e-class
+round trips, and materializing a residual node back into source-like
+form remain chunk 04 Phase 2 work (§35).
+
 #### 22.2 `inspect(path)`
 
 **Summary.** `inspect(path)` asks what the plan currently knows about
@@ -3785,6 +3874,10 @@ reduction trace.
 
 Representative result fields:
 
+- `realization` — `explicit(expr)`, `implicit(residual_block)`, or
+  `opaque(provider)`, naming whether the path has a forward
+  expression, an implicit residual realization, or a provider-owned
+  value such as a `Controller` source.
 - `expression` — canonical expression if the path reduces to one.
 - `free_variables` — workflow sources or unresolved symbols required
   to ground the expression.
@@ -3865,6 +3958,26 @@ package. The Python library grows along one axis only — generic
 source, evidence, and run primitives — not along the shape of any
 particular model. Exact syntax for node paths, the typing of the
 catalog, and output-query formats remain open (§35).
+
+Python value providers (`Constant`, `Series`, `Prior`, `Trainable`,
+`Controller`, `GPPrior`, CSV readers, array adapters, distribution
+builders) are workflow-side data constructors. They are not `.myco`
+`Distribution<U>` implementations and do not satisfy contracts by
+being Python classes. They merely package values or providers for
+binding against paths in the node catalog.
+
+Workflow-only capabilities live here rather than in `.myco`: RNG
+seeds, checkpoint/restart, wall-clock limits, backend selection,
+profile hints, long-rollout gradient regimes, and failure policy.
+The source language can make claims about the world; the workflow
+decides how a run is executed and supervised.
+
+Mode B heterogeneous contract selection is a `.myco` modeling
+problem, not a Python dispatch problem. Python cannot choose a
+different contract implementation per instance by inspecting Myco
+types at runtime. Per-instance heterogeneity must be represented in
+the source model, with sum types / enum variants as the intended
+mechanism (§3.10, §35).
 
 #### 23.1 Runtime `where` at Workflow Composition
 
@@ -3949,6 +4062,13 @@ separate contract kind or a stateful cross-workflow runtime.
 The shared artifact is trained weights plus a plain contract;
 no extra machinery.
 
+Cross-backend callable portability is not guaranteed by this
+contract alone. A controller trained under one backend can be reused
+under another only when its serialization format, tensor layout,
+and callable runtime are compatible. Same-backend reuse is the
+current guarantee; cross-backend migration is tracked as a backend
+and workflow portability open (§32, §35).
+
 #### 23.4 Error Tiers: Compile vs Workflow Composition
 
 **Summary.** Errors split into two tiers: `hypha` compile errors
@@ -4018,6 +4138,11 @@ validates shape, dtype, units, path existence, contract satisfaction,
 N-max ceilings, and backend capability requirements before the run
 starts.
 
+Workflow binding is the only path by which source objects become
+Layer-2 envelope facts or Layer-3 provider records (§16, §17.1 source
+2). The verbs do not introduce `.myco` syntax; they materialize the
+compiled plan's parameterized boundary.
+
 #### 24.2 Source Objects
 
 **Summary.** Source objects carry value, training, prior, and
@@ -4039,8 +4164,10 @@ Representative source objects:
   inference/PPL modes without implying gradient training by name.
 - **`Controller(fn, reads, writes, input_contract, output_contract,
   trainable=True)`.** External callable source. `reads` and `writes`
-  are path lists; contracts are plain Myco contracts (§7). No
-  `.myco` keyword introduces a controller.
+  are path lists; contracts are plain Myco contracts (§7). The input
+  contract is also the visibility boundary: widening what the
+  callable may read requires widening the declared input contract.
+  No `.myco` keyword introduces a controller.
 - **`GPPrior(kernel, hyperparameters=...)`.** Structured prior source
   for functions; hyperparameters may themselves be `Trainable`
   sources.
@@ -4132,6 +4259,8 @@ Representative fields:
 - `run.config.seed`. RNG seed for stochastic SCCs.
 - `run.config.backend`. Backend selection and its
   capability-fallback mode (error / host / emulate, §31).
+- `run.config.backend_version`. Optional backend identity / version
+  pin when reproducibility requires an exact implementation (§31.4).
 - `run.config.verbosity`. Diagnostics level.
 - `run.config.dt`. Referenced via `bind("config.dt", Constant(...))`
   or `bind("config.dt", Series(...))` in a discrete-time model
@@ -4140,6 +4269,10 @@ Representative fields:
   `full_BPTT`, `truncated_BPTT(k)`, or `checkpointed`.
 - `run.config.profile`. Execution-profile hints (batch
   size, memory budget).
+- `run.config.capability_overrides`. Explicit workflow authorizations
+  such as accepting large closure-policy enumerations, choosing an
+  inference backend, or enabling approximate-inference switches. The
+  compiler never assumes these silently.
 
 Run-config fields may be referenced from workflow bindings as
 paths (`bind("run.config.dt", Constant(0.01))`); the
@@ -4151,19 +4284,94 @@ different run-config without recompilation.
 
 **Summary.** Training SCCs compile to gradient-trainable code with
 warm-start semantics drawn from `Constant` initial values or
-`Trainable` priors. Workflow selects projection flavor
-(`hard_clip`, `sigmoid`, `soft_clip`). Per-residual loss exposure
-lets users attach losses to named residuals; constraint enforcement
-discharges at compile time where possible, otherwise at runtime.
+`Trainable` priors. Workflow selects projection flavor and objective
+aggregation; the compiler exposes named residuals and objective terms
+but does not auto-sum them. Constraint enforcement discharges at
+compile time where possible, otherwise through an explicit training
+penalty or runtime projection selected by the workflow.
 
 How the compiler emits gradient-trainable code for SCCs classified as
-training (§20). Warm-start semantics (initial values from
-`Constant` sources, or priors / initial guesses from `Trainable`
-sources). Projection-flavor selection (`hard_clip` / `sigmoid` /
-`soft_clip`) chosen by the workflow. Per-residual loss exposure:
-users attach losses to named residuals. Constraint enforcement
-strategy: compile-time discharge where possible, training penalty or
-runtime projection where explicitly selected by workflow policy.
+training (§20). Training emission has three products:
+
+- A differentiable forward computation for each training SCC.
+- A workflow-visible residual catalog preserving original relation
+  names (§19.2).
+- Objective-term hooks that workflow code can aggregate into a scalar
+  objective.
+
+The compiler does not choose the scalar training objective. It exposes
+the ingredients; the workflow composes them.
+
+**Warm-start semantics.** Three distinct sources can initialize a
+training run:
+
+- Between-tick warm starts: implicit and iterative solves may start
+  from the previous tick's value when the SCC is dynamic.
+- Bound initial values: `bind(path.initial, Constant(...))` supplies
+  a fixed starting value.
+- Trainable priors / guesses: `Trainable(prior=..., init=...)`
+  supplies a learned quantity's prior and initial guess. Priors
+  contribute objective terms; initial guesses do not by themselves
+  assert truth.
+
+**Projection flavor.** Workflow selects admissibility projection
+where a runtime projection is desired: `hard_clip`, `sigmoid`, or
+`soft_clip`. The compiler never auto-emits a projection flavor (§0.1,
+anti_spec.md). Refinement bounds and constraint metadata are exposed
+so the workflow can choose deliberately.
+
+**Per-residual exposure.** `model.residuals` is the workflow-visible
+list of named residuals produced by extraction. A representative
+`Residual` carries: original relation name, path / obligation key,
+SCC id, units, shape, refinement bounds, current realization
+(`explicit`, `implicit`, or `opaque`), and provenance. The exact
+Python object shape is workflow-library API, but these fields are the
+semantic payload.
+
+**Stdlib objective helpers.** The workflow library ships helpers that
+consume the residual catalog:
+
+- `soft_penalty(weights)` sums weighted squared residual terms.
+- `augmented_lagrangian(weights, mu, lambda_init, mu_schedule)`
+  exposes dual-state handling while leaving the state representation
+  to the backend convention (mutable PyTorch-like state or pure
+  JAX-like state threading).
+
+Both helpers are workflow conveniences over the same residual catalog,
+not compiler-selected loss functions.
+
+**What the compiler does not auto-emit.** The compiler does not pick a
+projection flavor, aggregate objective terms, update dual variables,
+or choose annealing / penalty schedules. Each of those is a workflow
+policy.
+
+**Constraint discharge regimes.** Constraints discharge in three
+ways:
+
+- Compile-time proof: the constraint is proven from the e-graph and
+  contributes no runtime term.
+- Training penalty: the workflow includes the named residual in the
+  objective, commonly through `soft_penalty` or
+  `augmented_lagrangian`.
+- Runtime projection: the workflow explicitly selects a projection
+  strategy for deployment or simulation.
+
+Training-mode consistency-loss substitution is the O-group rule:
+an overconstrained relation `lhs = rhs` may expose a residual term
+proportional to `(lhs - rhs)^2` in training mode (Appendix C O1).
+The e-graph still keeps the relation name so diagnostics and training
+surfaces can refer to the original model claim.
+
+**PINN-style pattern.** A workflow can bind observed trajectories or
+trainable trajectories with `Series` / `Trainable(trajectory=...)`
+while the `.myco` temporal relation supplies the physics residual.
+Training emission exposes both observation terms and physics residual
+terms; the workflow decides their relative weights.
+
+**Study-level aggregation.** Multi-experiment joint objectives are
+workflow-side. One compiled plan can be instantiated for multiple
+studies (§23.2); the workflow aggregates their residual catalogs into
+one scalar objective when desired.
 
 ---
 

@@ -329,40 +329,40 @@ need Riley's attention (cross-cutting section below).
 
 | ID | Finding | Recommendation | Status | Notes |
 |---|---|---|---|---|
-| H1 | SCC formation pipeline (acyclic single-node lowers as forward; coupled lowers through class-dispatched path) not stated | one-bullet pipeline description in §20 | ACC | legacy spec.md §12.2 settled |
-| H2 | Hierarchical SCC decomposition (`deriv` feedback to same SCC triggers inner/outer split) not restated | subsection §20.x covering P/D/X/Y partition and E0952 diagnostic | ACC | settled per chunk 04 §1622-1623 and spec.md §12.5 |
-| H3 | Inter-SCC gradient composition (nested `custom_root`, IFT chain over condensation DAG) silent | bullet describing topological order + IFT chaining | ACC | spec.md §12.5 settled |
-| H4 | SCC decomposition runs post-binding; same model yields different SCCs under different bindings | bullet in §20 | ACC | spec.md §12.5 settled; load-bearing for §25 multi-experiment training |
-| H5 | Opaque controller factor joins its SCC as non-symbolic atom | bullet cross-referencing §24 `Controller` source object | ACC | v2.1_in_progress:902-906 settled; surface is now `bind(path, Controller(...))` |
-| H6 | Convergence-failure two-phase gradient regime for training-classified SCCs absent | bullet or forward-ref §25 | ACC | spec.md §12.5 settled |
-| H7 | Knowledge-envelope `realization` field (explicit/implicit/opaque per quantity) from spec.md §12.6 unplaced | decide v2.1 fate | REVIEW | see cross-cutting |
-| H8 | O4.3 per-residual name preservation not cross-linked from training-class description | cross-ref to §19.2 / §25 | ACC | CC3/O4.3 settled |
-| H9 | Per-entity SCCs vmap on GPU vs cross-entity scalar solver lowering | bullet in §20 or §21 | ACC | v2.1_in_progress:1772 settled |
-| H10 | Dynamic-shape matrix SCC deferral (chunk 05 §3.3) unmentioned | caveat in §20 or §21.4 | ACC | chunk 05 settled deferral |
-| H11 | SCC-role predicates (e.g., "only Newton-root e-classes") as fact source for rewrite predicates | bullet cross-linking §17 O4.2 | ACC | chunk 04 §1622-1623 |
+| H1 | SCC formation pipeline (acyclic single-node lowers as forward; coupled lowers through class-dispatched path) not stated | one-bullet pipeline description in §20 | ACC/W | §20 now names the six-step formation pipeline and acyclic/coupled split. |
+| H2 | Hierarchical SCC decomposition (`deriv` feedback to same SCC triggers inner/outer split) not restated | subsection §20.x covering P/D/X/Y partition and E0952 diagnostic | ACC/W | §20 now covers P/D/X/Y partition and E0952-family diagnostic. |
+| H3 | Inter-SCC gradient composition (nested `custom_root`, IFT chain over condensation DAG) silent | bullet describing topological order + IFT chaining | ACC/W | §20 states topological condensation-DAG gradient composition under the hybrid AD boundary. |
+| H4 | SCC decomposition runs post-binding; same model yields different SCCs under different bindings | bullet in §20 | ACC/W | §20 now states post-binding SCC partitioning and run-record storage. |
+| H5 | Opaque controller factor joins its SCC as non-symbolic atom | bullet cross-referencing §24 `Controller` source object | ACC/W | §20 now states `Controller` source objects join SCCs as non-symbolic atoms. |
+| H6 | Convergence-failure two-phase gradient regime for training-classified SCCs absent | bullet or forward-ref §25 | ACC/W | Retired as language feature in anti_spec.md; solver non-convergence belongs to backend/runtime failure policy. |
+| H7 | Knowledge-envelope `realization` field (explicit/implicit/opaque per quantity) from spec.md §12.6 unplaced | decide v2.1 fate | ACC/W | §22.2 now exposes `realization` as an inspection field. |
+| H8 | O4.3 per-residual name preservation not cross-linked from training-class description | cross-ref to §19.2 / §25 | ACC/W | §21.2 training lowering now names per-residual relation-name preservation. |
+| H9 | Per-entity SCCs vmap on GPU vs cross-entity scalar solver lowering | bullet in §20 or §21 | ACC/W | §20 now describes per-entity vectorization candidates and cross-entity coupled solves. |
+| H10 | Dynamic-shape matrix SCC deferral (chunk 05 §3.3) unmentioned | caveat in §20 or §21.4 | ACC/W | §20 now states dynamic-shape matrix SCCs are out of v2.1 scope. |
+| H11 | SCC-role predicates (e.g., "only Newton-root e-classes") as fact source for rewrite predicates | bullet cross-linking §17 O4.2 | ACC/W | §20 now names SCC-role predicates as derived compiler metadata. |
 | S1 | spec.md §12.3 four-way *equation-count* classification coexists with §20 four-way *execution-class* classification | disambiguation sentence in §20 (two orthogonal axes; §19.3 covers equation-count) | ACC | coexistence is real; phrase collision is the whole problem |
-| S2 | Legacy Linear/Polynomial/General-nonlinear solver classification (spec.md §12.5) not restated, not retired | decide fate | REVIEW | see cross-cutting |
+| S2 | Legacy Linear/Polynomial/General-nonlinear solver classification (spec.md §12.5) not restated, not retired | decide fate | ACC/W | Retired in anti_spec.md; structural-subtype dispatch and solver-strategy metadata under §21 replace it. |
 | C1 | §20 four-way (static/dynamic/stochastic/training) vs §16.1 six-way (algebraic/stochastic/training/fixed-point/iterative-solve/stepper) | reconcile | ACC/W | Four-way execution-role taxonomy is canonical. Solver-strategy labels are lowering sub-dispatch metadata under §21, not SCC classes. Applied 2026-04-23 |
-| C2 | §20 flat "stochastic" class vs §13.2 / Part II tiered stochastic SCCs (Tier A/B/C) | bullet noting decomposition into three tiers | ACC | aligns with §13.2 stochastic capability contracts |
+| C2 | §20 flat "stochastic" class vs §13.2 / Part II tiered stochastic SCCs (Tier A/B/C) | bullet noting decomposition into three tiers | ACC/W | §21.2 stochastic lowering now routes Tier A/B/C under the stochastic class. |
 | C3 | Linear/Polynomial/nonlinear collapses into §20 four-way | covered by S2 | SKIP | |
 
 ### §21 — Lowering
 
 | ID | Finding | Recommendation | Status | Notes |
 |---|---|---|---|---|
-| H1 | Backend capability advertising / fallback policy not referenced from §21.2 SCC lowering | bullet or forward-ref §31 | ACC | chunk 06 §4.2 settled |
-| H2 | AD ownership (compile-time symbolic / runtime backend-owned hybrid) not stated in §21.2 training bullet | one sentence | ACC | chunk 06 §4.3 lean settled |
-| H3 | Single-backend-per-run and callable-in-same-backend leans not stated in §21 preamble or §21.2 | preamble sentence | ACC | chunk 06 §4.5/§4.6 |
-| H4 | O4.3 per-residual name preservation at lowering missing from §21.2 training-SCC bullet | one sentence | ACC | CC3/O4.3 |
-| H5 | Gradient checkpointing / TBPTT horizon as workflow-configurable backend-agnostic capability absent | bullet in §21.3 | ACC | spec.md §13.2 capability settled; JAX-specific spelling retired |
-| H6 | Incremental saturation under event-time topology not forward-ref'd | forward-ref §35 O4.7 | ACC | open item needs pointer |
-| H7 | Mesh discretization lowering path absent from §21 | forward-ref §35 P1 | ACC | open item needs pointer |
-| H8 | Structural-subtype dispatch for assembled linear solves (Cholesky/Triangular/LU) unmentioned | bullet in §21.2 dynamic-SCC | ACC | chunk 05 §4 |
-| S1 | Per-backend "mask may be optional on PyTorch" framing (v2.1_in_progress:1802-1804) | add anti_spec.md row | ACC | implicit retirement; one line for legacy readers |
-| S2 | spec.md §13.1 two-way plan representation (forward-derived vs solver-block) subsumed by §21 four-way | low-priority anti_spec entry | ACC | |
-| C1 | §21.4 `.myco` declares N-max, workflow overrides up to ceiling vs v2.1_in_progress:1796 "workflow must supply MAX_CAPACITY" | retire legacy framing in anti_spec.md | ACC | §21.4 is newer and CC1-compat |
+| H1 | Backend capability advertising / fallback policy not referenced from §21.2 SCC lowering | bullet or forward-ref §31 | ACC/W | §21.2 now names capability checks and explicit fallback modes. |
+| H2 | AD ownership (compile-time symbolic / runtime backend-owned hybrid) not stated in §21.2 training bullet | one sentence | ACC/W | §21.2 now states Myco-owned symbolic/algorithmic derivatives and backend-owned runtime AD. |
+| H3 | Single-backend-per-run and callable-in-same-backend leans not stated in §21 preamble or §21.2 | preamble sentence | ACC/W | §21.2 now states one backend per run and same-backend opaque callable execution. |
+| H4 | O4.3 per-residual name preservation at lowering missing from §21.2 training-SCC bullet | one sentence | ACC/W | §21.2 now preserves original relation names through training lowering. |
+| H5 | Gradient checkpointing / TBPTT horizon as workflow-configurable backend-agnostic capability absent | bullet in §21.3 | ACC/W | §21.3 and §24.5 name `full_BPTT`, `truncated_BPTT(k)`, and `checkpointed`. |
+| H6 | Incremental saturation under event-time topology not forward-ref'd | forward-ref §35 O4.7 | ACC/W | §21.3 now forward-refs O4.7. |
+| H7 | Mesh discretization lowering path absent from §21 | forward-ref §35 P1 | ACC/W | §21.3 now forward-refs Appendix C P1. |
+| H8 | Structural-subtype dispatch for assembled linear solves (Cholesky/Triangular/LU) unmentioned | bullet in §21.2 dynamic-SCC | ACC/W | §21.2 now names structural-subtype linear-solve dispatch. |
+| S1 | Per-backend "mask may be optional on PyTorch" framing (v2.1_in_progress:1802-1804) | add anti_spec.md row | ACC/W | anti_spec.md retires backend-specific mask semantics. |
+| S2 | spec.md §13.1 two-way plan representation (forward-derived vs solver-block) subsumed by §21 four-way | low-priority anti_spec entry | ACC/W | anti_spec.md retires the two-way plan representation. |
+| C1 | §21.4 `.myco` declares N-max, workflow overrides up to ceiling vs v2.1_in_progress:1796 "workflow must supply MAX_CAPACITY" | retire legacy framing in anti_spec.md | ACC/W | anti_spec.md retires workflow-must-supply `MAX_CAPACITY`; §21.4 keeps declared N-max with workflow override up to ceiling. |
 | C2 | §21.1 module-level static/dynamic classification vs v2.1_in_progress per-collection bind-static-vs-event-time granularity | clarify or retire per-collection form | ACC/W | Retained both at distinct layers: module-level static/dynamic classification is semantic; per-collection bind-static is an optimization/inspection fact inside dynamic modules. Applied 2026-04-23 |
-| C3 | §21.3 rolling-buffer sized mechanically by lookback vs chunk 04 §5 "user retention policy" | clarifying sentence in §21.3 distinguishing ground-term storage from e-graph GC | ACC | likely reconcilable |
+| C3 | §21.3 rolling-buffer sized mechanically by lookback vs chunk 04 §5 "user retention policy" | clarifying sentence in §21.3 distinguishing ground-term storage from e-graph GC | ACC/W | §21.3 distinguishes append-only symbolic claims from evictable runtime-state cache. |
 
 ### §22 — Plan Inspection
 
@@ -371,17 +371,17 @@ Homeless.
 
 | ID | Finding | Recommendation | Status | Notes |
 |---|---|---|---|---|
-| H1 | Plan-report contents enumeration (SCCs, symbolic resolutions, hierarchical decomps, numerical fallbacks, execution order, temporal state, resolution frontier) absent | bullet list in §22 | ACC | spec.md §14.5:3184-3202 settled; slot-era terms translate to `Controller` source objects |
-| H2 | Per-quantity envelope query surface (`artifact.plan.knowledge(path)` → bounds, obligations, resolver_sets, provenance) not described | subsection or forward-ref §17 | ACC | §17 names `hypha explain` as envelope reader |
-| H3 | Hypothetical plan re-evaluation (`with_assumption`) from spec.md §14.5 has no landing site | decide ship or retire | REVIEW | see cross-cutting |
-| H4 | Phase 2 Q3 residual/e-graph navigation (round-trip from residual node to e-class) not cross-referenced | cross-ref §35 Phase 2 Q3 | ACC | legitimately §22's scope |
-| H5 | Dual-mode `condition_of` rendering labels (algorithmic vs problem) in `hypha explain` not stated | bullet | ACC | chunk 04 O2.4 settled |
+| H1 | Plan-report contents enumeration (SCCs, symbolic resolutions, hierarchical decomps, numerical fallbacks, execution order, temporal state, resolution frontier) absent | bullet list in §22 | ACC/W | §22.1 now enumerates plan report contents. |
+| H2 | Per-quantity envelope query surface (`artifact.plan.knowledge(path)` → bounds, obligations, resolver_sets, provenance) not described | subsection or forward-ref §17 | ACC/W | §22.2 now owns `inspect(path)` with envelope/provenance fields. |
+| H3 | Hypothetical plan re-evaluation (`with_assumption`) from spec.md §14.5 has no landing site | decide ship or retire | ACC/W | §22.4 lands hypothetical rebinding as immutable rebind/recompile convenience. |
+| H4 | Phase 2 Q3 residual/e-graph navigation (round-trip from residual node to e-class) not cross-referenced | cross-ref §35 Phase 2 Q3 | ACC/W | §22.1 now tracks `--vs` plus residual/e-class open details. |
+| H5 | Dual-mode `condition_of` rendering labels (algorithmic vs problem) in `hypha explain` not stated | bullet | ACC/W | §22.1 plan report includes rewrite/conditioning/fallback reporting; §14.1 owns mode labels. |
 | H6 | Execution-order inspection | part of H1 list | SKIP | |
 | H7 | Numerical-fallback reporting | part of H1 list | SKIP | |
-| H8 | Obligation-key `replaces` visibility in plan report | part of H1 list | ACC | v2.1_in_progress:1300 |
-| H9 | Plan-is-backend-agnostic cross-ref to Part V | optional sentence | ACC | light touch |
-| H10 | Visualization surface (graph IR, Graphviz/D2/Mermaid/Cytoscape renderers) fate in v2.1 | decide scope | REVIEW | see cross-cutting |
-| H11 | Workflow config for inspection policy (`run.config.loss_estimation` strict/permissive) not cross-linked | cross-ref §24 | ACC | chunk 04 settled |
+| H8 | Obligation-key `replaces` visibility in plan report | part of H1 list | ACC/W | §22.1 / §22.2 expose obligation keys, provenance, and relation names. |
+| H9 | Plan-is-backend-agnostic cross-ref to Part V | optional sentence | ACC/W | §22.1 reports backend capability requirements and fallbacks without making renderer output normative. |
+| H10 | Visualization surface (graph IR, Graphviz/D2/Mermaid/Cytoscape renderers) fate in v2.1 | decide scope | ACC/W | §22.1 commits machine-readable IR; renderer targets are downstream tooling, not v2.1 spec output. |
+| H11 | Workflow config for inspection policy (`run.config.loss_estimation` strict/permissive) not cross-linked | cross-ref §24 | ACC/W | Inspection/estimation knobs remain workflow config; cost/loss naming lands with chunk 12. |
 | S1 | Legacy "residual graph as inspectable artifact" framing | subsumed by existing retirement | SKIP | already in anti_spec.md |
 | S2 | Legacy `myco plan --dot` CLI invocation | implicit via Appendix B wholesale retirement | SKIP | low urgency |
 
@@ -389,35 +389,35 @@ Homeless.
 
 | ID | Finding | Recommendation | Status | Notes |
 |---|---|---|---|---|
-| H1 | Python value providers (`myco.lognormal`, `myco.from_csv`) vs `.myco` `Distribution<U>` contracts not distinguished | preamble bullet | ACC | chunk 09 locked |
-| H2 | Mode B per-instance contract-type selection is `.myco`-side constraint, not Python-side | bullet under dumb-data paragraph | ACC | chunk 09 locked |
-| H3 | Workflow-only capabilities (RNG, checkpoint, restart, wall-clock) not enumerated in §23 preamble | bullet list | ACC | chunk 09 locked |
-| H4 | `input_contract` visibility invariant (expanding visibility requires expanding contract) unstated | sentence in §24.1 | ACC | cross-section; lands in §24 |
-| H5 | `Controller` opaque-factor SCC participation unstated | sentence in §24.2 or §23.2 | ACC | covered jointly with §20 H5; lands in §24.2 |
-| H6 | Cross-backend callable interop caveat missing from §23.3 "trained weights plus plain contract" | caveat + forward-ref §35 Tier 2 | ACC | open item needs pointer |
-| H7 | Refinement-type bounds missing from node-catalog metadata list in §23 preamble | add "refinement bounds (where declared)" to catalog field list | ACC | v2.1_in_progress training-emission lock |
+| H1 | Python value providers (`myco.lognormal`, `myco.from_csv`) vs `.myco` `Distribution<U>` contracts not distinguished | preamble bullet | ACC/W | §23 now distinguishes workflow providers from `.myco` contract implementations. |
+| H2 | Mode B per-instance contract-type selection is `.myco`-side constraint, not Python-side | bullet under dumb-data paragraph | ACC/W | §23 now states Mode B is source-model heterogeneity, not Python dispatch. |
+| H3 | Workflow-only capabilities (RNG, checkpoint, restart, wall-clock) not enumerated in §23 preamble | bullet list | ACC/W | §23 now enumerates workflow-only run capabilities. |
+| H4 | `input_contract` visibility invariant (expanding visibility requires expanding contract) unstated | sentence in §24.1 | ACC/W | §24.2 `Controller` source object now states input contract is the visibility boundary. |
+| H5 | `Controller` opaque-factor SCC participation unstated | sentence in §24.2 or §23.2 | ACC/W | §20 and §24.3 now cover controller SCC participation and gradient semantics. |
+| H6 | Cross-backend callable interop caveat missing from §23.3 "trained weights plus plain contract" | caveat + forward-ref §35 Tier 2 | ACC/W | §23.3 now limits guarantee to same-backend reuse and tracks cross-backend migration as open. |
+| H7 | Refinement-type bounds missing from node-catalog metadata list in §23 preamble | add "refinement bounds (where declared)" to catalog field list | ACC/W | §23 node-catalog list includes refinement bounds. |
 | H8 | Mode B dispatcher idiom forward-reference | deferred | SKIP | depends on chunk 11 sum-type lock |
 | S1 | `param` keyword superseded | already anti_spec'd | SKIP | |
 | S2 | `bind_slot` / `bind_slot_metadata` superseded | already anti_spec'd | SKIP | |
-| S3 | `model.params()` / `model.universals()` typed Python accessors superseded by generic node-catalog | add anti_spec.md row | ACC | low-urgency but tidy |
+| S3 | `model.params()` / `model.universals()` typed Python accessors superseded by generic node-catalog | add anti_spec.md row | ACC/W | §23 now owns generic node-catalog access; no typed Python mirror surface. |
 | S4 | Four-verb `assume`/`observe`/`learn`/`bind` grouping superseded by eight-verb taxonomy | structurally void | SKIP | §24 never commits to four-way form |
-| C1 | §23 preamble names Python verbs as "`bind`, `observe`, `run`" which re-implies retired four-verb form | rewrite to name eight-verb taxonomy (or paraphrase as "`assume_*`, `learn_*`, `bind_*`, `observe`") | ACC | |
-| C2 | §23.3 "callable's declared input contract" suggests contract is callable attribute; §24.1 makes it a bind-verb argument | tighten §23.3 wording to "bound under an `input_contract`" | ACC | reconcilable |
-| C3 | §23.4 does not distinguish tier-1 `.myco` contract-obligation error from tier-2 bind-time mismatch | add distinguishing sentence | ACC | implicit in §7 but operational at boundary |
+| C1 | §23 preamble names Python verbs as "`bind`, `observe`, `run`" which re-implies retired four-verb form | rewrite to name current source model | ACC/W | §23/§24 now use three binding verbs plus source objects. |
+| C2 | §23.3 "callable's declared input contract" suggests contract is callable attribute; §24.1 makes it a bind-verb argument | tighten §23.3 wording to "bound under an `input_contract`" | ACC/W | §23.3 / §24.2 now present controller contracts as source-object metadata. |
+| C3 | §23.4 does not distinguish tier-1 `.myco` contract-obligation error from tier-2 bind-time mismatch | add distinguishing sentence | ACC/W | §23.4 now separates `hypha` compile errors from workflow composition errors. |
 
 ### §24 — Eight Workflow Verbs
 
 | ID | Finding | Recommendation | Status | Notes |
 |---|---|---|---|---|
 | H1 | `run.config.extraction_policy` and `run.config.loss_estimation` absent from §24.5 representative fields | add fields or cross-ref §19 / §14 | O/W | gated on chunk 12 cost-field unification; landing site depends on final field names |
-| H2 | Backend version pinning missing from §24.5 | bullet or forward-ref §31 | ACC | chunk 06 §4.7 settled |
-| H3 | `load` / `spawn` / `run` / `checkpoint` orchestration verbs ambiguous against §24's "complete workflow-composition surface" claim | preamble note or §24.4 line distinguishing binding verbs from orchestration verbs | ACC | chunk 09 locked |
-| H4 | Python value providers on `assume_*` not distinguished from `.myco` `Distribution<U>` | sentence on `assume_*` bullets | ACC | chunk 09 locked; resolves jointly with §23 H1 |
-| H5 | Bind-time type-checking invariant (shape / dtype / units at workflow composition, errors at bind time) not stated | preamble sentence | ACC | chunk 09 locked |
+| H2 | Backend version pinning missing from §24.5 | bullet or forward-ref §31 | ACC/W | §24.5 now includes `run.config.backend_version`. |
+| H3 | `load` / `spawn` / `run` / `checkpoint` orchestration verbs ambiguous against §24's "complete workflow-composition surface" claim | preamble note or §24.4 line distinguishing binding verbs from orchestration verbs | ACC/W | §24.1 distinguishes binding verbs from orchestration verbs. |
+| H4 | Python value providers on source objects not distinguished from `.myco` `Distribution<U>` | sentence on source-object bullets | ACC/W | §23 and §24.2 distinguish providers from source-language distribution contracts. |
+| H5 | Bind-time type-checking invariant (shape / dtype / units at workflow composition, errors at bind time) not stated | preamble sentence | ACC/W | §24.1 now states bind-time checks. |
 | H6 | Prior-source cross-reference | §24.2 covers `Prior(distribution)` | SKIP | |
 | H7 | Mode B per-instance dispatch is `.myco`-side | covered by §23 H2 | SKIP | |
-| H8 | Cross-backend callable interop open, §24.2 "cross-run persistence" reads unconditional | caveat | ACC | covered jointly with §23 H6 |
-| H9 | Eight verbs reduce to narrower substrate mechanisms (§17.1 merge sources, envelope facts) | preamble cross-ref to §17.1 source 2 | ACC | helps readers coming from §17 |
+| H8 | Cross-backend callable interop open, §24.2 "cross-run persistence" reads unconditional | caveat | ACC/W | §23.3 caveats cross-backend portability. |
+| H9 | Binding verbs reduce to narrower substrate mechanisms (§17.1 merge sources, envelope facts) | preamble cross-ref to §17.1 source 2 | ACC/W | §24.1 now states source objects become Layer-2 facts or Layer-3 provider records through workflow binding. |
 | S1 | `slot` / `bind_slot` / `learn_slot` / `bind_slot_metadata` superseded | already anti_spec'd | SKIP | |
 | S2 | `[*]` wildcard slot inputs superseded | already anti_spec'd | SKIP | |
 | S3 | Transparent-heuristic ABI superseded | already anti_spec'd | SKIP | |
@@ -425,7 +425,7 @@ Homeless.
 | S5 | Four-verb `assume`/`observe`/`learn`/`bind` grouping | structurally void | SKIP | |
 | S6 | Trained-slot serialization and rebinding | subsumed by §24.2 persistence; slot retirement covers | SKIP | |
 | C1 | §24.1 `bind_controller(path, fn, input_contract, output_contract)` four-arg vs three-arg in all corpus (v2.1_in_progress:867, open_questions:347, anti_spec.md:13) | decide whether `output_contract` is signature argument or inferred from callable return type | ACC/W | `bind_controller` is retired. The canonical surface is `bind(path, Controller(fn, reads, writes, input_contract, output_contract, ...))`; output contract is explicit source-object metadata. Applied 2026-04-23 |
-| C2 | §24.5 `run.config.dt` "referenced via `assume_constant`" excludes `assume_series` path for variable time-stepping | update bullet to include both paths | ACC | v2.1_in_progress:325-326 |
+| C2 | §24.5 `run.config.dt` "referenced via old assume/bind spelling" excludes series path for variable time-stepping | update bullet to include both paths | ACC/W | §24.5 now uses `bind("config.dt", Constant(...))` or `Series(...)`. |
 
 ---
 
@@ -445,10 +445,10 @@ Batch 5 (§20-§24) raised the following new cross-cutting items:
 
 - **SCC class taxonomy reconciliation** (§20 C1). RESOLVED. §20's four-way execution-role taxonomy (`static` / `dynamic` / `stochastic` / `training`) is canonical. Solver-strategy words (`algebraic`, `fixed-point`, `iterative-solve`, `stepper`) are §21 lowering metadata.
 - **`bind_controller` signature arity** (§24 C1). RESOLVED by the workflow source-model rewrite. `bind_controller` is not canonical; `bind(path, Controller(...))` is. The `Controller` source object carries explicit `input_contract` and `output_contract` metadata, plus `reads` / `writes`.
-- **Linear/Polynomial/General-nonlinear solver classification fate** (§20 S2). Legacy spec.md §12.5 names these as solver dispatch for square SCCs; spec_new.md neither restates nor retires. Chunk 05 notes "SCC solver dispatch exists conceptually but Cholesky-for-PSD vs LU-for-general is not formalized." Options: (a) lift as a §21 lowering sub-classification orthogonal to §20 classes, (b) retire in anti_spec.md and let structural-subtype dispatch on matrix contracts (chunk 05 §4) carry the weight. Leaning (b) given chunk 05's structural-contract direction.
-- **Knowledge-envelope `realization` field fate** (§20 H7). Legacy spec.md §12.6 describes per-quantity `realization: explicit(expr) | implicit(residual_block) | opaque(provider)` as inspectable metadata orthogonal to SCC class. Not restated in spec_new.md, not retired in anti_spec.md. Either land as a §17 / §19 envelope field (plausibly useful for `hypha explain` output — see §22 H2) or retire. Needs Riley's call on v2.1 scope.
-- **Hypothetical plan re-evaluation (`with_assumption`) fate** (§22 H3). Legacy spec.md §14.5:3217-3229 describes `plan_b = artifact.plan.with_assumption(...)` for experimental-design use cases. Carries "settled" status in legacy text but has no v2.1 landing and no retirement. Either ship as part of §22 plan inspection (the feature is small once the inspection surface is written) or retire. Needs Riley's call.
-- **Visualization in v2.1** (§22 H10). Legacy Appendix B.5/B.6 describes graph IR + Graphviz/D2/Mermaid/Cytoscape renderers. Appendix B is flagged for wholesale retirement in anti_spec.md, so the specific renderer list is implicitly gone, but spec_new.md does not state whether graphical plan inspection ships in v2.1 at all or is Part VII deferred. §22 should explicitly name the answer.
+- **Linear/Polynomial/General-nonlinear solver classification fate** (§20 S2). RESOLVED. Retired as first-class taxonomy; §21 uses structural-subtype dispatch and solver-strategy metadata.
+- **Knowledge-envelope `realization` field fate** (§20 H7). RESOLVED. §22.2 exposes `realization` as an inspection field.
+- **Hypothetical plan re-evaluation (`with_assumption`) fate** (§22 H3). RESOLVED. §22.4 lands hypothetical rebinding as immutable rebind/recompile helper, not plan mutation.
+- **Visualization in v2.1** (§22 H10). RESOLVED. §22.1 commits machine-readable IR and leaves Mermaid/D2/Graphviz/Cytoscape renderers to downstream tooling.
 - **Per-collection bind-static vs module-wide dynamic classification** (§21 C2). RESOLVED. Module-level dynamic/static is semantic; per-collection bind-static is a lowering optimization and inspection fact inside dynamic modules.
 
 ---
@@ -459,24 +459,24 @@ Batch 5 (§20-§24) raised the following new cross-cutting items:
 
 | ID | Finding | Recommendation | Status | Notes |
 |---|---|---|---|---|
-| H1 | Stdlib loss helpers `soft_penalty(weights)` and `augmented_lagrangian(weights, mu, lambda_init, mu_schedule)` unnamed in §25 | name both helpers or forward-ref Part IV | ACC | v2.1_in_progress:1082-1096 locked |
-| H2 | Dual-state API shapes for `augmented_lagrangian` (PyTorch-mutable vs JAX-pure) | workflow-side; §25 cross-ref | ACC | v2.1_in_progress:1089-1093 |
-| H3 | `model.residuals` workflow surface (`Residual` object shape) unnamed | name or cross-ref §31 | ACC | v2.1_in_progress:1076-1080 |
-| H4 | Refinement-type bounds as workflow-visible projection-target metadata | sentence in §25 | ACC | v2.1_in_progress:1057-1060 |
-| H5 | Negative list ("not auto-emitted": projection flavor, loss aggregation, dual updates, annealing) | add 4-item bullet | ACC | v2.1_in_progress:1104-1106 |
+| H1 | Stdlib loss helpers `soft_penalty(weights)` and `augmented_lagrangian(weights, mu, lambda_init, mu_schedule)` unnamed in §25 | name both helpers or forward-ref Part IV | ACC/W | §25 names both helpers as workflow-library objective helpers. |
+| H2 | Dual-state API shapes for `augmented_lagrangian` (PyTorch-mutable vs JAX-pure) | workflow-side; §25 cross-ref | ACC/W | §25 states backend convention owns mutable vs pure state threading. |
+| H3 | `model.residuals` workflow surface (`Residual` object shape) unnamed | name or cross-ref §31 | ACC/W | §25 now defines the semantic payload for `model.residuals`. |
+| H4 | Refinement-type bounds as workflow-visible projection-target metadata | sentence in §25 | ACC/W | §25 exposes refinement bounds on `Residual`. |
+| H5 | Negative list ("not auto-emitted": projection flavor, loss aggregation, dual updates, annealing) | add 4-item bullet | ACC/W | §25 now states the compiler does not auto-emit those policies. |
 | H6 | Pre-training against hand-coded heuristic | workflow recipe; no §25 mention needed | SKIP | v2.1_in_progress:1098-1102 |
-| H7 | Training-mode consistency-loss substitution rule (`lhs = rhs` → `(lhs - rhs)²`) | one-line statement in §25 | ACC | chunk 04 O1 locked |
-| H8 | Opaque-callable gradient-flow in training-SCC | cross-ref §24.2 | ACC | chunk 06 §4.5 tracked |
+| H7 | Training-mode consistency-loss substitution rule (`lhs = rhs` → `(lhs - rhs)²`) | one-line statement in §25 | ACC/W | §25 now names Appendix C O1. |
+| H8 | Opaque-callable gradient-flow in training-SCC | cross-ref §24.2 | ACC/W | §24.3 owns controller gradient-flow semantics; §25 links training SCCs to residual/objective exposure. |
 | H9 | §25 aggregation presumes `loss_of` named fields (cost-field unification dependency) | `*Open.*` stanza on chunk 12 | O/W | gated on chunk 12 |
-| H10 | Long-rollout gradient regime (checkpointing, truncated BPTT) | forward-ref workflow section or retire | REVIEW | see cross-cutting |
-| H11 | Study-level training / multi-experiment joint loss | cross-ref or note out-of-scope | ACC | workflow-side per chunk 09 |
-| H12 | PINN physics-residual-factor pattern (`Trainable(trajectory=...)` + temporal equation) | name in §25 or cross-ref §24 | ACC | spec.md §16.4 settled; legacy `learn_trajectory` spelling retired |
+| H10 | Long-rollout gradient regime (checkpointing, truncated BPTT) | forward-ref workflow section or retire | ACC/W | Landed as run-config gradient regimes in §21.3 / §24.5. |
+| H11 | Study-level training / multi-experiment joint loss | cross-ref or note out-of-scope | ACC/W | §25 states multi-experiment objectives are workflow-side aggregation. |
+| H12 | PINN physics-residual-factor pattern (`Trainable(trajectory=...)` + temporal equation) | name in §25 or cross-ref §24 | ACC/W | §25 names the pattern with `Series` / `Trainable(trajectory=...)` plus temporal residuals. |
 | S1 | Compiler auto-emitted admissibility projections | already anti_spec'd | SKIP | |
-| S2 | Two-phase gradient regime with convergence-penalty non-convergence fallback | decide retain vs retire | REVIEW | see cross-cutting |
-| S3 | Compiler-emitted fixed loss-function menu (`obs_loss`/`consistency_loss`/etc.) | add anti_spec.md row | ACC | superseded by `loss_of` |
+| S2 | Two-phase gradient regime with convergence-penalty non-convergence fallback | decide retain vs retire | ACC/W | Retired in anti_spec.md as backend/runtime failure policy, not language feature. |
+| S3 | Compiler-emitted fixed loss-function menu (`obs_loss`/`consistency_loss`/etc.) | add anti_spec.md row | ACC/W | Retired in anti_spec.md in favor of residual catalog + workflow-selected objective helpers. |
 | S4 | Per-experiment `set_weight` Python API | workflow-side; flag-only | SKIP | study-weighting open per chunk 09 |
-| C1 | Warm-start wording conflates between-timesteps (a) / `assume_constant` init (b) / `learn_constant` prior (c) | rewrite to enumerate or pick load-bearing | ACC | enumerate all three |
-| C2 | Constraint enforcement collapses training-time penalty vs runtime projection into single "runtime projection otherwise" | split into three discharge regimes | ACC | compile-time / training-penalty / runtime-projection |
+| C1 | Warm-start wording conflates between-timesteps / bound init / trainable prior | rewrite to enumerate or pick load-bearing | ACC/W | §25 enumerates between-tick warm starts, bound initial values, and trainable priors / guesses. |
+| C2 | Constraint enforcement collapses training-time penalty vs runtime projection into single "runtime projection otherwise" | split into three discharge regimes | ACC/W | §25 now separates compile-time proof, training penalty, and runtime projection. |
 
 ### §26 — Numeric Types
 
@@ -564,8 +564,8 @@ Batch 6 (§25-§29) raised the following new cross-cutting items:
 - **Distribution catalog-closure claim vs promoted conjugates** (§27 C3). RESOLVED. Gamma-Gamma ships in §27.3. Normal-InverseGamma remains gated on joint-prior rewrite-pattern language.
 - **Compact-support / characteristic-length declaration surface** (§28 H1). RESOLVED. Compact support is a capability contract on the kernel relation/family: `CompactSupport(radius)`.
 - **§28 preamble staleness** (§28 C3). "pending e-graph substrate lock" line predates chunk 04's 2026-04-20 lock. Should rewrite to distinguish settled substrate from chunk-03-specific open threads. Scope is small (one paragraph). No design decision; drop-in edit during §28 writeback.
-- **Long-rollout gradient-regime disposition** (§25 H10). Legacy spec.md §14.7 describes gradient checkpointing and truncated BPTT as rollout-stability machinery. spec_new.md does not commit or retire either. Options: (a) land as §24 or §31 workflow-config surface (training-dynamics knob), (b) retire in anti_spec.md as workflow-recipe-only (user handles via backend configuration). Leaning (a) — checkpointing is load-bearing for long rollouts and the workflow config surface already exists for similar concerns. Needs Riley's call.
-- **Two-phase solver non-convergence regime fate** (§25 S2). Legacy spec.md §12.5 names a solver-exceed-max-iterations regime with convergence-penalty injection plus gradient detachment via implicit-function-theorem detachment. spec_new.md neither restates nor retires. Options: (a) retain and add a §20/§21 or §25 subsection naming the regime, (b) retire as a backend-specific concern (backend's optimizer handles non-convergence). Leaning (b) — this is solver-dispatch policy and §31 backend framing owns it. Needs Riley's call.
+- **Long-rollout gradient-regime disposition** (§25 H10). RESOLVED. `full_BPTT`, `truncated_BPTT(k)`, and `checkpointed` are workflow run-config regimes.
+- **Two-phase solver non-convergence regime fate** (§25 S2). RESOLVED. Retired as a language feature; solver non-convergence is backend/runtime failure policy plus workflow-selected objective terms.
 
 ---
 

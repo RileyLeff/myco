@@ -73,6 +73,12 @@ gap-review stale list, subsequent design locks.
 | within-event index-order tiebreak | §10.4 three-case exhaustive analysis | ordering is not needed once the three cases are classified. The v2.1_in_progress "tiebreak by index order, overridable from Python" framing predates the three-case analysis; §10.4 is the replacement |
 | "`deriv` always symbolic / no runtime cost" framing | three-mode lowering (symbolic / algorithmic / runtime) per §14.4 | runtime AD is the authorized fallback for SCCs too large to expand symbolically under the hybrid AD boundary (§31) |
 | spec.md §12.3 "canonical evaluator" framing for residual | residual as user-facing projection from the e-graph via cost-vector-guided extraction (§19) | canonical-evaluator narrative predates the three-layer e-graph; residual is a projection parameterized by cost preference. Subsumed by the broader "residual as core semantic object" retirement but called out for legacy-doc readers |
+| Linear / Polynomial / General-nonlinear as first-class SCC taxonomy | structural-subtype dispatch and solver-strategy metadata under §21 lowering | SCC semantic class is only static / dynamic / stochastic / training; algebraic solver strategy is lowering detail |
+| two-way plan representation (`forward-derived` vs `solver-block`) | four-way SCC lowering targets (§21.2) | the old two-way split is too coarse once stochastic and training SCCs are explicit |
+| backend-specific "mask may be optional" semantics | uniform alive-mask semantics with backend-specific optimization hidden under lowering | semantics cannot depend on PyTorch/JAX-style branch behavior; backend may optimize but not change the plan surface |
+| workflow must supply `MAX_CAPACITY` for dynamic collections | `.myco` declares N-max with workflow override up to ceiling | capacity is part of the source model's static bound; workflow can specialize within the declared ceiling |
+| compiler-emitted fixed loss-function menu (`obs_loss`, `consistency_loss`, etc.) | residual catalog + workflow-selected objective helpers | training objective composition is workflow policy, not compiler policy |
+| two-phase non-convergence penalty semantics as language feature | backend/runtime failure policy plus workflow-selected objective terms | solver non-convergence is backend/runtime behavior; Myco exposes diagnostics and residuals but does not hard-code convergence-penalty injection |
 
 ## Retired open questions (closed or structurally void)
 
