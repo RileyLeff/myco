@@ -148,11 +148,11 @@ machinery of §13) lives on the `.myco` side. Epistemic content
 side and uses the source model of §24.
 
 **Conversion-graph cost model.** Open. Unit conversions, tensor
-reshapes, sparse or dense representation transitions, and
-structural-subtype widenings all carry costs that the compiler
-should minimize when multiple valid paths exist. The cost model
-sits between the type layer and the e-graph rewrite cost model.
-Tracked in §35 and scoped to chunk 05 Q7 / chunk 07 Q6.
+reshapes, sparse or dense materialization, and structural-refinement
+widenings all carry costs that the compiler should minimize when
+multiple valid paths exist. Tensor `convert` scope is locked in
+§3.8; the remaining cost model sits between the type layer and the
+e-graph rewrite cost model and is tracked in chunk 07 Q6.
 
 **Projection-free compiler.** The compiler does not auto-emit
 projection operators or solver selection to satisfy a constraint.
@@ -494,18 +494,36 @@ of refined scalars into a dense vector), but they are explicit.
 This orthogonality keeps the semantics of `for` / aggregation
 (§12) decoupled from the semantics of matrix / tensor operations.
 
-The `convert` facility (§5.1) extends to tensors for a bounded set
-of operations: **reshape** between compatible shape specifications
-(total element count preserved), **sparse ↔ dense** representation
-changes on the same structural type, and **structural-refinement
-widening** (e.g. `Diagonal<U, n>` → `Symmetric<U, n>`
-throws away structural information without changing values). Out of
-scope for `convert`: **numeric precision downcasts** (authorized via
-`approximate`, §26.2), **storage-order / layout changes**
-(row-major ↔ column-major, also backend), and **device residency**
-(host ↔ GPU, backend). The split keeps `convert` about meaning-
-preserving lossless transforms at the type layer and leaves
-representation-level tuning to the backend trait.
+The `convert` facility (§5.1) extends to tensors only for
+meaning-preserving isomorphisms, materializations, and widenings:
+
+- **Reshape / flatten.** A tensor reshape is legal only when the
+  shape solver proves equal cardinality and the conversion names an
+  index bijection, either a stdlib canonical map or an explicit map
+  in the conversion body. The bijection transports axes, entry-unit
+  laws, zero-pattern facts, and provenance through the new shape.
+  Equal element count alone is insufficient when axis identity or
+  matrix provenance cannot be mapped.
+- **Sparse / dense materialization.** Sparse-to-dense materializes
+  known zeros and preserves the same mathematical object. Dense-to-
+  sparse requires an explicit target pattern plus a proven or
+  provider-validated `zero_pattern` fact for every entry outside the
+  pattern. Thresholded sparsification or over-approximate sparsity is
+  an `approximate` block, not `convert`.
+- **Structural-refinement widening.** A conversion may forget facts
+  without changing values, e.g. `Diagonal<U, n>` to
+  `Symmetric<U, n>` or `PositiveDefinite<U, n>` to
+  `PositiveSemiDefinite<U, n>`. Narrowing to a stronger refinement
+  creates an obligation; it does not grant the fact.
+
+Out of scope for `convert`: **numeric precision downcasts**
+(authorized via `approximate`, §26.2), **storage-order / layout
+changes** (`CSR`, `CSC`, row-major, column-major), **device
+residency** (host ↔ GPU), and matrix role relabels. Those are
+handled by approximation policy, backend / provider facts, or the
+matrix fact engine (§3.9). The split keeps `convert` about meaning at
+the type layer and leaves representation-level tuning to the backend
+trait.
 
 #### 3.9 Matrix Facts and Structural Refinements
 
@@ -724,10 +742,8 @@ Remaining chunk-05 matrix work:
   pattern facts. `CSR`, `CSC`, `COO`, dense materialization, and
   device layout remain backend-level representation choices tracked
   by provider / backend facts.
-- **Tensor `convert` scope and scalar reconciliation.** Reshape,
-  named-refinement widening, sparse materialization, and
-  `Scalar<U> := Tensor<U, ()>` vs a distinct scalar constructor are
-  separate scope calls.
+- **Scalar reconciliation.** `Scalar<U> := Tensor<U, ()>` vs a
+  distinct scalar constructor remains a separate scope call.
 
 #### 3.10 Sum Types / Enums (STUB)
 
@@ -5217,10 +5233,10 @@ kernels are implementation choices that preserve the same semantics,
 not semantic fallbacks.
 
 Chunk 05 is the design venue for the remaining matrix type layer:
-tensor `convert` scope, sparse-pattern detail, scalar reconciliation,
-and primitive signature polish. This section commits only the stdlib
-function surface and the primitive fact contracts; type content lives
-in §3.9 per the chunk 05 scope decision.
+sparse-pattern detail, scalar reconciliation, and primitive signature
+polish. This section commits only the stdlib function surface and the
+primitive fact contracts; type content lives in §3.9 per the chunk 05
+scope decision.
 
 The matrix / tensor stdlib ships the linear-algebra primitives that
 the rest of the spec depends on by name, in particular the Cholesky
@@ -5501,8 +5517,8 @@ vocabulary is resolved and kept here only as a completed reference.
 
 - **Chunk 05.** Matrix details. Heterogeneous-unit type mechanics are
   resolved by matrix facts (§3.9); shape expressions, envelope
-  views, and the structural fact lattice are locked. Remaining work
-  covers tensor `convert` scope, sparse-pattern detail, primitive
+  views, the structural fact lattice, and tensor `convert` scope are
+  locked. Remaining work covers sparse-pattern detail, primitive
   signature polish, and scalar reconciliation.
 - **Chunk 06.** Backend abstraction.
 - **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04

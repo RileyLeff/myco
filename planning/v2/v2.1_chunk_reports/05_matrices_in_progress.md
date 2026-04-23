@@ -264,9 +264,8 @@ obligation to prove or validate the fact, not a grant of the fact.
 
 This closes the type-signature branch of the heterogeneous-unit
 question. Remaining chunk-05 work after the resolved sections below:
-tensor `convert` scope, collections boundary text, dynamic-topology
-deferral text, sparse-pattern detail, and primitive naming / error
-polish.
+collections boundary text, dynamic-topology deferral text,
+sparse-pattern detail, and primitive naming / error polish.
 
 ### 3.3 Envelope flavors for matrix-valued quantities — RESOLVED: parallel views
 
@@ -384,37 +383,43 @@ creates an obligation. It does not mark `A` as positive definite.
 The compiler must derive the fact, validate it at the workflow
 boundary, carry it conditionally, or report the obligation as unmet.
 
-### 3.5 `convert` scope on tensors — OPEN (needs scope call)
+### 3.5 `convert` scope on tensors — RESOLVED: semantic isomorphism / materialization / widening only
+
+Decision (2026-04-23): tensor `convert` is narrow. It covers
+meaning-preserving index isomorphisms, materialization of the same
+mathematical object, and structural-refinement widening. It does not
+cover precision changes, storage layout, device placement,
+role-label changes, or approximate sparsification.
 
 Chunk 04 O2.1 resolved `convert` invertibility verification via
-bounded counterexample search. Tensor conversions:
+bounded counterexample search. Tensor `convert` adds these rules:
 
-- **Reshape** (`Vector<U, m·n> ↔ Matrix<U, m, n>`). Trivially
-  lossless at the math layer; symbolic reduction proves identity.
-  Definitely in scope.
-- **Precision** (`Matrix<Float64, m, n> ↔ Matrix<Float32, m, n>`).
-  Lossy; already covered by `approximate` block surface from chunk 04
-  §9. Language-level `convert` probably refuses this; the
-  `approximate` block handles it.
-- **Storage order** (row-major ↔ col-major). Codegen detail, not a
-  language concern. Out of scope.
-- **Dense ↔ sparse.** Semantically equal when sparsity pattern
-  matches actual zero entries; semantically lossy when pattern
-  over-approximates. Bounded counterexample search can't prove
-  sparsity-pattern equivalence generally. Proposal: sparse-to-dense
-  is lossless (just materialize zeros); dense-to-sparse requires
-  explicit pattern declaration and is either provably-lossless (no
-  entries outside pattern are nonzero) or rejected.
-- **Named-type ↔ structural refinement** (`DistanceMatrix<U, n> ↔
-  Symmetric<U, n>`). Named types that are structurally refinements
-  use bare `convert` (relabel). Consistent with existing scalar
-  pattern.
+- **Reshape / flatten.** `Vector<U, m*n> ↔ Matrix<U, m, n>` and
+  related reshapes are legal only when the shape solver proves equal
+  cardinality and the conversion names an index bijection. The
+  bijection may be a stdlib canonical map or an explicit map in the
+  conversion body. It transports axes, entry-unit laws, zero-pattern
+  facts, and provenance through the new shape. Equal element count
+  alone is not enough.
+- **Sparse / dense materialization.** Sparse-to-dense is legal as
+  materializing known zeros. Dense-to-sparse requires an explicit
+  target pattern plus a proven or provider-validated `zero_pattern`
+  fact for every entry outside the pattern. Thresholded
+  sparsification, pruning, or over-approximate sparsity routes
+  through `approximate`, not `convert`.
+- **Structural-refinement widening.** A conversion may forget
+  matrix facts without changing values: `Diagonal` to `Symmetric`,
+  `PositiveDefinite` to `PositiveSemiDefinite`, or a named matrix
+  type to the structural refinement it entails. Narrowing to a
+  stronger refinement creates an obligation; it does not grant the
+  fact.
 
-**Explicit in-scope for v2.1:** reshape, sparse↔dense with
-pattern declaration, named↔structural relabel.
-
-**Explicit out-of-scope:** precision conversion (routes through
-`approximate`), storage-order (codegen detail).
+Explicitly out of scope: numeric precision downcasts, storage order
+(`CSR`, `CSC`, `COO`, row-major, column-major), host / GPU residency,
+and matrix role relabels. Precision changes belong to `approximate`;
+layout and device placement belong to backend / provider facts;
+matrix roles are already represented as graph facts rather than
+source-level types.
 
 ### 3.6 Shape refinements as type-level predicates — RESOLVED: staged solver
 
@@ -570,9 +575,11 @@ math-vocabulary).
   extending refinement-type machinery from scalar value predicates
   to shape-level predicates. Matrix structural refinements §3.4
   lower to facts and obligations rather than user proof labels.
-- **`convert` (spec §4.x).** Scope call per §3.5 — reshape +
-  sparse↔dense with pattern + named↔structural relabel in scope;
-  precision + storage-order out of scope.
+- **`convert` (spec §4.x).** Scope resolved in §3.5: reshape with
+  index bijection, sparse / dense materialization with proven
+  pattern facts, and structural-refinement widening are in scope;
+  precision, storage order, device placement, and role relabels are
+  out of scope.
 - **Envelopes (chunk 04 Layer 2).** §3.3 — four flavors, merging
   rules, propagation per op.
 - **Distributions (chunk 04 §11 Z-group).** Unblocks MVN (Z10
@@ -628,17 +635,15 @@ With this chunk shipped:
 Items in priority order (later items depend on earlier items
 closing):
 
-Completed: §3.6 shape-expression model, §3.3 envelope views, and
-§3.4 structural fact lattice.
+Completed: §3.6 shape-expression model, §3.3 envelope views, §3.4
+structural fact lattice, and §3.5 tensor `convert` scope.
 
-1. **Close §3.5 (convert scope).** Mostly a scope call with small
-   design consequences.
-2. **Close §3.7 (collections boundary).** Written above as
+1. **Close §3.7 (collections boundary).** Written above as
    clarification; needs one-paragraph commitment in spec.
-3. **Close §3.8 (dynamic topology deferral).** Documentation call.
-4. **Draft primitive list §4 concretely.** Names, signatures,
+2. **Close §3.8 (dynamic topology deferral).** Documentation call.
+3. **Draft primitive list §4 concretely.** Names, signatures,
    errors. Well-trodden; low design risk.
-5. **Write the v2.1 commitment text into the spec.**
+4. **Write the v2.1 commitment text into the spec.**
 
 Parallelizable with chunk 06 (backend abstraction) — chunk 06
 needs this chunk's primitive list to have lowering targets; this
@@ -664,8 +669,11 @@ fact contracts being established for `Σ`.
 - **Q4.** Structural fact lattice. RESOLVED 2026-04-23:
   implication facts/refinements, not enum subtypes or user proof
   labels (§3.4).
-- **Q5.** `convert` scope — reshape / sparse / precision / storage
-  order / named↔structural: which are in / out? (§3.5)
+- **Q5.** `convert` scope. RESOLVED 2026-04-23: tensor convert
+  covers reshape with index bijection, sparse / dense
+  materialization with proven pattern facts, and
+  structural-refinement widening; precision, storage order, device
+  placement, and role relabels are out (§3.5).
 - **Q6.** Scalar reconciliation — redefine `Scalar<U> := Tensor<U,
   ()>` or keep distinct with implicit conversion? (§3.1)
 - **Q7.** Sparse pattern facts. RESOLVED 2026-04-23:
