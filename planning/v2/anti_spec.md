@@ -34,6 +34,7 @@ gap-review stale list, subsequent design locks.
 | `loss_of(residual)` intrinsic | `objective_terms(residual)` | "loss" overloaded planner cost, training objective, and likelihood; `objective_terms` is explicitly workflow-facing training decomposition |
 | `basis` declaration for matrix axes | plain contracts / field-set shapes plus compiler-facing matrix facts | axis signatures do not need a new source construct; contracts already name fields and units |
 | user-marked matrix role types (`LinearMap<...>`, `Covariance<...>`, `Precision<...>`) | matrix facts derived from relations, constraints, stdlib construction provenance, and provider validation | roles would be unchecked annotation mechanics; operations consume facts, not labels |
+| shape expressions in runtime value position | structural-position shape expressions only | shapes are compile-time / plan-time metadata for tensor compatibility, not model values relations can observe |
 
 ## Retired annotations / attributes
 
@@ -58,6 +59,7 @@ gap-review stale list, subsequent design locks.
 | universals carrying values (`universal R: Scalar<U> = 8.314`) | `universal R: Scalar<U>` declaration only; value from workflow | CC1 scope |
 | contract composition alias (`contract C := A + B`) | nothing | multi-contract satisfaction (`: A + B + C`) + supertraits already cover the bundle case; alias adds a second spelling with no new expressive power |
 | user-facing `Dual` numeric representation | hybrid AD boundary (§31) | symbolic/algorithmic derivatives are compiler-owned and runtime AD is backend-owned; user-facing `Dual` would duplicate machinery and risk conflicting with backend AD representation |
+| general SMT / theorem-prover guarantee for all shape arithmetic | represented shape-expression AST with staged solver support | hard shape cases must be expressible, but v2.1 only guarantees a conservative automatic solver subset |
 
 ## Retired architectural framing
 
@@ -83,6 +85,7 @@ gap-review stale list, subsequent design locks.
 | compiler-emitted fixed loss-function menu (`obs_loss`, `consistency_loss`, etc.) | residual catalog + workflow-selected objective helpers | training objective composition is workflow policy, not compiler policy |
 | two-phase non-convergence penalty semantics as language feature | backend/runtime failure policy plus workflow-selected objective terms | solver non-convergence is backend/runtime behavior; Myco exposes diagnostics and residuals but does not hard-code convergence-penalty injection |
 | automatic semantic fallback when required matrix facts are unknown | unmet-obligation diagnostics unless the user explicitly writes a different valid operation / workflow policy | unknown `positive_definite`, kernel-PD, scaling, or axis facts do not authorize opaque handoff or "make it work" behavior |
+| treating dynamic topology dimensions as silently static tensor shapes | `ShapePhase` facts (`provider_validated`, `runtime_bounded`, `dynamic_unknown`) | runtime topology counts must carry evidence phase; static-specialized code cannot assume them without proof or provider validation |
 
 ## Retired open questions (closed or structurally void)
 

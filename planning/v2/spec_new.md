@@ -392,20 +392,95 @@ conservation semantics. Consequences:
 Tier 2 sub-questions deferred: scoped conservation, boundary-flux
 interaction, field-level conservation.
 
-#### 3.8 Scalar and Tensor Reconciliation
+#### 3.8 Scalar, Tensor, and Shape Expressions
 
 **Summary.** How `Scalar<U>` relates to `Tensor<U, ()>`, how
-collections relate to tensor axes, and which transformations live in
-`convert` versus the backend trait. Collections and tensors are
-orthogonal primitives. `convert` handles meaning-preserving tensor
-transforms (reshape, sparse↔dense, structural widening); precision,
-layout, and device residency belong to the backend.
+collections relate to tensor axes, which transformations live in
+`convert` versus the backend trait, and how shape expressions attach
+structure to tensors. Shapes are structural expressions over
+dimensions, axes, products, partitions, and provider-bound quantities.
+They may appear in type parameters, refinement predicates, stdlib
+primitive contracts, and diagnostics; they are not runtime model
+values. The spec defines the broad shape-expression AST now, while
+the guaranteed solver subset is intentionally staged.
 
 Open: whether `Scalar<U>` is formally sugar for `Tensor<U, ()>`
 (shape-zero tensor) or a distinct primitive with coercion rules
 (chunk 05 Q6). The unification is attractive: it lets structural
 refinements, convert variants, and envelope flavors live on a single
 hierarchy. Chunk 05 carries the resolution.
+
+Shape expressions are compile-time / plan-time structural metadata.
+They describe tensor extent and compatibility; they do not introduce
+ordinary numeric values, stochastic quantities, or relation-level
+unknowns. They may appear only in structural positions: type
+parameters, `val` generic constraints, refinement predicates,
+stdlib primitive contracts, and inspection / diagnostics.
+
+The represented shape language has four layers:
+
+- **`DimExpr`.** Dimension expressions: positive integer structural
+  literals, `val` generics, axis lengths (`len(row_axes(A))`),
+  provider-bound dimensions, arithmetic (`+`, `-` where nonnegative,
+  `*`, exact division / divisibility), `min` / `max` where a stdlib
+  primitive explicitly requires them, and named topology-derived
+  counts such as `num_vertices(topology)`.
+- **`ShapeExpr`.** Tuples of `DimExpr` plus shape transforms:
+  indexing (`shape(A)[i]`), `rank(shape)`, `product(shape)`,
+  `sum(shape)`, `transpose_shape(shape)`, `concat`, `slice`,
+  `insert_axis`, `remove_axis`, `flatten`, `reshape_to`, and
+  block partitions.
+- **`ShapeConstraint`.** Equalities, inequalities / bounds,
+  divisibility, product equality, matmul compatibility, reshape
+  compatibility, broadcast / stack compatibility where the stdlib
+  primitive defines that behavior, and block-partition compatibility.
+- **`ShapePhase`.** Evidence for when a dimension is known:
+  `static`, `provider_validated`, `runtime_bounded`, or
+  `dynamic_unknown`.
+
+The represented language is intentionally broader than the initial
+solver. This keeps hard cases expressible before every inference rule
+exists. v2.1's guaranteed automatic solver subset covers tuple
+equality, rank, indexing, product equality, transpose, concat / stack,
+and simple affine dimension expressions where variables match
+syntactically. Represented but not necessarily automatically solved:
+floor / exact-division formulas for convolution-like operators,
+arbitrary nonlinear arithmetic, dynamic topology dimensions, ragged
+row lengths, and general block algebra.
+
+Shape facts reuse the §3.9 fact evidence statuses (`proven`,
+`refuted`, `conditional`, `obligation`, `provider_validated`,
+`backend_reported`, `unknown`). A primitive may require a particular
+shape phase in addition to a shape equation. For example, a backend
+that specializes code by static shape may require `static` dimensions,
+while a runtime-sized backend may accept `provider_validated` or
+`runtime_bounded` dimensions for the same mathematical operation.
+
+Examples:
+
+```text
+shape(A) = (m, k)
+shape(B) = (k, n)
+shape(A * B) = (m, n)
+
+shape(flatten(A)) = (product(shape(A)),)
+product(shape(old)) = product(new_shape)
+
+shape(blocked) = (m1 + m2, n1 + n2)
+shape(stacked) = insert_axis(shape(item), axis=0, count=batch)
+```
+
+Dynamic topology uses shape phases rather than pretending runtime
+sizes are static:
+
+```text
+shape(field_over_vertices) = (num_vertices(topology),)
+phase(num_vertices(topology)) = provider_validated
+```
+
+Ragged or irregular structures usually surface as sparsity /
+topology facts rather than dense tensor shapes: row nonzero counts,
+offset-array shapes, index-array shapes, and zero-pattern facts (§3.9).
 
 Collections (§12) and tensors are orthogonal primitives. A
 `Collection<T>` is a homogeneous, unordered-or-keyed aggregation of

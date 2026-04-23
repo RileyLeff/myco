@@ -385,30 +385,40 @@ The locked tensor / matrix constructor shape requires the type system to express
 machinery is scalar value predicates (`self >= 0`,
 `self <= 1`).
 
-Needed extensions:
+Decision direction (2026-04-23): lock a broad shape-expression AST
+now, with staged solver support. Do not lock a tiny shape language
+that would need redesign for block matrices, batched tensors,
+convolution-like formulas, or dynamic topology counts.
 
-- **Type-level shape predicates.** `where shape[0] = shape[1]` for
-  square; `where shape = (m, k) && other.shape = (k, n)` for
-  matmul compatibility.
-- **Shape arithmetic.** `shape[0] * shape[1]` for reshape;
-  `transpose(shape)` for transpose.
-- **Generic shape parameters.** `fn matmul<m, k, n, U>(a:
-  Matrix<U, m, k>, b: Matrix<U, k, n>) -> Matrix<U, m, n>` — `m`,
-  `k`, `n` as shape variables.
+The shape model has four layers:
 
-This is a **real type-system extension**. Options:
+- **`DimExpr`.** Integer structural literals, `val` generics, axis
+  lengths, provider-bound dimensions, arithmetic (`+`, `-`, `*`,
+  exact division / divisibility), selected `min` / `max`, and
+  topology-derived counts.
+- **`ShapeExpr`.** Tuples plus indexing, rank, product, sum,
+  transpose, concat, slice, insert/remove axis, flatten, reshape,
+  and block partitions.
+- **`ShapeConstraint`.** Equality, bounds, divisibility, product
+  equality, matmul / reshape / stack / broadcast compatibility, and
+  block-partition compatibility.
+- **`ShapePhase`.** `static`, `provider_validated`,
+  `runtime_bounded`, `dynamic_unknown`.
 
-- **Ship with chunk 05.** Shape refinements are fundamental to
-  the matrix fact vocabulary and every structural subtype. Must ship
-  together.
-- **Minimal shape language.** Support shape equality (`shape[0] =
-  shape[1]`), shape tupling, shape product; defer arbitrary shape
-  arithmetic to v2.2.
+Guaranteed automatic solver subset for v2.1: tuple equality, rank,
+indexing, product equality, transpose, concat / stack, and simple
+affine dimension expressions where variables match syntactically.
 
-Lean: minimal shape language ships with v2.1 — equality, tupling,
-indexing, product. That's enough for square-matrix refinements,
-matmul compatibility, reshape. Arbitrary shape arithmetic (e.g.,
-`shape = (2*n, n)` for stacked block matrices) defers.
+Represented but not guaranteed automatically solved: floor / exact
+division formulas for convolution-like operators, arbitrary nonlinear
+arithmetic, dynamic topology dimensions, ragged row lengths, and
+general block algebra. These stay expressible as obligations /
+diagnostics so the abstraction does not have to change later.
+
+Shape expressions are structural. They may appear in type parameters,
+refinement predicates, stdlib primitive contracts, and diagnostics;
+they are not runtime model values and relations cannot observe them
+as ordinary numeric quantities.
 
 ### 3.7 Collections boundary — CLARIFICATION
 
@@ -581,8 +591,10 @@ Items in priority order (later items depend on earlier items
 closing):
 
 1. **Close §3.6 (shape refinements).** Prerequisite for §3.4
-   structural subtypes. Lean: minimal shape language (equality,
-   tupling, indexing, product).
+   structural subtypes. Lean: broad shape-expression AST with a
+   staged solver; v2.1 automatic support starts with tuple equality,
+   rank, indexing, product equality, transpose, concat / stack, and
+   simple affine expressions.
 2. **Close §3.3 (envelope flavors).** Gates Level III
    `condition_of` machinery. Four flavors, merging rules,
    per-op propagation tables.
