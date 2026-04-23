@@ -525,17 +525,32 @@ compiler needs to see.
 Full design lives in `v2.1_chunk_reports/11_sum_types_enums.md`.
 This subsection is a stub; detailed prose lands when chunk 11 closes.
 
-**Summary.** Zero literal numerics in value position (CC1). Three
-exception positions where literals are allowed: unit definitions,
-affine conversion bodies, and structural positions (shape tuples,
-indices, generic parameters). All numeric values enter through the
-workflow.
+### 4. Values and Literal Numerics
 
-Zero literal numerics in value position. Three exception positions:
-unit definitions, affine conversion bodies, structural positions
-(shape tuples, indices, generic-parameter definitions). All numeric
-values enter from the workflow. See `spec_dev_notes.md` for the
-derivation.
+**Summary.** Float literals and unit-qualified numeric literals are
+banned in value position (CC1). Bare dimensionless integer literals
+are legal via a stdlib desugar to the parametric universal family
+`integer<N: val>: Scalar<dimensionless>`, whose default workflow
+binding is the parameter itself. Unit definitions, affine conversion
+bodies, and structural positions (shape tuples, indices, generic
+parameters) remain exception positions for any literal form. All
+numeric values enter through the workflow, via the universal-binding
+mechanism.
+
+Integer literal desugar. A bare integer literal `N` in dimensionless
+value position parses to `integer<N>`, a reference into the stdlib
+parametric universal `integer<N: val>: Scalar<dimensionless>`. The
+default workflow binding for `integer<N>` is `N` itself, so a user
+who never rebinds gets the natural value. Sensitivity analysis or
+alternative bindings are available through the standard
+universal-binding verbs (`assume_constant`). See `spec_dev_notes.md`
+for the derivation.
+
+Exception positions accept literals directly. Unit definitions,
+affine conversion bodies, and structural positions (shape tuples,
+indices, generic-parameter definitions) are not value positions;
+they are declarations about the type or shape of a quantity, and
+CC1 does not apply to them.
 
 Mathematical constants. π, e, and similar fixed reals are ordinary
 stdlib-declared identifiers (`universal pi: Scalar<dimensionless>`,
@@ -543,31 +558,46 @@ stdlib-declared identifiers (`universal pi: Scalar<dimensionless>`,
 they are universals like any other, and a workflow binds their
 numeric values at compile time through the same mechanism as any
 other constant. The stdlib ships default bindings so users do not
-write them by hand.
+write them by hand, and the stdlib may ship additional well-known
+dimensionless constants on the same basis. Extending the stdlib
+universal catalog (new named constants, parametric families beyond
+`integer<N>`) is a workflow-side or compiler-plugin concern, not a
+source-language surface concern.
 
 Workflow bindings enter the e-graph as equalities. A workflow
 constant supplied at compile time merges an observation-tagged
 equality between the universal's e-class and a literal term in the
 B2 rewrite layer (§17). Numeric values therefore participate in
 rewriting and extraction without appearing in `.myco` source.
+`integer<N>` participates on the same footing: the default binding
+merges `integer<N>` with the literal `N`, so ring/field axioms
+(Appendix C A-group) fire on the literal form after rewrite.
 
 #### 4.1 CC1 Diagnostic Surface
 
 **Summary.** CC1 violations surface as `mycoc` compile errors with a
-consistent shape: identify the literal, name the rejected position
-kind, and point to the canonical workflow verb (`assume_constant`,
-`assume_series`) that would supply the value instead.
+consistent shape: identify the literal, name why it is rejected
+(float, unit-qualified, or out-of-position), and point to the
+resolution (declare a universal, use `assume_constant` /
+`assume_series`, or remove the unit annotation for an integer
+literal).
 
-Violations surface as `mycoc` compile errors with a consistent
-diagnostic shape. The error identifies the literal, the position
-kind that was rejected (value position vs structural position), and
-the canonical workflow verb that would supply the value instead.
-For a literal appearing in an expression that binds to a universal,
-the diagnostic names the universal and points to `assume_constant`
-or `assume_series` (§24). For a literal in a relation body, the
-diagnostic points to the governing variable and suggests lifting
-the value to a universal plus a workflow binding. The wording keeps
-CC1 enforcement actionable instead of cryptic.
+Rejection reasons. A float literal (any numeric token containing a
+decimal point or scientific-notation exponent) in value position is
+rejected: suggest lifting the value to a universal and binding it
+from the workflow. A unit-qualified literal (`273.15 K`, `5 MPa`, `0
+degC`) in value position is rejected: suggest either moving the
+declaration to an affine convert body if that is its role, or
+lifting the value to a universal. An integer literal written with a
+unit suffix (`1 meter`) in value position is rejected on the same
+grounds as the float case; the integer carve-out applies only to
+dimensionless use.
+
+Resolutions. The diagnostic points to the canonical resolution verb:
+`assume_constant` or `assume_series` (§24) for a universal-lifted
+value, or an affine-convert-body rewrite for a unit-qualified
+magnitude that belongs in a conversion. The wording keeps CC1
+enforcement actionable instead of cryptic.
 
 ### 5. Units
 
@@ -5151,8 +5181,11 @@ pattern or pipe use).
 `abs`, `sign`, `floor`, `ceil`, `round`, `min`, `max`, `sum`,
 `prod`, `mean`, `std`, `var`, `solve`, `invert`, `deriv`,
 `integrate`, `condition_of`, `value_in`, plus the distribution-
-family names enumerated in §27. User functions shadow stdlib atoms
-at the user's own module scope; stdlib dispatch preempts at the
+family names enumerated in §27. The stdlib universal namespace
+reserves `pi`, `e`, and the parametric family `integer<N: val>`
+(target of the integer-literal desugar in §4). User functions
+shadow stdlib atoms at the user's own module scope; stdlib
+dispatch preempts at the
 global scope.
 
 The full list is normative as of the current lock. Additions are a

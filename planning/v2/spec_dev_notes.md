@@ -156,6 +156,72 @@ provenance" — was considered and rejected. Reasons:
   Flagged in the merged audit under "Other Opens." Not blocking for
   spec_new.md text; is blocking for implementation.
 
+### Addendum 2026-04-23 — Integer literal carve-out via stdlib `integer<N>`
+
+The 2026-04-20 strict lock made `y = 2 * x + 1` illegal: the `1` and `2`
+are literal numerics in value position. Forcing the user to declare
+`universal two, one` and route them through the workflow for every
+piece of arithmetic is not livable.
+
+**Decision.** Bare dimensionless integer literals in value position are
+legal via automatic desugar. The parser rewrites literal `N` to
+`integer<N>`, a reference into the stdlib parametric universal family:
+
+```
+universal integer<N: val>: Scalar<dimensionless>
+```
+
+The default workflow binding for `integer<N>` is `N` itself, so the
+natural reading of the code is also the default behavior. Users who
+want sensitivity analysis can rebind `integer<1>` to `1.01` via
+`assume_constant` like any other universal.
+
+**What stays banned.** Float literals (anything with a decimal point or
+scientific-notation exponent) and unit-qualified numeric literals
+(`0.5`, `2.0`, `273.15 K`, `5 MPa`) in value position remain CC1
+violations. The integer carve-out applies only to dimensionless
+integer literals. `anti_spec.md` "dimensionless-ratio literal carve-out"
+row (retiring `0.5`, `2.0` inline) stands — that banned the ratio /
+float case; this addendum carves out only the integer case.
+
+**Why this works.** Unit checking and the no-float rule prevent the
+real CC1 failure mode: hard-coded dimensioned magic numbers and
+empirical constants. `2` in `2 * x` is dimensionless and algebraic;
+`8.314` in `R = 8.314 J / mol / K` is the thing CC1 was built to
+forbid. The integer carve-out keeps ergonomic arithmetic without
+re-opening the magic-number door.
+
+**E-graph interaction.** `integer<N>` is a universal like any other.
+The default binding merges its e-class with the literal term `N`, so
+ring/field axioms (Appendix C A-group) fire on `x + integer<0> → x`,
+`x * integer<1> → x`, `x * integer<0> → integer<0>`, etc. The
+`N: val` parameter makes each instantiation a distinct e-class, so
+`integer<2>` and `integer<3>` do not share identity.
+
+**Extension policy.** Extending the stdlib universal catalog (new
+named constants, parametric families beyond `integer<N>`) is a
+workflow-side or compiler-plugin concern, not a source-language
+surface concern. For v2.1 the stdlib ships whatever named constants
+(`pi`, `e`, well-known ratios) are useful; adding more is a stdlib
+edit, not a language change.
+
+**Rejected alternatives.**
+
+- *Leave CC1 strict, make users declare `universal one, two` by hand.*
+  Terrible ergonomics for no real safety gain; integer arithmetic is
+  not what CC1 is protecting against.
+- *Ship `zero, one, two, ... fifty_three` as flat stdlib universals.*
+  Arbitrary cutoff, awkward user code (`x + one` reads worse than
+  `x + 1`), and identical to the parametric version in every way that
+  matters.
+- *Allow any numeric literal in value position, keep CC1 banning only
+  unit-qualified values.* Re-opens the magic-number door for floats;
+  defeats the purpose of the CC1 lock.
+- *Parse-time sugar to fresh anonymous universals per literal.* Loses
+  the workflow-override identity (no name to target in
+  `assume_constant`). The parametric `integer<N>` form keeps the
+  override path.
+
 ---
 
 
