@@ -486,7 +486,7 @@ Collections (§12) and tensors are orthogonal primitives. A
 `Collection<T>` is a homogeneous, unordered-or-keyed aggregation of
 entities — membership, iteration, aggregation (§12.1). A `Tensor<U, S>`
 is a shaped numerical object — multi-axis indexing, linear-algebra
-primitives, structural subtypes (§3.9). The two do not nest into
+primitives, structural facts / refinements (§3.9). The two do not nest into
 each other by default: a collection of scalars is not automatically
 a vector, and a tensor axis is not automatically a collection. User-
 defined conversions exist (e.g. `to_tensor` aggregating a collection
@@ -497,7 +497,7 @@ This orthogonality keeps the semantics of `for` / aggregation
 The `convert` facility (§5.1) extends to tensors for a bounded set
 of operations: **reshape** between compatible shape specifications
 (total element count preserved), **sparse ↔ dense** representation
-changes on the same structural type, and **structural-subtype
+changes on the same structural type, and **structural-refinement
 widening** (e.g. `Diagonal<U, n>` → `Symmetric<U, n>`
 throws away structural information without changing values). Out of
 scope for `convert`: **numeric precision downcasts** (authorized via
@@ -626,60 +626,108 @@ reports the missing fact and does not silently choose a different
 semantic path.
 
 Matrix structural properties are therefore facts/refinements rather
-than closed enum cases. They form a lattice under meet (structural
-intersection) where the algebra supports it. They drive stdlib
-primitive dispatch (§30), for example `solve` chooses triangular
-substitution, Cholesky back-substitution, or general LU based on the
-established fact set.
+than closed enum cases. The operative model is an implication lattice
+over compiler facts, not a finite taxonomy of matrix kinds. A fact is
+below another fact when the first entails the second under named
+domain assumptions. Meet combines compatible facts and normalizes
+their consequences; join keeps only facts common to all alternatives,
+or records conditional alternatives when the branch condition remains
+visible.
 
-| structural type | meaning | Cholesky-eligible |
+Every matrix fact record carries:
+
+- **Predicate and parameters.** For example `positive_definite(A)`,
+  `banded(A, width)`, `zero_pattern(A, pattern)`, or
+  `entry_unit_law(A, law)`.
+- **Domain.** Real vs complex scalar setting, square vs rectangular
+  shape, axis identities, unit / scaling policy, and any construction
+  preconditions that make the implication valid.
+- **Evidence.** Relation provenance, e-graph rewrite, stdlib
+  primitive contract, provider validation, backend capability report,
+  or conditional proof.
+- **Status.** One of the evidence states above (`proven`, `refuted`,
+  `conditional`, `obligation`, `provider_validated`,
+  `backend_reported`, `unknown`).
+
+The stdlib may expose names such as `PositiveDefinite`,
+`PositiveSemiDefinite`, `Symmetric`, `Diagonal`, `LowerTriangular`,
+and `Orthogonal` as readable refinement names, but those names lower
+to facts and obligations. They are not user-granted proof labels.
+User-defined named refinements may bundle constraints, but satisfying
+the refinement still requires derived, validated, or conditional
+facts.
+
+Core shipped entailments:
+
+| fact or meet | entailed / normalized facts | notes |
 |---|---|---|
-| `Symmetric` | `A = Aᵀ` | no (symmetry alone insufficient) |
-| `PositiveDefinite` | `xᵀ A x > 0` for all `x ≠ 0` | yes |
-| `PositiveSemiDefinite` | `xᵀ A x ≥ 0` | pivoted Cholesky |
-| `UpperTriangular` / `LowerTriangular` | one triangle zero | N/A — direct solve |
-| `Diagonal` | off-diagonals zero | trivial |
-| `Orthogonal` | `A · Aᵀ = I` | N/A — inverse is transpose |
-| `Sparse` | substantial zero pattern | representation concern |
-| `Banded<b>` | entries zero outside bandwidth `b` | banded Cholesky |
+| `positive_definite(A)` in the real-matrix setting | `square(A)`, `symmetric(A)`, `positive_semidefinite(A)`, `full_rank(A)`, `invertible(A)`, `lambda_min(A) > 0` | Myco's stdlib `positive_definite` fact is the symmetric / Hermitian linear-algebra notion, not a loose annotation. |
+| `positive_semidefinite(A)` in the real-matrix setting | `square(A)`, `symmetric(A)`, `lambda_min(A) >= 0` | Does not imply invertibility or ordinary Cholesky eligibility. |
+| `diagonal(A)` | `square(A)`, `upper_triangular(A)`, `lower_triangular(A)`, off-diagonal `zero_pattern(A)`, and `symmetric(A)` in the real setting | Rectangular diagonal-like tensors, if needed later, require a separate fact. |
+| `scalar_diagonal(A)` | `diagonal(A)` and all diagonal entries equal | `identity(A)` further entails `positive_definite(A)`, `orthogonal(A)`, and unit-compatible inverse identity facts. |
+| `upper_triangular(A) ∧ lower_triangular(A)` | `diagonal(A)` | The meet is not contradictory; it normalizes to the tighter fact. |
+| `orthogonal(A)` | `square(A)`, `full_rank(A)`, `invertible(A)`, `inverse(A) = transpose(A)` | `condition_bound(A)=1` is emitted only when the relevant norm and scaling policy are established. |
+| `permutation(A)` | `orthogonal(A)`, boolean / nonnegative entries, one-hot row and column patterns | Also emits sparse / zero-pattern facts useful for lowering. |
+| `full_rank(A) ∧ square(A)` | `invertible(A)` | Rectangular `full_row_rank` and `full_col_rank` remain distinct and do not imply an inverse. |
+| `transpose(A) * A` | `symmetric`, `positive_semidefinite`, and Gram/provenance facts when units and axes are compatible | Upgrades to `positive_definite` only with `full_col_rank(A)`. |
+| `graph_laplacian(A) ∧ conservative_operator(A)` | `row_sum_zero(A)` and graph/discretization provenance | Symmetry, PSD, or M-matrix facts require the corresponding undirected / nonnegative / boundary-condition evidence. |
 
-Meet composition is explicit: `PositiveDefinite ∧ Symmetric =
-PositiveDefinite` (since `PositiveDefinite` supertraits `Symmetric`
-in the standard real-matrix setting); `Diagonal ∧ PositiveDefinite`
-yields a diagonal with strictly positive entries, which admits a
-trivial Cholesky (`L = √diag(A)`). The lattice is closed under
-the meet of any pair that is algebraically compatible; incompatible
-pairs (e.g. `UpperTriangular ∧ LowerTriangular` outside of `Diagonal`)
-produce `Diagonal` by compile-time reduction or a compile error if
-the context requires a strict non-diagonal type.
+Contradictions are handled by the same fact engine. `positive_definite(A)`
+and `singular(A)` on the same e-class refute each other. In the
+real setting, `symmetric(A) ∧ skew_symmetric(A)` normalizes to a
+zero-matrix fact; if the same e-class also requires
+`positive_definite(A)`, the compiler reports an impossible obligation.
+Unknown facts stay unknown. They do not authorize fallback lowering.
+
+Primitive propagation is explicit and local:
+
+- `transpose(A)` swaps row / column axes, transposes the
+  `entry_unit_law`, flips upper / lower triangular facts, and
+  preserves symmetry, diagonal, orthogonality, definiteness, and
+  spectral bounds where the named rule applies.
+- `A + B` requires compatible shape / axes / entry units. It preserves
+  symmetry, diagonal, triangular direction, and shared zero patterns;
+  it preserves PSD only by the cone rule when both operands are PSD
+  over the same axes and scaling policy.
+- `A * B` contracts axes and composes entry-unit laws. It preserves
+  triangular direction for same-direction triangular operands and
+  orthogonality for products of orthogonal matrices. It does not
+  preserve positive definiteness unless a named congruence or
+  product rule establishes the fact.
+- `inverse(A)` consumes `invertible(A)`. It preserves triangular,
+  diagonal, orthogonal, and positive-definite facts under their named
+  inverse rules, and emits inverse unit laws.
+- Factorizations consume facts and emit facts: `cholesky(A)` consumes
+  positive definiteness and factorable units, emits
+  `lower_triangular(L)`, `positive_diagonal(L)`, and the exact
+  factorization identity.
+- Spatial and graph lowerings emit provenance, pattern,
+  conservation, and spectral facts only when the geometry,
+  discretization, and boundary evidence prove them.
 
 Dispatch rule: `solve(A, b)` with `lower_triangular(A)` calls
 triangular substitution directly; `positive_definite(A)` routes
 through Cholesky; `orthogonal(A)` uses `Aᵀ · b`. The compiler walks
 the fact set to pick the tightest applicable specialization that
-preserves the same semantics.
+preserves the same semantics. If no required fact is established,
+planning reports the unmet obligation instead of choosing a
+different mathematical operation.
 
-Deferred to chunk 05:
+Remaining chunk-05 matrix work:
 
-- **Heterogeneous-unit matrix accounting** (B5). The resolution is
-  graph facts, not new role mechanics: row/column axes and
-  `entry_unit_law` facts carry per-entry units for Jacobians,
-  covariance constructions, metrics, and Gram matrices. Remaining
-  chunk-05 work specifies propagation / inspection detail for those
-  facts.
-- **Shape refinements** (§3 generics). Fixed-shape `Matrix<N, M>` vs
-  dynamic-shape `Matrix<?, ?>` interaction with the subtype lattice.
-  Fixed-shape in refinement syntax, dynamic in runtime-bound, compiler
-  enforces compatibility at binding time.
-- **Envelope flavors for matrix quantities**. Whether matrix-valued
-  quantities participate in the layer-2 envelope metadata system
-  (§17) in the same way scalars do, or need specialized envelope
-  machinery. Parallel to the MVN Cholesky intermediate (§13.6 Z10)
-  but for general matrix-valued terms.
-- **Sparse representation choice**. `CSR` vs `CSC` vs `COO` vs
-  `block-sparse` — the structural property `Sparse` is an abstract
-  marker; the concrete storage is a backend-level choice tracked
-  in chunk 06 alongside device-layout concerns.
+- **Shape-phase propagation detail** (§3 generics). The
+  shape-expression model is locked; remaining primitive tables still
+  need to spell out how fixed-shape, provider-validated,
+  runtime-bounded, and dynamic-unknown `ShapePhase` facts propagate.
+- **Sparse pattern facts and representation choice.** `zero_pattern`,
+  `banded`, `block_sparse`, and related facts are mathematical /
+  pattern facts. `CSR`, `CSC`, `COO`, dense materialization, and
+  device layout remain backend-level representation choices tracked
+  by provider / backend facts.
+- **Tensor `convert` scope and scalar reconciliation.** Reshape,
+  named-refinement widening, sparse materialization, and
+  `Scalar<U> := Tensor<U, ()>` vs a distinct scalar constructor are
+  separate scope calls.
 
 #### 3.10 Sum Types / Enums (STUB)
 
@@ -1817,7 +1865,7 @@ rewrites from stdlib declarations; users never annotate them.
 **Dimension dispatch in axiom return positions.** `curl` is the
 first operator whose return type depends on a val generic carried
 by the input domain (`G.dim`). The dispatch pattern mirrors
-`solve`'s dispatch on matrix structural subtype (§3.9, §30): the
+`solve`'s dispatch on matrix structural facts (§3.9, §30): the
 stdlib declaration enumerates per-dimension cases, and the compiler
 picks the applicable one at the call site based on the input's
 generic parameters. User code generic in dimension may reach for
@@ -3921,7 +3969,7 @@ The four targets are distinct compilation paths:
   tick t-1 via explicit temporal terms (§21.3). Dynamic SCC
   lowering may sub-dispatch to algebraic, fixed-point,
   iterative-solve, or stepper strategies. Assembled linear
-  solves dispatch by matrix structural subtype (§3.9, §30):
+  solves dispatch by matrix structural facts (§3.9, §30):
   triangular solve, Cholesky back-substitution for positive-
   definite systems, and LU-style general solve.
 - **Stochastic SCCs.** Lowered to backend PPL primitives
@@ -5169,10 +5217,10 @@ kernels are implementation choices that preserve the same semantics,
 not semantic fallbacks.
 
 Chunk 05 is the design venue for the remaining matrix type layer:
-shape refinements, envelope interaction, sparse-pattern facts, and
-fact propagation. This section commits only the stdlib function
-surface and the primitive fact contracts; type content lives in §3.9
-per the chunk 05 scope decision.
+tensor `convert` scope, sparse-pattern detail, scalar reconciliation,
+and primitive signature polish. This section commits only the stdlib
+function surface and the primitive fact contracts; type content lives
+in §3.9 per the chunk 05 scope decision.
 
 The matrix / tensor stdlib ships the linear-algebra primitives that
 the rest of the spec depends on by name, in particular the Cholesky
@@ -5452,9 +5500,10 @@ substrate lock), chunk 11 sum types / enums. Chunk 12 cost/objective
 vocabulary is resolved and kept here only as a completed reference.
 
 - **Chunk 05.** Matrix details. Heterogeneous-unit type mechanics are
-  resolved by matrix facts (§3.9); remaining work covers envelope
-  flavors, fact propagation, primitive fact contracts, shape
-  refinements, sparse-pattern facts, and scalar reconciliation.
+  resolved by matrix facts (§3.9); shape expressions, envelope
+  views, and the structural fact lattice are locked. Remaining work
+  covers tensor `convert` scope, sparse-pattern detail, primitive
+  signature polish, and scalar reconciliation.
 - **Chunk 06.** Backend abstraction.
 - **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04
   (expression e-graph substrate), 05 (refinement-lattice examples

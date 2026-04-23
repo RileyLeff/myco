@@ -88,6 +88,7 @@ gap-review stale list, subsequent design locks.
 | automatic semantic fallback when required matrix facts are unknown | unmet-obligation diagnostics unless the user explicitly writes a different valid operation / workflow policy | unknown `positive_definite`, kernel-PD, scaling, or axis facts do not authorize opaque handoff or "make it work" behavior |
 | treating dynamic topology dimensions as silently static tensor shapes | `ShapePhase` facts (`provider_validated`, `runtime_bounded`, `dynamic_unknown`) | runtime topology counts must carry evidence phase; static-specialized code cannot assume them without proof or provider validation |
 | automatic cross-view envelope implication (`entrywise -> PSD`, `PSD -> entrywise`, `norm -> symmetric`, etc.) | named stdlib/compiler implication rules only | envelope views are parallel; no view silently proves another just because both are attached to the same e-class |
+| matrix structures as a closed enum / fixed structural-subtype tree | open matrix fact-entailment lattice | `PositiveDefinite`, `Diagonal`, `Orthogonal`, etc. are facts/refinements with evidence and implication rules, not a finite list of cases |
 
 ## Retired open questions (closed or structurally void)
 

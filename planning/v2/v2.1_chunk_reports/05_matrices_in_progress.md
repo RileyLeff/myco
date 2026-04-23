@@ -5,8 +5,8 @@
 **Reviewers:** None yet
 **Status:** IN PROGRESS. Shape polymorphism direction locked (Option
 C — `Tensor<U, shape>` primitive with `Vector<U, n>` / `Matrix<U, m, n>`
-as shape-refined aliases). Heterogeneous-unit question, envelope
-flavors, and structural subtype lattice all open. Backend / AD / GPU
+as shape-refined aliases). Heterogeneous-unit facts, matrix-envelope
+views, and the structural fact lattice are locked. Backend / AD / GPU
 lowering concerns factored out into chunk 06.
 
 ---
@@ -95,8 +95,8 @@ exists in v2.1.**
   Not in spec, v2.1_in_progress, or any chunk report.
 - **No linear-algebra primitives** — `det`, `trace`, `inv`, `cholesky`,
   `solve`, `svd`, `eigen`, or matmul `@` operator.
-- **No structural subtypes** for Symmetric, PSD, Diagonal,
-  LowerTriangular, Banded, Orthogonal.
+- **No matrix structural fact / refinement model** for symmetry,
+  definiteness, diagonality, triangularity, banding, or orthogonality.
 - **No matrix envelopes** — spectral bounds, norm bounds, PSD-as-fact
   all undesigned.
 - **No MVN, Wishart, or any multivariate distribution** — explicitly
@@ -140,7 +140,7 @@ the SCC solver to implicitly materialize the Jacobian at runtime.
 Medium-to-large design effort, comparable to the collections or
 e-graph-foundation chunks. Not a minor enhancement. Type-system
 extension, operator overloading (dispatch on tensor shape and
-structural subtype), envelope generalization, probabilistic
+structural facts), envelope generalization, probabilistic
 integration (MVN/Wishart), and e-graph integration (shape
 compatibility under merge) all require explicit design.
 
@@ -152,8 +152,8 @@ compatibility under merge) all require explicit design.
 
 **Decision (2026-04-20):** `Tensor<U, shape>` is the primitive;
 `Vector<U, n>` and `Matrix<U, m, n>` are **shape-refined aliases**
-atop it. Structural subtypes (Symmetric, PosDef, etc.) are further
-refinements on `Matrix<U, n, n>`.
+atop it. Structural facts / refinements (Symmetric, PosDef, etc.)
+are further refinements on `Matrix<U, n, n>`.
 
 ```
 Tensor<U, shape>           # primitive; arbitrary rank
@@ -177,8 +177,8 @@ Vector / Matrix / Tensor primitives):**
 - Keeps rank-specific linear-algebra statically typed via
   refinements — invalid uses (e.g., `cholesky` on a rank-3 tensor)
   caught at compile time, not at lowering.
-- Lets structural subtypes compose cleanly (`PosDef` refines
-  `Matrix<U, n, n>` which refines `Tensor<U, (n, n)>`).
+- Lets structural facts compose cleanly (`positive_definite(A)`
+  entails square, symmetric, PSD, full-rank, and invertible facts).
 - Matches the burn / JAX / PyTorch mental model without importing
   their runtime — the type system captures rank statically; the
   backend (chunk 06) handles execution.
@@ -263,9 +263,10 @@ matrix roles. A constraint such as `positive_definite(A)` creates an
 obligation to prove or validate the fact, not a grant of the fact.
 
 This closes the type-signature branch of the heterogeneous-unit
-question. Remaining chunk-05 work is fact propagation: envelope
-flavors, shape refinements, structural fact lattice, sparse-pattern
-facts, and primitive fact contracts.
+question. Remaining chunk-05 work after the resolved sections below:
+tensor `convert` scope, collections boundary text, dynamic-topology
+deferral text, sparse-pattern detail, and primitive naming / error
+polish.
 
 ### 3.3 Envelope flavors for matrix-valued quantities — RESOLVED: parallel views
 
@@ -309,52 +310,79 @@ not imply useful entry-wise bounds, norm bounds do not imply symmetry,
 and symmetry does not imply positive definiteness. Cross-view
 implications must be named compiler / stdlib rules.
 
-### 3.4 Structural subtype lattice — OPEN
+### 3.4 Structural fact lattice — RESOLVED: implication facts, not enum subtypes
 
-Common structural subtypes and their refinement relationships:
+Decision (2026-04-23): matrix structure is an **implication lattice
+over compiler facts**. Myco does not need a closed enum of matrix
+kinds, and it does not treat `PositiveDefinite` / `Diagonal` /
+`Orthogonal` as user-granted proof labels. Those names may exist as
+stdlib refinement names, inspection vocabulary, or diagnostics, but
+they lower to fact obligations and fact entailments.
 
-```
-Matrix<U, n, n>
-├── Symmetric<U, n>              (A = Aᵀ)
-│   ├── PosDef<U, n>             (+ positive eigenvalues)
-│   └── PosSemiDef<U, n>         (+ non-negative eigenvalues)
-├── Diagonal<U, n>               (off-diagonal = 0)
-│   ├── Scaled<U, n>             (Diagonal + constant)
-│   └── Identity<U, n>           (Diagonal + all-ones)
-├── Triangular<U, n>
-│   ├── UpperTriangular<U, n>
-│   └── LowerTriangular<U, n>
-├── Orthogonal<U, n>             (AᵀA = I)
-│   └── Rotation<U, n>           (Orthogonal + det = +1)
-├── Sparse<U, n, pattern>
-└── Banded<U, n, bandwidth>
-```
+A matrix e-class carries fact records with four pieces of data:
 
-Design questions:
+- predicate and parameters (`positive_definite(A)`,
+  `banded(A, width)`, `zero_pattern(A, pattern)`,
+  `entry_unit_law(A, law)`);
+- domain (`real`, `complex`, square / rectangular shape, axes,
+  units, scaling policy, construction preconditions);
+- evidence (relation provenance, stdlib primitive contract, e-graph
+  rewrite, provider validation, backend report, conditional proof);
+- status (`proven`, `refuted`, `conditional`, `obligation`,
+  `provider_validated`, `backend_reported`, `unknown`).
 
-- **Which ship in v2.1 stdlib?** Probably Symmetric, PosDef,
-  Diagonal, Triangular (upper/lower), Orthogonal, Sparse. Rotation
-  / PosSemiDef / Banded / Scaled can be user-defined refinements.
-- **Declaration syntax.** Likely uses existing refinement-type
-  machinery generalized to shape: `type PosDef<U, n> := Symmetric<U, n>
-  where { all(eigenvalues(self) > 0) }`. Needs clarity on whether
-  structural predicates like "symmetric" are checkable at compile
-  time (for literal matrices) or only at runtime (for assembled
-  matrices).
-- **Composition.** Can a user write `SymmetricPosDef<U, n>` that
-  refines both? Probably subsumed by `PosDef` (which implies
-  Symmetric), but the general composability question applies to
-  user-defined refinements.
-- **Stripping rules.** `transpose(Symmetric) → Symmetric`;
-  `transpose(Triangular) → other-triangular`;
-  `inverse(PosDef) → PosDef`; `A · Aᵀ → PosSemiDef`. These are
-  rewrite rules in the e-graph (Group D-style, named-type
-  preserving). Must be enumerated.
-- **Sparse pattern as type.** `Sparse<U, n, pattern>` — is `pattern`
-  a compile-time value (type-level matrix of booleans) or a runtime
-  fact? If compile-time, it needs the type system to support
-  matrix-of-boolean type-level values. If runtime, sparsity is an
-  envelope fact, not a type refinement.
+The lattice order is implication. Meet combines compatible facts and
+normalizes consequences; join keeps only facts common to all incoming
+alternatives unless the condition remains explicit. E-class merge
+unions evidence, detects contradictions, and never promotes
+`unknown` to `proven`.
+
+Committed v2.1 entailments:
+
+| fact or meet | entailed / normalized facts |
+|---|---|
+| `positive_definite(A)` in the real-matrix setting | `square(A)`, `symmetric(A)`, `positive_semidefinite(A)`, `full_rank(A)`, `invertible(A)`, `lambda_min(A) > 0` |
+| `positive_semidefinite(A)` in the real-matrix setting | `square(A)`, `symmetric(A)`, `lambda_min(A) >= 0` |
+| `diagonal(A)` | `square(A)`, `upper_triangular(A)`, `lower_triangular(A)`, off-diagonal `zero_pattern(A)`, `symmetric(A)` in the real setting |
+| `scalar_diagonal(A)` | `diagonal(A)` and all diagonal entries equal |
+| `identity(A)` | `scalar_diagonal(A)`, `positive_definite(A)`, `orthogonal(A)`, inverse identity facts |
+| `upper_triangular(A) ∧ lower_triangular(A)` | `diagonal(A)` |
+| `orthogonal(A)` | `square(A)`, `full_rank(A)`, `invertible(A)`, `inverse(A) = transpose(A)` |
+| `permutation(A)` | `orthogonal(A)`, one-hot row / column pattern, sparse zero-pattern facts |
+| `full_rank(A) ∧ square(A)` | `invertible(A)` |
+| `transpose(A) * A` | symmetric PSD Gram/provenance facts when axes and units are compatible; PD only with `full_col_rank(A)` |
+| `graph_laplacian(A) ∧ conservative_operator(A)` | `row_sum_zero(A)` plus graph/discretization provenance; symmetry / PSD / M-matrix facts require extra construction evidence |
+
+Propagation rules are local and named:
+
+- `transpose(A)` swaps axes and entry-unit laws, flips upper/lower
+  triangular facts, and preserves applicable symmetry,
+  definiteness, diagonal, orthogonal, and spectral facts.
+- `A + B` preserves shared symmetry, diagonal, triangular direction,
+  zero-pattern facts, and PSD only by the cone rule when both operands
+  are PSD over the same axes and scaling policy.
+- `A * B` composes axes and entry-unit laws, preserves same-direction
+  triangular products and orthogonal products, and does not preserve
+  positive definiteness unless a named congruence / product rule
+  applies.
+- `inverse(A)` consumes `invertible(A)` and preserves triangular,
+  diagonal, orthogonal, and positive-definite facts under named
+  inverse rules.
+- Factorizations consume facts and emit facts. `cholesky(A)` consumes
+  positive definiteness and factorable units, then emits
+  `lower_triangular(L)`, `positive_diagonal(L)`, and `A = L * L^T`.
+
+Sparse patterns are facts, not storage declarations. `zero_pattern`,
+`banded`, `block_sparse`, `stencil_pattern`, and
+`nearest_neighbor_coupling` can be compile-time facts,
+provider-validated facts, or runtime-bounded facts depending on their
+source. `CSR`, `CSC`, `COO`, and dense materialization are backend
+representation choices tracked separately.
+
+User-facing implication: writing `constraint positive_definite(A)`
+creates an obligation. It does not mark `A` as positive definite.
+The compiler must derive the fact, validate it at the workflow
+boundary, carry it conditionally, or report the obligation as unmet.
 
 ### 3.5 `convert` scope on tensors — OPEN (needs scope call)
 
@@ -377,7 +405,7 @@ bounded counterexample search. Tensor conversions:
   is lossless (just materialize zeros); dense-to-sparse requires
   explicit pattern declaration and is either provably-lossless (no
   entries outside pattern are nonzero) or rejected.
-- **Named-type ↔ structural subtype** (`DistanceMatrix<U, n> ↔
+- **Named-type ↔ structural refinement** (`DistanceMatrix<U, n> ↔
   Symmetric<U, n>`). Named types that are structurally refinements
   use bare `convert` (relabel). Consistent with existing scalar
   pattern.
@@ -388,7 +416,7 @@ pattern declaration, named↔structural relabel.
 **Explicit out-of-scope:** precision conversion (routes through
 `approximate`), storage-order (codegen detail).
 
-### 3.6 Shape refinements as type-level predicates — OPEN (prerequisite)
+### 3.6 Shape refinements as type-level predicates — RESOLVED: staged solver
 
 The locked tensor / matrix constructor shape requires the type system to express predicates like
 `shape = (n, n)` for square matrices. Current refinement-type
@@ -490,8 +518,8 @@ These should ship in v2.1 stdlib once type-system questions §3.2 /
 
 **Solves:**
 - `solve(Matrix<U, n, n>, Vector<U, n>) -> Vector<U, n>` — dispatches
-  on structural subtype (Cholesky for PosDef, triangular solve for
-  Triangular, LU otherwise).
+  on structural facts (Cholesky for positive-definite systems,
+  triangular solve for triangular systems, LU otherwise).
 - `solve_triangular(Triangular<U, n>, Vector<U, n>) -> Vector<U, n>`
 - `least_squares(Matrix<U, m, n>, Vector<U, m>) -> Vector<U, n>`
 
@@ -536,12 +564,12 @@ math-vocabulary).
   provenance, and provider-validation evidence. Homogeneous unit
   propagation remains the simple case.
 - **Named types (spec §4).** Named-type stripping rules U1-U3
-  (chunk 04) extend to structural-subtype-preserving rules for
+  (chunk 04) extend to structural-fact-preserving rules for
   tensor ops (`transpose(Symmetric) → Symmetric`, etc.).
 - **Refinement types (spec §4.x).** Shape refinements §3.6 require
   extending refinement-type machinery from scalar value predicates
-  to shape-level predicates. Structural subtypes §3.4 build on
-  this.
+  to shape-level predicates. Matrix structural refinements §3.4
+  lower to facts and obligations rather than user proof labels.
 - **`convert` (spec §4.x).** Scope call per §3.5 — reshape +
   sparse↔dense with pattern + named↔structural relabel in scope;
   precision + storage-order out of scope.
@@ -600,24 +628,17 @@ With this chunk shipped:
 Items in priority order (later items depend on earlier items
 closing):
 
-1. **Close §3.6 (shape refinements).** Prerequisite for §3.4
-   structural subtypes. Lean: broad shape-expression AST with a
-   staged solver; v2.1 automatic support starts with tuple equality,
-   rank, indexing, product equality, transpose, concat / stack, and
-   simple affine expressions.
-2. **Close §3.3 (envelope flavors).** Gates Level III
-   `condition_of` machinery. Four flavors, merging rules,
-   per-op propagation tables.
-3. **Close §3.4 (structural subtype lattice).** Stdlib subtypes +
-   declaration syntax + stripping rules.
-4. **Close §3.5 (convert scope).** Mostly a scope call with small
+Completed: §3.6 shape-expression model, §3.3 envelope views, and
+§3.4 structural fact lattice.
+
+1. **Close §3.5 (convert scope).** Mostly a scope call with small
    design consequences.
-5. **Close §3.7 (collections boundary).** Written above as
+2. **Close §3.7 (collections boundary).** Written above as
    clarification; needs one-paragraph commitment in spec.
-6. **Close §3.8 (dynamic topology deferral).** Documentation call.
-7. **Draft primitive list §4 concretely.** Names, signatures,
+3. **Close §3.8 (dynamic topology deferral).** Documentation call.
+4. **Draft primitive list §4 concretely.** Names, signatures,
    errors. Well-trodden; low design risk.
-8. **Write the v2.1 commitment text into the spec.**
+5. **Write the v2.1 commitment text into the spec.**
 
 Parallelizable with chunk 06 (backend abstraction) — chunk 06
 needs this chunk's primitive list to have lowering targets; this
@@ -636,17 +657,19 @@ fact contracts being established for `Σ`.
 - **Q1.** Heterogeneous-unit question. RESOLVED 2026-04-23:
   compiler-facing matrix facts over ordinary tensors; no `LinearMap`
   type, no `basis` syntax, no user-marked matrix role annotations.
-- **Q2.** Shape refinement language — how much shape arithmetic
-  ships in v2.1? (§3.6)
-- **Q3.** Envelope flavors and their per-op propagation rules?
-  (§3.3)
-- **Q4.** Structural subtype lattice — which ship in stdlib, how
-  declared, what composition rules? (§3.4)
+- **Q2.** Shape refinement language. RESOLVED 2026-04-23:
+  broad shape-expression AST with staged solver support (§3.6).
+- **Q3.** Envelope flavors. RESOLVED 2026-04-23: parallel
+  entry-wise, norm, spectral, and structural views (§3.3).
+- **Q4.** Structural fact lattice. RESOLVED 2026-04-23:
+  implication facts/refinements, not enum subtypes or user proof
+  labels (§3.4).
 - **Q5.** `convert` scope — reshape / sparse / precision / storage
   order / named↔structural: which are in / out? (§3.5)
 - **Q6.** Scalar reconciliation — redefine `Scalar<U> := Tensor<U,
   ()>` or keep distinct with implicit conversion? (§3.1)
-- **Q7.** Sparse pattern as type-level value — compile-time matrix
-  of booleans or runtime envelope fact? (§3.4)
+- **Q7.** Sparse pattern facts. RESOLVED 2026-04-23:
+  `zero_pattern` / `banded` / `block_sparse` are facts with evidence
+  phase; storage representation remains backend-level (§3.4).
 - **Q8.** Matrix literal syntax — `[[1, 2]; [3, 4]]` or alternative.
   (§4)
