@@ -377,3 +377,588 @@ leaks, then decide whether to commit.
   `sampleable_input` controller in PPL mode — does the PPL backend
   automatically compose with Myco's symbolic inversion rewrites, or
   does it need explicit coordination?
+
+## Partial evaluation and the inspect API
+
+Riley raised a capability question: if a finished, well-constrained
+run has a handful of values sniper-deleted, leaving those nodes
+symbolic, and the workflow then asks "given everything else, what do
+we know about missing value `x`", the user should get back a
+symbolic expression with as much information as possible already
+propagated through it. Even when `x` is underdetermined, the answer
+should carry every constraint the graph can impose on it.
+
+Claude's response: this capability is already implicit in the
+existing e-graph machinery. §19's A-group and E-group rewrites
+perform symbolic simplification and algebraic rearrangement during
+saturation. Extraction can return the best form of any node
+regardless of whether it terminates in a ground value. The missing
+piece is a user-facing API.
+
+### Four worked examples
+
+1. **ODE with unbound initial.** Everything else resolved; initial
+   condition `y0` left symbolic. Inspect of `y.terminal` returns an
+   expression in `y0` plus absorbed constants. All parameter values
+   are folded in; only the one genuinely free variable remains.
+
+2. **Algebraic inversion.** `z = f(x, y)` bound, `y` bound, `x`
+   sniped. Inspect of `x` returns the inverted expression if `f` is
+   invertible in `x`, otherwise returns the unsatisfied residual
+   `f(x, y) - z = 0` as the best available statement.
+
+3. **Mutual expression.** Two variables `a, b` coupled by an
+   equation, both unbound. Inspect of `a` returns `a` expressed in
+   terms of `b` (and vice versa) — the graph's best one-equation
+   statement about either.
+
+4. **Deeply partial.** Three linked equations, one variable unbound.
+   Propagation collapses the chain so the inspect result surfaces
+   only the genuinely required free symbols, not every intermediate
+   node.
+
+### Proposed API shape
+
+```python
+result = experiment.inspect("path.to.node")
+# Returns a structured object:
+#   result.expression        — best symbolic form post-saturation
+#   result.free_variables    — set of paths still unresolved
+#   result.status            — ground | symbolic | overdetermined | inconsistent
+#   result.value             — optional numeric reduction if ground
+#   result.depends_on        — paths whose bindings fed the result
+#   result.reduction_trace   — optional rewrite history (explain mode)
+```
+
+CLI equivalent: `hypha explain path.to.node` rendering the
+expression as a tree or flat form. Rendering knobs likely needed:
+
+- Depth limit for expression printing (collapse deep subtrees to
+  named intermediates on request)
+- Free-variable ranking so the most constraint-heavy symbols appear
+  first
+- Toggle between surface-syntax rendering and internal IR form
+
+### Spec implications
+
+- §22 gains an `inspect` verb or experiment-object method, with its
+  return type documented as a structured symbolic result
+- §23 (Python boundary) needs the object to marshal cleanly, with
+  the `expression` field exposed as a printable + walkable structure
+- §19 may need a normative statement that extraction must terminate
+  even when free variables remain; current prose assumes ground
+  extraction
+
+### Tie to the directionality discussion
+
+Inspect is direction-free by construction. It queries the graph's
+current best knowledge of any node at any time. That is precisely
+the capability Riley wanted when he rejected solve-direction as a
+first-class concept: the user asks "what does the graph know", and
+the answer is whatever the rewrites can produce.
+
+## `myco.prove()` — symbolic truth-claim verification
+
+Riley asked for a companion entry point: given a `.myco` model plus
+a workflow, can we ask "is this expression true" and optionally get
+a show-your-work trace. Same underlying machinery as inspect, but
+with a different surface question.
+
+### Shape
+
+```python
+result = myco.prove("x + y > 0", experiment=exp, show_work=True)
+# Returns:
+#   result.verdict     — proven | refuted | undetermined | contingent
+#   result.counterexample — if refuted, a witness binding
+#   result.conditions  — if contingent, the assumptions under which
+#                        the claim holds (e.g., "if z > 0")
+#   result.trace       — ordered list of rewrite steps that led to
+#                        the verdict (show_work=True)
+```
+
+### Example targets
+
+- `prove("x + y > 0")` — standard algebraic claim
+- `prove("photosynthesis monotonic in light")` — expressed against
+  a user-exposed predicate library; backend checks that
+  `d(photo)/d(light) >= 0` is derivable
+- `prove("conservation of C holds at every step")` — lifts the
+  runtime conservation-check machinery into a compile-time
+  statement, useful for documentation or spec-level guarantees
+- `prove("y.terminal is bounded")` — claims about asymptotic
+  behavior, answerable when the graph has enough structure
+
+### What machinery it reuses
+
+- E-graph saturation over A/E/CC rewrite groups decides equality
+  classes and normalizations
+- Symbolic differentiation (already needed for gradient training)
+  handles monotonicity / sign claims
+- Envelope metadata from layer 2 supplies interval and
+  positivity witnesses when exact equality is not derivable
+- Extraction produces the minimal counterexample when the claim is
+  refuted
+
+### What it does not guarantee
+
+`prove` is not a general theorem prover. It succeeds on claims that
+Myco's canonical rewrites can reach, and returns `undetermined` on
+anything else. That status is informative: it tells the user "the
+graph's current rules cannot settle this", which is a different
+answer from "false". Users can extend reach by adding registered
+lemmas (future direction) or by strengthening bindings.
+
+### Spec implications
+
+- New top-level workflow verb or library function (name TBD; leaning
+  library function exposed as `myco.prove` or
+  `experiment.prove`)
+- Needs a canonical predicate vocabulary: what exactly does
+  "monotonic in x" compile to? This is a surface-syntax decision,
+  maybe a small predicate DSL
+- `undetermined` verdict must be first-class; the API cannot coerce
+  it into a boolean
+
+### Why pair inspect and prove
+
+Both queries are views over the same saturated e-graph. Inspect asks
+"what expression represents this node"; prove asks "does this
+expression evaluate to true". The implementation is one extraction
+pass plus a decision procedure over the extracted form. Shipping
+them together avoids the trap of building two separate query
+subsystems.
+
+## Overdetermined handler API design
+
+Riley flagged that the overdetermined-constraint surface will get
+messy in complicated cases if we do not think about it up front.
+Agreed. Four distinct situations all fall under the same umbrella,
+and they need different API treatment.
+
+### The four situations (restated)
+
+1. **Exactly redundant.** Two equations express the same constraint
+   post-simplification. Detectable at compile time by the e-graph.
+   Harmless, but worth reporting.
+
+2. **Approximately consistent.** Residual below user-configured
+   tolerance. Runtime observation. Not an error; the user may want
+   the residual surfaced as a diagnostic.
+
+3. **Provably inconsistent.** Residual provably exceeds any
+   reasonable tolerance, or the symbolic form reduces to `0 = c`
+   for nonzero `c`. Compile-time error when provable, runtime error
+   otherwise.
+
+4. **Two-point BVP-style.** The system is well-posed but requires a
+   solver that treats the endpoint constraints symmetrically. Not
+   an error at all; a dispatch signal to §20's solver-class
+   machinery.
+
+The design risk: one API surface for all four, and users cannot
+tell which situation they are in.
+
+### Separation of concerns
+
+The API should distinguish three axes:
+
+- **When is the situation detected.** Compile time (structural
+  redundancy, provable inconsistency) vs runtime (residual
+  evaluation).
+- **What kind of constraint collided.** User equation vs observed
+  data vs boundary condition vs conservation law. These have
+  different expected tolerances and different recovery strategies.
+- **What the user wants to do about it.** Accept with residual
+  reporting / fail hard / re-dispatch to a different solver class.
+
+### Proposed shape
+
+Compile-time reporting goes through a diagnostics channel, not
+runtime error. The compiler produces an overdetermined-subsystem
+report listing each collision with structural information:
+
+```
+report.subsystems[i] = {
+    .paths              — which nodes are over-constrained
+    .collision_kind     — redundant | potentially_conflicting | bvp
+    .constraints        — list of participating constraints with
+                          source location (line in .myco or verb in
+                          workflow)
+    .residual_expression — symbolic residual when computable
+    .suggested_handling — advisory (e.g., "use bvp_solver",
+                          "drop one observation")
+}
+```
+
+Runtime reporting lives on the experiment result:
+
+```python
+exp_result.consistency_report
+  .per_subsystem[i]
+    .observed_residual     — numeric
+    .tolerance_used        — numeric
+    .verdict               — within_tol | exceeds_tol | nan
+    .contributing_paths    — which bindings fed the residual
+```
+
+The user configures handling through a dedicated verb in the
+workflow, not through solver options:
+
+```python
+# Declarative configuration, not an imperative callback
+on_overdetermined(
+    path="plant.biomass",           # specific subsystem or pattern
+    tolerance=1e-6,
+    kind="observation",             # or "equation" or "boundary"
+    when_within_tol="silent",       # silent | warn | record
+    when_exceeds_tol="error",       # error | warn | record
+)
+```
+
+Pattern matching over paths keeps the verbose case from exploding:
+one `on_overdetermined(path="*", ...)` sets a default; specific
+paths override.
+
+### Why a dedicated verb and not solver options
+
+Overdeterminedness is a property of the *model and its bindings*,
+not of the solver. If the user swaps solvers, their tolerance
+policy for an observed value should not change. Tying handling to
+the workflow keeps the language honest about what kind of
+statement is being made.
+
+### Query API for drilling in
+
+Complicated cases need a way to ask "which constraints fought each
+other in subsystem 3". Suggested methods on the report:
+
+```python
+subsystem.participants()         — all paths
+subsystem.constraint_graph()     — how paths are linked
+subsystem.residual_explained()   — symbolic decomposition of the
+                                   residual by contributing
+                                   constraint
+subsystem.drop_one_candidates()  — which single-constraint removals
+                                   would resolve the collision
+```
+
+The last one is particularly useful in debugging: the user asks
+"which observation is causing the inconsistency" and gets a ranked
+list.
+
+### BVP as a separate path
+
+BVP-style overdetermination should not travel through the same
+error / warning channel at all. The compiler recognizes the
+structural pattern (boundary constraints on both endpoints of an
+integration) and routes the SCC to a BVP solver. The
+overdetermined report notes this as `collision_kind = bvp` with
+`suggested_handling = "routed to bvp_solver"` for transparency, but
+no user action is required.
+
+This is consistent with the "compiler chooses solver class, user
+chooses semantic content" policy from §20.
+
+### Spec implications
+
+- §15 or §20 gains an overdetermined-subsystem section covering
+  detection, classification, and dispatch
+- New workflow verb `on_overdetermined` with the signature above,
+  or equivalent
+- §22 consistency-report object documented with both compile-time
+  and runtime fields
+- §23 marshals the report into Python with usable walker APIs
+- `hypha explain` CLI grows an `explain-overdetermined` subcommand
+  for interactive drilling
+
+### Why this matters for the three-verb redesign
+
+Under the proposed three-verb surface, observations and equations
+collide through the same mechanism (constraints pushed into the
+e-graph). The overdetermined handler is the primary user-facing
+surface where this unification becomes visible. Getting the API
+right is part of validating the three-verb framing: if the API
+feels natural, the unification was the right call; if it needs
+separate treatment for bind-collisions vs observe-collisions, the
+verbs were not really the same thing.
+
+## Overdetermination reframed: world-layer equalities are the feature
+
+An earlier draft of this file proposed that the compiler should
+refuse to compile `.myco` worlds containing two equalities for the
+same quantity (e.g., `x = this` and `x = that` with distinct RHS).
+Riley corrected this: those multi-statements are the whole point.
+They bridge subsystems in the e-graph so information flows between
+them. The `x` is one `x` everywhere it appears; both equalities
+hold simultaneously as claims about the world, and the e-graph
+propagates consequences through both.
+
+With that correction, the design picture changes:
+
+**Inconsistency always originates at the workflow layer.** A
+well-formed `.myco` is internally consistent by construction (and
+any internal redundancy is informative, not pathological). The
+moment real observations are attached to the world, the combined
+system can become inconsistent — because instruments are noisy,
+models are approximate, conservation holds up to measurement
+precision rather than exactly, and any honest ontology of real
+processes generates this.
+
+**The user has four legitimate responses**, in roughly decreasing
+order of modeling hygiene:
+
+1. **Model the noise explicitly in `.myco`.** User writes
+   `x_obs = x + epsilon` with `epsilon ~ Normal(0, sigma)` as a
+   world claim. The disagreement becomes a named, distributed
+   quantity and the inference machinery handles it. This is the
+   right answer whenever a defensible noise model exists. The
+   domain knowledge ends up in the world where it belongs.
+
+2. **Statistical inference mode.** Even without an explicit noise
+   term, the user can declare "treat world equations as likelihood
+   terms, not hard constraints" via inference mode (MLE /
+   Bayesian). World equations become soft; residuals become
+   likelihood contributions. This is the default answer for "I
+   have noisy data, I want a fit". Lives at the compile-mode
+   level, not per-node.
+
+3. **Fixed-menu numerical strategies for direct-observation
+   conflicts.** When multiple *direct* observations of the same
+   path disagree (three thermometers on one quantity) with no
+   model in between, there is no likelihood function to hide
+   behind. Here the small fixed workflow-level menu applies:
+   `hard_error | best_conditioned | lowest_residual |
+   accept_arbitrary`. No custom Python. Specifically no `average`
+   or `weighted_average` in the menu because those encode
+   reliability claims about the instruments, and reliability
+   claims are world-level (they go in `.myco` via option 1).
+
+4. **Tolerance-based hard mode.** Keep world equations as hard
+   constraints, declare a tolerance band, fail when data violates
+   by more than that. For cases where the world law is trusted and
+   the data is the thing under validation.
+
+### Which layer handles which case
+
+Options (1) and (2) are the primary answers and cover most real
+statistics. Option (3) is a narrow workflow-side affordance for
+genuine observation-vs-observation disagreement with no model
+mediating. Option (4) is what `on_overdetermined` with
+`hard_error` means in practice.
+
+### The `observe` default matters
+
+Default semantics of `observe(path, data)` without any additional
+config should be hard-constraint-with-tolerance, because that is
+the least-magical interpretation. To get statistical behavior, the
+user either (a) models noise explicitly in `.myco`, or (b) flips
+inference mode. No silent likelihood coercion. This keeps the
+semantics honest: if the user has not said "this is noisy", Myco
+does not assume it is.
+
+### Why no custom Python handler for strategy 3
+
+Four reasons, unchanged from the earlier draft:
+
+1. Preserves the world-is-truth soul. Custom handlers smuggle
+   model content into the workflow.
+2. Bounded API surface makes reproducibility trivial. A workflow
+   is fully described by its (small) config.
+3. Forces better modeling. Every time a user reaches for a custom
+   handler, the correct fix is almost always a missing world
+   equation.
+4. Custom Python handlers are how scientific code ends up
+   non-reproducible across machines and environments.
+
+### Acid test for the fixed menu
+
+Any strategy that involves a *choice about data reliability* is
+domain knowledge and must be in `.myco`. Any strategy that
+involves purely *numerical disambiguation* can live in the
+workflow. `best_conditioned` and `lowest_residual` pass (about
+numerics); `weighted_average` fails (weights encode reliability).
+
+### Implications for the overdetermined handler API
+
+The earlier overdetermined-handler section still applies, with one
+scope tightening: `on_overdetermined` is specifically for case (3)
+above. Cases (1), (2), (4) are handled by other mechanisms
+(`.myco` world claims, inference mode, tolerance declarations).
+That sharpens what belongs in the `on_overdetermined` verb
+and prevents it from becoming the junk drawer for every form of
+data-world friction.
+
+## Streaming execution and the retraction-vs-eviction distinction
+
+Gemini's follow-up review raised a concern: "no retraction" plus
+Layer 3 adjacent keyed state implies a memory leak by design in
+long-running simulations (a million-tick run with frequent
+entity creation and destruction will explode the keyed-state
+layer). The right response dissolves the concern by separating
+two things that were previously conflated.
+
+### The distinction
+
+- **Retraction** applies to the *symbolic* layer: world
+  equalities, stated claims, conservation laws, type contracts.
+  These never get unsaid. The e-graph's monotone growth is the
+  append-only record of what the model claims is true.
+- **Eviction** applies to the *materialized* layer: cached values
+  at specific indices, specific entity instances, working-set
+  state. These are deterministic functions of the symbolic
+  structure plus inputs. Dropping a cached value at `t = 500` does
+  not retract anything; the same value can be re-materialized by
+  running the program again.
+
+"No retraction" was conflated with "no eviction" in earlier
+readings. Pulling them apart: append-only is a property of
+*claims*, not of *memory*. The memory-leak concern evaporates
+under the correct reading.
+
+### The execution model this implies
+
+Myco compiles to a *streaming executor with a bounded working
+set*, not an eagerly unrolled trace. This is closer in flavor to
+how a SQL query planner works (compact logical plan, streaming
+physical execution) or array-language fusion than to a traditional
+interpreter. The compiled plan is `O(program size)`; resident
+state is `O(minimum window required by active computation)`.
+
+Long-running simulations do not hold the whole trajectory in
+memory. They hold the symbolic program plus the sliding window
+required by active reads, accumulators, and outstanding queries.
+
+### What determines the window size
+
+- **Backward lookback**: `y[t - k]` forces `k` steps of retention
+- **Aggregators with incremental form**: `total = total + flux`
+  collapses to O(1) retention via the A/E rewrite groups
+- **Aggregators without incremental form** (e.g., quantile over
+  history): must retain the window or refuse streaming mode
+- **Active `inspect()` queries**: on-demand re-materialization of
+  specific indices from the symbolic structure
+- **Event lookbacks with bounded horizon**: known window
+- **Entity lifetimes**: once no live read references an entity's
+  past state, that state is evictable
+
+### Compiler passes this requires
+
+1. **Footprint analysis.** Given a model and a horizon, the
+   compiler computes an upper bound on the minimum working-set
+   size. Models whose footprint is unbounded under streaming mode
+   are either rejected or compiled to bounded-horizon mode
+   (explicitly, with the user notified).
+
+2. **Unrollable-vs-dynamic classification.** Static structure
+   (const generics, bounded loops, fixed meshes) unrolls eagerly
+   if small, stays compactly represented if large. Dynamic
+   structure (events, data-dependent flow) is materialized lazily
+   at the sliding window's leading edge.
+
+3. **Accumulator rewrite.** Detect global properties that admit
+   an incremental form and rewrite automatically. Already in
+   scope for the A/E rewrite groups; needs to become normative.
+
+### Symbolic verification without unrolling
+
+If the `.myco` says "conservation holds at every step" and the
+symbolic recurrence admits an induction proof via the e-graph's
+rewrite rules, `prove()` can succeed *without ever running the
+model*. Compile-time invariant checking becomes a first-class
+capability, not a runtime probe. This is the deeper version of
+the `prove()` story: the structure is often enough.
+
+Riley's intuition that you could verify a large .myco's
+legitimacy symbolically, before unrolling, lands here. It is the
+same machinery as partial evaluation, applied to claim-checking
+instead of residual extraction.
+
+### Index families and unroll strategy
+
+This is where the "time as sequence / index family" generalization
+earns its keep internally, even if the surface stays time-primary.
+Each family has a different unroll strategy:
+
+- **Spatial** (mesh): unroll once at compile time, fixed working
+  set
+- **Temporal**: streaming with sliding window
+- **Collection**: depends on iteration order (map vs scan vs
+  global reduction)
+- **Event**: on-demand with a default bound; refuse streaming if
+  the event rate is unbounded
+- **Iterative** (solver): inner-loop, transient working set that
+  does not escape the SCC
+
+The user-facing surface does not need to know this taxonomy; the
+compiler does. Codex's pushback against publicly renaming §9 stands:
+the unification is a compiler-internal concern.
+
+### Dynamism gates plannable horizon
+
+Pure static structure can be unrolled arbitrarily far ahead (or
+compacted symbolically). Stochastic events let the compiler bound
+the envelope (worst-case working set) but not the specific
+trajectory. Data-dependent control flow needs branch-by-branch
+worst-case analysis. True external-input dependence caps
+look-ahead at whatever the input buffer provides. The footprint
+analysis pass walks this hierarchy.
+
+### History-bound cases
+
+Some models genuinely need the whole trajectory: full-posterior
+MCMC over time, long-window autocorrelation, global optimization
+over time-indexed parameters. These compile to *bounded-horizon*
+mode rather than streaming, and pay the memory cost honestly. The
+compiler reports which mode it selected and why. No silent
+coercion.
+
+### Spec commitment needed
+
+Current §19 (extraction) and §16.2 (append-only state) are
+ambiguous about whether Myco commits to streaming execution. For
+the memory story to hold, the spec needs a normative statement
+along the lines of:
+
+> The compiled artifact is a streaming executor. Materialized
+> state is cached and evictable; only symbolic claims are
+> append-only. The compiler computes an upper bound on working-set
+> size at compile time, or compiles to bounded-horizon mode and
+> reports the choice to the user.
+
+That one commitment resolves Gemini's memory concern and
+simultaneously strengthens `prove()` into a compile-time
+invariant-checker.
+
+### Future optimization: speculative execution on idle cores
+
+Noted as future work, not first build. The streaming executor
+naturally exposes dynamism points (where the sliding window can
+speculate on branch outcomes). Because `.myco` computation is
+pure, speculative work is trivially rollback-able: discard the
+cached results, keep the committed ones. Variants:
+
+- **Two-sided speculation**: run both branches in parallel on
+  idle cores, keep the winner. Simple, potentially wasteful.
+- **Profile-guided speculation**: track historical branch
+  frequencies per site, speculate the more common one.
+- **Oracle-guided speculation**: small predictor (learned or
+  heuristic) picks the branch to speculate.
+
+GPU behavior is different. GPUs do not do branch prediction in
+the CPU sense. SIMT warps handle divergence by executing both
+sides serially with masking; this is closer to unconditional
+two-sided speculation at the hardware level, but its cost is
+wall-clock serialization rather than wasted cores. The right
+GPU-side optimization is *divergence reduction* through batching
+coherent work together (sort entities by likely branch, partition
+kernels by branch state). Speculation on idle cores and
+divergence reduction on GPU are complementary, not substitutes.
+
+### Retraction-vs-eviction one-liner for the spec
+
+The normative rule that needs to land in the spec:
+
+> Symbolic claims are append-only (no retraction). Materialized
+> state is a cache (freely evictable). Any apparent conflict
+> between these is a conflation.
