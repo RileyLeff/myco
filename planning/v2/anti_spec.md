@@ -38,7 +38,7 @@ gap-review stale list, subsequent design locks.
 |---|---|---|
 | `#[verified_externally]` | nothing | no proof-escape-hatch annotations |
 | `#[inverse]` | capability contract (`Invertible<_>`) on stdlib expression atom | unified contract machinery |
-| four-class invertibility metadata (`bijective` / `injective_restricted` / `lossy` / `opaque`) | capability contracts on fns | same |
+| four-class invertibility metadata (`bijective` / `injective_restricted` / `lossy` / `opaque`) | capability contracts on stdlib expression atoms | same |
 | all `#[...]` attribute annotations | nothing | `.myco` has no annotation surface |
 | user-declared fn invertibility / differentiability / domain | compiler derives relation properties from body composition + stdlib atom contracts | no user property-declaration surface; refactor the relation if compiler can't derive the needed property |
 

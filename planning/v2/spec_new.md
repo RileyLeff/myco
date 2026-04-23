@@ -1,11 +1,9 @@
 # Myco — Specification
 
-**Status.** SKELETON. This document is the structural outline of the
-consolidated Myco specification. Section contents are not yet written;
-only section headings and one-line overviews are in place. Populate
-incrementally; see `spec_dev_notes.md` for consolidation-time decisions
-and `v2.1_chunk_reports/` for the drafted material each section will
-draw on.
+**Status.** WORKING DRAFT. This document is the current consolidation
+target for the Myco specification. Some sections are still stubs or
+carry explicit open items, but normative prose in this file supersedes
+older planning drafts unless an open item says otherwise.
 
 **How to read this spec.** Myco is a domain-specific language for
 scientific modeling. A modeler writes two things: a `.myco` file that
@@ -119,7 +117,7 @@ names the tier so the user knows which file to inspect.
 class of workflow-tier error. When the compiled plan requires a
 backend capability (§31.1) the selected backend does not advertise,
 when a bound tensor's shape disagrees with the plan's expected
-shape, or when a workflow constant's unit disagrees with its
+shape, or when a workflow source's unit disagrees with its
 binding site, the diagnostic surfaces at plan-binding time.
 Capability errors carry the capability name, the offending SCC,
 and the available fallback modes.
@@ -243,7 +241,7 @@ imports.
 (`Scalar<U, T = Float64>`, `Tensor<U, shape>`, with `Vector` and
 `Matrix` as shape-refined aliases), named types, universals, val and
 type generics with the named-argument rule, and the structural
-refinement lattice on matrices (Symmetric, PosDef, Diagonal,
+refinement lattice on matrices (Symmetric, PositiveDefinite, Diagonal,
 Triangular, Orthogonal).
 
 #### 3.1 Universal Declarations
@@ -425,10 +423,10 @@ The `convert` facility (§5.1) extends to tensors for a bounded set
 of operations: **reshape** between compatible shape specifications
 (total element count preserved), **sparse ↔ dense** representation
 changes on the same structural type, and **structural-subtype
-widening** (e.g. `Matrix<_, Diagonal>` → `Matrix<_, Symmetric>`
+widening** (e.g. `Diagonal<U, n>` → `Symmetric<U, n>`
 throws away structural information without changing values). Out of
-scope for `convert`: **numeric precision changes** (float32 ↔ float64
-are a backend concern, §31), **storage-order / layout changes**
+scope for `convert`: **numeric precision downcasts** (authorized via
+`approximate`, §26.2), **storage-order / layout changes**
 (row-major ↔ column-major, also backend), and **device residency**
 (host ↔ GPU, backend). The split keeps `convert` about meaning-
 preserving lossless transforms at the type layer and leaves
@@ -436,7 +434,7 @@ representation-level tuning to the backend trait.
 
 #### 3.9 Matrix Structural Subtype Lattice
 
-**Summary.** Matrix structural properties (Symmetric, PosDef,
+**Summary.** Matrix structural properties (Symmetric, PositiveDefinite,
 Diagonal, Triangular, Orthogonal, Sparse, Banded) are type-level
 predicates forming a lattice under meet. They drive stdlib primitive
 dispatch: `solve` picks triangular substitution, Cholesky, or general
@@ -469,14 +467,15 @@ pairs (e.g. `UpperTriangular ∧ LowerTriangular` outside of `Diagonal`)
 produce `Diagonal` by compile-time reduction or a compile error if
 the context requires a strict non-diagonal type.
 
-Dispatch rule: `solve(A, b)` with `A: Matrix<_, LowerTriangular>`
+Dispatch rule: `solve(A, b)` with `A: LowerTriangular<U, n>`
 calls triangular substitution directly; `A: PositiveDefinite` routes
 through Cholesky; `A: Orthogonal` uses `Aᵀ · b`. The compiler walks
 the lattice to pick the tightest applicable specialization.
 
 Deferred to chunk 05:
 
-- **Heterogeneous-unit matrices** (B5). `Matrix<_, _>` with entries
+- **Heterogeneous-unit matrices** (B5). `Matrix<U, m, n>` currently
+  assumes one unit parameter; matrices with entries
   carrying different units per row or column — e.g. a Jacobian with
   mixed dimensions — is the chunk-05 gating question. The lattice
   above assumes scalar-valued entries in a single unit system; how
@@ -887,8 +886,8 @@ the principal users.
 
 **Summary.** Capability contracts carry compiler-actionable facts.
 The distribution-side chain drives Tier A closed-form PPL routing;
-the function-side chain (`Invertible<_>`, `Differentiable`,
-`Monotone`) drives function-inverse rewrites and the `deriv` /
+the stdlib-atom chain (`Invertible<_>`, `Differentiable`,
+`Monotone`) drives inverse rewrites and the `deriv` /
 `condition_of` intrinsics. Satisfaction is composable through
 supertrait chains.
 
@@ -896,8 +895,8 @@ Capability contracts carry compiler-actionable facts. Distribution-
 side chain (root `Distribution<U>`, supertraits `AffineSelfClosed`,
 `SumSelfClosed`, `ProductSelfClosed`, `ScaleSelfClosed`,
 `SmoothTransformable`, `ReparameterizedSampleable`) drives Tier A
-closed-form routing (§13). Function-side (`Invertible<_>`,
-`Differentiable`, `Monotone`) drives function-inverse rewrites
+closed-form routing (§13). Stdlib-atom side (`Invertible<_>`,
+`Differentiable`, `Monotone`) drives inverse rewrites
 (§17 merge source 5) and `deriv` / `condition_of` intrinsics (§14).
 Satisfaction is composable: a contract `C : A + B` lifts A's and B's
 facts through the supertrait chain without restatement.
@@ -2090,7 +2089,7 @@ runtime size N, no N-max). Event-time dynamism mutates at runtime
 Two distinct sources of collection-size change:
 
 - **Bind-time dynamism.** Collection membership is fixed when
-  `bind_topology` and the `assume_*` verbs run. After workflow
+  `bind_topology` and source bindings run. After workflow
   composition the collection size is static. Lowers with a true
   runtime size N; no N-max slot machinery.
 - **Event-time dynamism.** Events (§10) add or retire members at
@@ -2443,9 +2442,9 @@ of §16: layer 1 is monotonic equational merges only; layer 2
 carries distributional and tolerance metadata; observations
 live there.
 
-Terminology. §17 source #2 ("workflow constant injection")
+Terminology. §17 source #2 ("workflow value injection")
 and the probabilistic `observe` verb share the colloquial name
-"observation" but are distinct mechanisms: constant injection
+"observation" but are distinct mechanisms: value injection
 collapses an e-class with a literal (layer 1); `observe`
 attaches a distributional fact (layer 2). The distinction is
 by layer, not by spelling.
@@ -3097,16 +3096,16 @@ and tensor types).
 ### 17. Equality-Introducing Machinery
 
 **Summary.** Eight enumerated merge sources for the equational core:
-explicit relation equations, workflow constant injection, algebraic
-rewrites, `identify`, stdlib-declared function inverses, named-type
+explicit relation equations, workflow value injection, algebraic
+rewrites, `identify`, stdlib-declared inverses, named-type
 conversion, closure-policy co-membership, unit-preserving rewrites.
 Unified rewrite-predicate language, A-Z rule groupings
 (Appendix C), `identify` vs relation `=` distinction.
 
 Eight enumerated merge sources: explicit relation equations,
-workflow constant injection, algebraic rewrites, `identify`,
-stdlib-declared function inverses (via capability contracts on
-fns; see §6), named-type conversion, closure-policy co-membership,
+workflow value injection, algebraic rewrites, `identify`,
+stdlib-declared inverses (via capability contracts on stdlib atoms;
+see §6), named-type conversion, closure-policy co-membership,
 unit-preserving rewrites. The 2x3 faithfulness x orientation matrix
 covering `convert`, `identify`, `approximate`, relation `=`.
 Unified rewrite-predicate language.
@@ -3123,8 +3122,8 @@ name; the distinction is by layer (§16.1), not by spelling.
 
 **Summary.** Exactly eight authorization sources write — directly
 or via authorized rewrite classes — to the equational core:
-explicit relation equations, workflow constant injection, algebraic
-rewrites, `identify`, stdlib-declared function inverses, named-type
+explicit relation equations, workflow value injection, algebraic
+rewrites, `identify`, stdlib-declared inverses, named-type
 conversion, closure-policy co-membership, unit-preserving rewrites.
 Some authorize direct merges; others authorize a rewrite class
 whose merges fire when a predicate matches. Source tags travel
@@ -3139,13 +3138,13 @@ Sources split into two mechanisms:
 
 - **Direct writers.** The declaration site produces a layer-1
   merge immediately when parsed. Sources 1, 2, 3, 7, 8 (relation
-  equations, workflow constant injection, algebraic rewrites,
+  equations, workflow value injection, algebraic rewrites,
   closure-policy co-membership, unit-preserving rewrites).
 - **Rewrite-class authorizers.** The declaration installs a
   rewrite class (or a Layer-3 site record, §16.1) whose merges
   fire later when a structural or site predicate matches.
   Sources 4, 5, 6 (`identify` via Layer-3 site records
-  consumed by X2; stdlib-declared function inverses via
+  consumed by X2; stdlib-declared inverses via
   capability contracts fed into E-group rewrites; named-type
   conversion via bidirectional rewrite installation).
 
@@ -3176,7 +3175,7 @@ appear). Downstream tooling reads source tags uniformly.
    consumes the record to emit layer-1 merges for fields over
    the geometry, tagged with the site's identity. Distinct from
    relation `=`, which asserts an equation that holds.
-5. **Stdlib-declared function inverses.** Capability contracts
+5. **Stdlib-declared inverses.** Capability contracts
    on stdlib atoms (`Invertible<inv=log>` on `exp`) fire
    rewrites like `log(exp(x)) = x` on qualifying input
    domains. The user has no annotation path; derivation is
@@ -3332,7 +3331,7 @@ reference rules by group letter in their `under:` field.
 
 **Summary.** Rewrites partition into default-on (fire when predicate
 holds: relation-`=`, algebraic, stdlib inverses, conversion, unit,
-`identify`, constant injection) and default-off (fire only inside an
+`identify`, workflow value injection) and default-off (fire only inside an
 authorizing `approximate` block). Gives `.myco` its conservative
 default: a model compiles with zero authorized approximations if the
 modeler wrote none.
@@ -3342,7 +3341,7 @@ buckets:
 
 - **Default-on.** Fire unconditionally whenever their
   predicate (§17.4) holds. Includes: relation-`=` merges,
-  algebraic rewrites (A-group), stdlib function-inverse
+  algebraic rewrites (A-group), stdlib inverse
   rewrites (E-group), named-type conversion, unit-preserving
   rewrites, `identify`, workflow value injections. All
   lossless or modeler-asserted.
@@ -4180,10 +4179,11 @@ What ships with Myco.
 ### 26. Numeric Types
 
 **Summary.** `Scalar<U, T = Float64>` takes an explicit numeric
-representation parameter with `Float64` as default. Seven reps ship:
-`Bool`, `Integer`, `Rational`, `Float32`, `Float64`, `BigFloat`,
-`Complex`. `T` must satisfy a base `Numeric` contract hierarchy;
-mixed-T arithmetic is forbidden without explicit conversion.
+representation parameter with `Float64` as default. Core reps include
+`Bool`, fixed-width `Int*` / `UInt*`, `Rational`, `Float32`,
+`Float64`, `BigFloat`, and `Complex`. `T` must satisfy a base
+`Numeric` contract hierarchy; mixed-T arithmetic is forbidden without
+explicit conversion.
 
 `Scalar<U, T = Float64>` with explicit `T` parameter and `Float64`
 default. `Rational` for exact constant folding (with termination
@@ -4191,11 +4191,11 @@ caveats). `BigFloat`. Default-compatibility constraints.
 
 #### 26.1 Numeric Representation Hierarchy
 
-**Summary.** The stdlib provides seven representations for the `T`
-parameter: `Bool`, `Integer`, `Rational`, `Float32`, `Float64`,
-`BigFloat`, and `Complex`. `Float64` is the per-Scalar default, not
-module-wide. Forward-mode AD is not exposed as a user-facing
-representation since backends own AD.
+**Summary.** The stdlib provides booleans, fixed-width signed and
+unsigned integers, exact rationals, floating types, arbitrary
+precision extension types, and complex numbers for the `T` parameter.
+`Float64` is the per-Scalar default, not module-wide. Forward-mode AD
+is not exposed as a user-facing representation.
 
 `Scalar<U, T>` takes an explicit numeric representation parameter
 T. The stdlib provides:
@@ -4203,7 +4203,9 @@ T. The stdlib provides:
 | T | Role | Notes |
 |---|---|---|
 | `Bool` | two-valued logic | consumed by boolean relations, predicates, alive masks |
-| `Integer` | arbitrary-precision integers | exact; GPU-incompatible for arbitrary precision |
+| `Int8`, `Int16`, `Int32`, `Int64` | fixed-width signed integers | backend-representable |
+| `UInt8`, `UInt16`, `UInt32`, `UInt64` | fixed-width unsigned integers | backend-representable |
+| `Integer` / `BigInt` | arbitrary-precision integers | extension-style exact integer; GPU-incompatible |
 | `Rational` | exact rationals | §26.3 termination caveat; GPU-incompatible |
 | `Float32` | IEEE single | backend-dependent availability |
 | `Float64` | IEEE double | default; universal backend support |
@@ -4223,8 +4225,9 @@ T within one expression is forbidden without explicit
 **Summary.** `T` must satisfy a base `Numeric` hierarchy: ring
 closure, total ordering (where applicable; Complex is exempt), zero
 and one identity elements, and backend representability. Mixed-T
-arithmetic is a compile error and requires explicit `convert`;
-`Float32 -> Float64` is lossless, the reverse is lossy-tolerance.
+arithmetic is a compile error and requires explicit `convert`.
+`Float32 -> Float64` is lossless; `Float64 -> Float32` requires an
+`approximate` block with a precision-downcast tolerance class.
 
 The `T` parameter in `Scalar<U, T>` must satisfy a base
 `Numeric` contract hierarchy:
@@ -4246,8 +4249,10 @@ Mixed-T arithmetic is a compile error; the user must write
 `convert T1 -> T2` explicitly. This makes numerical behavior
 predictable: `Scalar<m, Float32>` and `Scalar<m, Float64>`
 do not silently promote. Conversion `Float32 -> Float64` is
-lossless; `Float64 -> Float32` emits the standard lossy-
-tolerance envelope (§15.3).
+lossless. Precision downcast (`Float64 -> Float32`, or the analogous
+tensor element-type downcast) is lossy-tolerance and must appear
+inside an authorizing `approximate` block (§15) rather than bare
+`convert`.
 
 #### 26.3 Rational Termination Caveat
 
@@ -4282,7 +4287,7 @@ runtime representation for production models.
 
 ### 27. Distribution Families (Z-group)
 
-**Summary.** Tier 1 ships 19 univariate continuous, 5 discrete, and 3
+**Summary.** Tier 1 ships 19 univariate continuous, 6 discrete, and 3
 multivariate families, plus the `Truncated<D>` and `Mixture` meta-
 families. Conjugate-posterior rewrites are enumerated as a closed
 catalog. Tier B approximate rewrites (Delta, Fenton-Wilkinson, CLT,
@@ -4292,8 +4297,8 @@ scope the family catalog; Tier A, B, C are the orthogonal dispatch axis.
 Tier 1 univariate continuous families (19): Normal, LogNormal, Uniform,
 Beta, Gamma, Exponential, ChiSquared, Cauchy, Student-t, Laplace,
 HalfNormal, HalfCauchy, InverseGamma, Lévy, Weibull, Pareto, Fréchet,
-Gumbel, GEV. Tier 1 discrete: Bernoulli, Categorical, Poisson,
-NegBinomial, Hypergeometric. Tier 1 multivariate (gated on B5):
+Gumbel, GEV. Tier 1 discrete: Bernoulli, Binomial, Categorical,
+Poisson, NegBinomial, Hypergeometric. Tier 1 multivariate (gated on B5):
 MultivariateNormal, Dirichlet, Multinomial. Meta-families: `Truncated<D>`,
 `Mixture<D₁,…,D_N | weights>`. Conjugate-posterior rewrites.
 Tier B approximate rewrites: Delta method, Fenton-Wilkinson, CLT,
@@ -4311,13 +4316,13 @@ Required methods:
   Required for Tier C opaque handoff and for Tier B rewrites
   that reduce to sampling at specific call sites. Backend-
   owned; the `.myco` signature is the contract surface only.
-- `log_pdf(params, x: Scalar<U>) -> Scalar<unitless>` — log
+- `log_pdf(params, x: Scalar<U>) -> Scalar<dimensionless>` — log
   density at `x`. Required for likelihood contributions (§13.8
   `observe`), training emission (§25), and Tier A closed-form
   posterior construction. Stdlib atoms for Tier 1 families
   supply closed forms; user-defined distributions compose
   `log_pdf` from stdlib atoms.
-- `pdf(params, x: Scalar<U>) -> Scalar<unitless>` — density at
+- `pdf(params, x: Scalar<U>) -> Scalar<dimensionless>` — density at
   `x`, provided as a convenience. May be derived from `log_pdf`
   (default) or given directly when closed-form density avoids
   a log/exp round-trip.
@@ -4387,11 +4392,12 @@ Tier 1 families ship as capability-tagged stdlib declarations
 | `Gumbel` | ℝ | `μ`, `β` | D, R (via `-log(-log U)`) |
 | `GEV` | ℝ (domain-dependent) | `μ`, `σ`, `ξ` | D, block-maxima limit |
 
-**Discrete (5).**
+**Discrete (6).**
 
 | Family | Support | Parameters | Capabilities |
 |---|---|---|---|
 | `Bernoulli` | `{0, 1}` | `p` | D, Conj(Beta) |
+| `Binomial` | `{0 … n}` | `n`, `p` | D, S (shared p), Conj(Beta) |
 | `Categorical` | `{0 … K-1}` | `p[K]` | D |
 | `Poisson` | ℕ | `λ` | D, Conj(Gamma) |
 | `NegBinomial` | ℕ | `r`, `p` | D |
@@ -4453,6 +4459,7 @@ Nesting depth is bounded only by backend handoff costs.
 
 **Summary.** The stdlib enumerates a closed catalog of conjugate-
 posterior rewrites covering Beta-Bernoulli/Binomial, Gamma-Poisson,
+Gamma-Gamma,
 Normal-Normal (known variance), InverseGamma-Normal (known mean),
 and Dirichlet-Multinomial. The rewrites fire automatically when the
 compiler detects a matching `~` structure, no user directive
@@ -4467,15 +4474,17 @@ rewrites. Each rewrite fires from capability-contract
 | `Beta(α, β)` | `Bernoulli(p)` with n draws, k successes | `Beta(α + k, β + n − k)` |
 | `Beta(α, β)` | `Binomial(n, p)` single draw k | `Beta(α + k, β + n − k)` |
 | `Gamma(α, β)` | `Poisson(λ)` with n draws summing s | `Gamma(α + s, β + n)` |
+| `Gamma(α, β)` prior on rate λ | `Gamma(k, λ)` observations with known shape k and n draws summing s | `Gamma(α + n*k, β + s)` |
 | `Normal(μ₀, σ₀²)` | `Normal(μ, σ²)` known σ, n draws mean x̄ | `Normal((σ² μ₀ + n σ₀² x̄)/(σ² + n σ₀²), (σ₀² σ²)/(σ² + n σ₀²))` |
 | `InverseGamma(α, β)` | `Normal(μ, σ²)` known μ, n draws, sum-sq s | `InverseGamma(α + n/2, β + s/2)` |
 | `Dirichlet(α)` | `Multinomial(n, p)` counts c | `Dirichlet(α + c)` |
 
-The catalog is closed for this release; additional conjugate pairs
-that modelers need are either derivable via `Truncated` /
-`Mixture` composition or route to Tier 2 (chunk 08). The
-rewrites fire automatically when the compiler detects a
-matching `~` structure; no user directive is required.
+The catalog above is closed for this release. Normal-InverseGamma
+joint-prior machinery is explicitly gated on the rewrite-pattern
+language for joint priors (§35). Additional conjugate pairs that
+modelers need route to Tier C or later catalog expansion. The
+rewrites fire automatically when the compiler detects a matching `~`
+structure; no user directive is required.
 
 #### 27.4 Extended Capability Table
 
@@ -4507,7 +4516,7 @@ to Tier B or Tier C for the missing capability.
 
 #### 27.5 Tier Ordering
 
-**Summary.** Tier 1 ships: 27 families plus two meta-families with
+**Summary.** Tier 1 ships: 28 families plus two meta-families with
 capability contracts and conjugate-rewrite wiring. Tier 2 is partial:
 the factorized or closed-form-reparameterizable subset ships in Tier
 1; the genuinely joint subset (B2 coupling syntax, copulas, Wishart
@@ -4518,7 +4527,7 @@ is orthogonal.
 Tiers are the PPL scoping axis distinct from the distribution-
 family catalog:
 
-- **Tier 1.** Ships in this release. The 27 families in §27.1
+- **Tier 1.** Ships in this release. The 28 families in §27.1
   plus the two meta-families in §27.2, with capability contracts
   and closed-form rewrites (§27.3) wired in. Includes three
   multivariate members (MVN, Dirichlet, Multinomial), with
@@ -4696,9 +4705,11 @@ under the domain's own project maintenance.
 
 ### 30. Matrix and Tensor Primitives (STUB)
 
-**Summary.** Section 30 commits only the stdlib function surface for
+**Summary.** Section 30 commits only the stdlib primitive surface for
 linear algebra (cholesky, lu, qr, svd, eigen, solve, inverse, det);
-the underlying type-layer design lives in §3.9 pending chunk 05. Each
+the base matrix constructor is `Matrix<U, m, n>` and structural
+properties such as `PositiveDefinite` are refinements or aliases, not
+positional constructor arguments. Each
 primitive wraps backend kernels and is opaque at the e-graph layer,
 with invariants declared by capability contract.
 
@@ -4713,24 +4724,31 @@ factorization used in MVN reparameterization (§13.6, Z10) and the
 kernel Gram-matrix machinery (§28). Committed primitives:
 
 - `cholesky(A)`. Lower-triangular factor `L` such that `L · Lᵀ = A`
-  for `A: Matrix<_, PositiveDefinite>`. Returns `Matrix<_, LowerTriangular>`.
+  for `A: PositiveDefinite<U, n>` (alias/refinement over
+  `Matrix<U, n, n>`). Returns `LowerTriangular<U, n>`.
 - `lu(A)`. `(L, U, P)` with `P · A = L · U`, for square invertible `A`.
 - `qr(A)`. `(Q, R)` with `A = Q · R`, `Q` orthogonal, `R` upper
   triangular. Works on rectangular `A` (`m × n`, `m ≥ n`).
 - `svd(A)`. `(U, Σ, Vᵀ)` with `A = U · Σ · Vᵀ`, `Σ` diagonal with
   nonnegative entries. Works on general rectangular `A`.
-- `eigen(A)`. Eigenvalue / eigenvector pair for square `A`. Real-
-  symmetric specialization returns real eigenvalues and orthonormal
-  eigenvectors; general case defers to complex eigenvalues pending
-  §26.1 `Complex` lock.
+- `eigen(A)`. Eigenvalue / eigenvector pair for
+  `Symmetric<U, n>`. General square-matrix eigen decomposition
+  defers to the `Complex` contract work (§26.1, §35).
 - `solve(A, b)`. Linear solve for `A · x = b`. Dispatches on the
   structural subtype of `A` (triangular solve, Cholesky back-
   substitution, general LU) via the §3.9 lattice.
 - `inverse(A)`. Direct inversion for documentation and small cases;
   the compiler rewrites `inverse(A) · b` to `solve(A, b)` by default
   to avoid explicit inversion in numeric code.
-- `det(A)`. Determinant. On `Matrix<_, Triangular>` this reduces to
+- `det(A)`. Determinant. On `Triangular<U, n>` this reduces to
   diagonal product; on general `A` it routes through LU.
+
+`Matrix<U, m, n>` is the canonical base constructor. Full structural
+property names such as `PositiveDefinite`, `Symmetric`,
+`LowerTriangular`, and `Orthogonal` are the normative names in prose;
+short aliases, if provided by the stdlib, desugar to those full
+refinement names. Forms such as `Matrix<_, PositiveDefinite>` are not
+canonical.
 
 Each primitive carries a capability contract that records what its
 output satisfies structurally (see §3.9). The primitives are opaque
@@ -5300,23 +5318,28 @@ The `.myco` surface reserves the following keywords. Reserved keywords
 cannot be used as user identifiers and will emit a `hypha` parse error
 if encountered in identifier position.
 
-**Declaration keywords.** `type`, `node`, `universal`, `fn`,
-`contract`, `relation`, `constraint`, `event`, `geometry`, `locus`,
-`chart`, `topology`, `metric`, `domain`, `convert`, `use`.
+**Declaration keywords.** `type`, `node`, `universal`, `base_unit`,
+`unit`, `contract`, `relation`, `constraint`, `event`, `geometry`,
+`locus`, `chart`, `topology`, `metric`, `domain`, `convert`,
+`identify`, `enum`, `use`.
 
 **Type-former keywords.** `Scalar`, `Tensor`, `Vector`, `Matrix`,
-`Collection`, `impl`, `some`, `where`.
+`Collection`, `impl`, `some`, `val`, `where`.
 
-**Body-form keywords.** `let`, `if`, `else`, `for`, `in`, `trace`,
-`identify`, `requires`, `replaces`, `conserved`.
+**Body-form keywords.** `let`, `if`, `else`, `for`, `in`, `is`,
+`trace`, `requires`, `replaces`, `conserved`, `approximate`,
+`initial`, `temporal`, `when`, `as`, `on`, `field`.
 
 **Stochastic operator.** `~` (distribution-binding operator;
-stochastic relation). Unit generics use `<Ito>`, `<Stratonovich>`
-as contract-parameter keywords on `~`.
+stochastic relation). SDE families carry integration-convention type
+parameters such as `BrownianMotion<Ito>` and
+`BrownianMotion<Stratonovich>`; the convention is not a parameter on
+`~` itself.
 
 **Reserved but not yet assigned semantics.** `self` (reserved for
 refinement-predicate body use and future module-instance use).
-`match` (reserved for future pattern-matching surface).
+`match` is committed as exhaustive sum-type dispatch for `enum`
+values; exact surface syntax remains tied to the sum-type work.
 
 **Structural punctuation.** `::` (path separator), `->` / `<->`
 (convert-direction arrows), `<=`, `>=`, `<`, `>`, `==`, `!=`,
@@ -5327,8 +5350,13 @@ pattern or pipe use).
 **Stdlib-reserved identifiers.** The stdlib atom namespace reserves
 `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sqrt`,
 `abs`, `sign`, `floor`, `ceil`, `round`, `min`, `max`, `sum`,
-`prod`, `mean`, `std`, `var`, `solve`, `invert`, `deriv`,
-`integrate`, `condition_of`, `value_in`, plus the distribution-
+`prod`, `mean`, `std`, `var`, `argmin`, `argmax`, `solve`,
+`inverse`, `det`, `trace`, `condest`, `deriv`, `integrate`,
+`condition_of`, `loss_of`, `cost_of`, `value_in`, `grad`, `diverg`,
+`laplacian`, `curl`, `normal_grad`, `limit_from`, `smooth_max`,
+`smooth_abs`, `smooth_step`, `soft_select`, `hard_select`,
+`weighted_average`, `condition_weighted`, `soft_clip`, `hard_clip`,
+`sigmoid`, plus the distribution-
 family names enumerated in §27. The stdlib universal namespace
 reserves `pi`, `e`, and the parametric family `integer<N: val>`
 (target of the integer-literal desugar in §4). User-declared
@@ -5347,10 +5375,11 @@ to a grammar (production per construct across §2 through §14).
 
 Open. A normative EBNF summary of the `.myco` surface will appear
 here once the surface is stable enough to commit to a grammar.
-The concrete form is a production per construct in §2-§14 (types,
-values, units, functions, contracts, relations, constraints, events,
-geometry, stdlib calls, workflow-boundary syntax). Placeholder for
-a later pass.
+The concrete form is a production per source-language construct
+(types, values, units, parameterized relations, contracts,
+constraints, events, geometry, stochastic forms, and stdlib expression
+atoms), plus the workflow path/surface grammar from §23-§24 where it
+touches source-visible names. Placeholder for a later pass.
 
 ### Appendix C — Rewrite Catalog (A–Z)
 
@@ -5439,7 +5468,7 @@ level, name-preserving arithmetic. LOCKED.
 - D5. Named + anonymous-matching-dimension addition preserves the name
   (uni; name-join semilattice with anonymous as bottom)
 
-**E. Function-inverse round-trip elimination.** Requires declared or
+**E. Stdlib-inverse round-trip elimination.** Requires declared or
 registered inverse. LOCKED.
 
 - E1. For declared-bijective `f` with explicit inverse: `f⁻¹(f(x)) → x`,
@@ -5488,15 +5517,15 @@ reductions. LOCKED.
 
 **K. Kernel truncation.** The headline fuzzy rewrite from §28 kernels.
 
-- K1. `K(a,b) → 0` when `distance(a,b) > L_char` for compact-support
-  kernels (Gaussian beyond ±3σ, Matérn, spline compact support).
-  Turns O(N²) integrals into O(N·k). LOCKED.
+- K1. `K(a,b) → 0` when `distance(a,b) > radius` for kernels carrying
+  `CompactSupport(radius)`. Turns O(N²) integrals into O(N·k).
+  LOCKED.
 - K2. Separable decomposition: `K((x₁,y₁),(x₂,y₂)) → K_x(x₁,x₂) *
   K_y(y₁,y₂)` when declared or inferred. OPEN (§35, kernels chunk 03;
   bidi when exact, uni when approximate).
 - K3. Low-rank `K → U·Vᵀ` (truncated SVD, Nyström, random Fourier
-  features). OPEN (chunk 03; speculative — kernels report does not
-  enumerate, but §28 machinery must accommodate).
+  features). DEFERRED (post-current-scope; §28 names it as future
+  kernel machinery, not a v2.1 rewrite).
 
 **L. Smoothing rewrites.** User-written smooth forms only; `where` is
 never silently smoothed (§8.3 runtime `where` lock).
@@ -5509,7 +5538,7 @@ never silently smoothed (§8.3 runtime `where` lock).
   smoothing-surface finalization; §8.3, §8.9).
 
 **M. Series / linearization.** First-order expansions and asymptotic
-truncation. OPEN (§35 envelope machinery).
+truncation. LOCKED when authorized by an `approximate` block.
 
 - M1. First-order Taylor `f(x) → f(x₀) + f'(x₀)*(x-x₀)` around declared
   operating point
@@ -5536,7 +5565,7 @@ between e-graph rewrite and pre-e-graph codegen).
   stencil`, etc.
 
 **Q. Probabilistic truncation / marginalization.** Interacts with `~`
-(§13). OPEN (§35, stochastic rewriting semantics).
+(§13). LOCKED via CC4 / chunk 04.
 
 - Q1. Latent-discrete-with-finite-support → `logsumexp_i[...]` auto-
   marginalization
@@ -5636,8 +5665,8 @@ config.
 - Y4. `condition_weighted`: uses `condition_of(·)` intrinsic to weight
   candidates by well-conditionedness. LOCKED (un-deferred 2026-04-20,
   closes O4.5).
-- Y5. User-defined custom policy: any `.myco` function taking
-  candidates plus hyperparameters, returning a forward value.
+- Y5. User-defined custom policy: any parameterized relation taking
+  candidates plus hyperparameters and writing a forward output slot.
   Extensibility surface. LOCKED.
 - Y6. General `C(N,M)` enumeration for overconstrained blocks
   (`N > M+1`): planner enumerates all maximal square subsystems; policy
@@ -5688,24 +5717,24 @@ GEV). The enumeration is closed for v2.1.
 
 | faithfulness | bidi | uni | total |
 |---|---|---|---|
-| Strict | ~24 (A1-10, B1-2, C1-4, D1-3, E1-2, F1, G1-3, H1-2, I1) | ~5 (D4-5, X1, X2, J1 forbidden) | ~29 |
+| Strict | ~24 (A1-10, B1-2, C1-4, D1-3, E1-2, F1, G1-3, H1-2, I1) | ~4 (D4-5, X1, X2) | ~28 |
 | Distribution-family | ~3 (Z1, Z5, Z10) | ~1 (Z11) | ~4 |
 | Fuzzy-model | — | ~2 (L1-2) | 2 |
-| Fuzzy-tolerance | ~7 (K1-3, M1-2, N1, Q1-2) | ~3 (O1, P1, M2) | ~10 |
+| Fuzzy-tolerance | ~4 (K2, M1, Q1-2) | ~5 (K1, M2, N1, O1, P1) | ~9 |
 | One-way (lossless uni) | — | ~11 (R1-3, S1-2, T1, U1-3, V1, W1) | ~11 |
 | N-way extraction | — | ~6 (Y1-6) | 6 |
 | Forbidden | 1 (J1 temporal) | — | 1 |
 
-Grand total approximately 63 rules, depending on sub-rule counting
+Grand total approximately 62 rules, depending on sub-rule counting
 and on how many Z-slots (Z2-Z4, Z6-Z9) the v2.1 conjugate-posterior
 enumeration ultimately occupies.
 
-**Cross-cutting items (flags, not rewrites).** CC1-5 are absorbed
-into normative spec text: CC1 literal-numerics (§4, §4.1), CC2 sanity
-inverses (§5.2 round-trip), CC3 per-residual training emission (§20;
-open as O4.3), CC4 stochastic `~` rewrite blank (§13.8 resolved
-2026-04-20), CC5 site-gated strict rewrites (§17, Appendix C X):
-category and data path resolved 2026-04-22 — X1 pole L'Hopital
+**Cross-cutting items (flags, not rewrites).** CC1, CC2, CC4, and
+CC5 are absorbed into normative spec text: CC1 literal-numerics (§4,
+§4.1), CC2 sanity inverses (§5.2 round-trip), CC4 stochastic `~`
+rewrite blank (§13.8), and CC5 site-gated strict rewrites (§17,
+Appendix C X). CC3 per-residual training emission remains tracked as
+O4.3 (§35). CC5 category and data path are X1 pole L'Hopital
 (removable-singularity operator substitution) and X2 identify
 (quotient-induced value equality), site-indexed via Layer-3 adjacent
 keyed state with provenance tagging; cross-geometry pollution
