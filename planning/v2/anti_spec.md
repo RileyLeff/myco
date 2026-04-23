@@ -10,19 +10,19 @@ gap-review stale list, subsequent design locks.
 |---|---|---|
 | `dyn` | `impl Contract` (static monomorph) + `some` (runtime sizing) | clean split of compile-time vs runtime heterogeneity |
 | `param` | workflow-bound typed fields | CC1: all values enter from workflow |
-| `slot` / `learn_slot` / `bind_slot` / `bind_slot_metadata` | `bind_controller(path, fn, input_contract)` | controller is workflow-only, no `.myco` kind |
-| `[*]` wildcard slot inputs | controller data contract | explicit I/O spec |
-| transparent-heuristic ABI | unified `bind_controller` | one mechanism for pluggable behavior |
+| `slot` / `learn_slot` / `bind_slot` / `bind_slot_metadata` | `bind(path, Controller(...))` | controller is workflow-only, no `.myco` kind |
+| `[*]` wildcard slot inputs | `Controller(reads=[...], writes=[...], input_contract=..., output_contract=...)` | explicit I/O spec |
+| transparent-heuristic ABI | `Controller` source object | one workflow-side mechanism for pluggable behavior |
 | structural introspection (`<:` predicate, §5.5/§8.5) | nothing | closure policies see values + hyperparameters only |
 | `[t+1]` / `[t]` temporal subscripts | `d(x) = expr` (ODE) / `step(x) = expr` (discrete) | subscripts conflated kinds |
 | `rate()` | `d(x) = expr` | same |
 | `rule` keyword | `event` | disambiguate from rewrite rules |
 | module-scope `initial:` / `temporal:` per-type | in-type-body `initial:` / `temporal:` | module-scope kept only for truly cross-entity relations |
 | `const N: usize` | `N: val` | cleaner val-generic spelling |
-| `assume_topology` | `bind_topology` | 8-verb taxonomy |
+| `assume_topology` | `bind_topology` | topology materialization is its own workflow verb |
 | `has`-style field-presence filtering | `where x is T` narrowing | type-based narrowing |
 | `property` declarations (`property sigma is PositiveDefinite`) | refinement types + capability contracts (`Invertible<_>`, `Differentiable`, `Monotone`) + `constraint` blocks | redundant with existing machinery; spec_new.md §6 already forbids user property-declaration surface. mock_sperry.myco flagged for rewrite |
-| `DataContract` / "data contract" as distinct contract kind | plain contracts satisfied by a type's output fields | workflow-layer visibility (`bind_controller(path, fn, contract)`) enforces access; no failure case found where a plain contract + output-type annotation is insufficient |
+| `DataContract` / "data contract" as distinct contract kind | plain contracts satisfied by a type's output fields | `Controller(..., input_contract=..., output_contract=...)` enforces access; no failure case found where a plain contract + output-type annotation is insufficient |
 | `Line1D` / `Rectangle2D` / `Ball3D` dimensional-suffix geometry names | `Interval` / `Rectangle` / `Ball` (suffix-free authoritative names) | dimension is intrinsic to the mathematical object; suffix is noise. Stdlib catalog in §11.3 uses standard names |
 | `Polar` / `Spherical` as geometry types | coord parameterization on `as` clause (`Disk as (r, θ)`, `Ball as (r, θ, φ)`) | coordinate systems are annotations on solid regions, not separate geometry types |
 | `Sphere` as a solid 3D region | `Sphere` = S² (2-manifold, surface only); `Ball` = solid 3D region | mathematical convention; solid-vs-manifold distinction is load-bearing in §11.3 |
@@ -47,7 +47,7 @@ gap-review stale list, subsequent design locks.
 |---|---|---|
 | macros (declarative + derive) | deferred post-v2.1 | generics + contracts + refinements + `{conserved}` + `impl`/`some` cover the boilerplate use cases |
 | homotopy continuation as language feature | workflow Python recipe | belongs on workflow side |
-| stdlib physical constants (`R`, `Avogadro`, etc.) | workflow-injected via `assume_constant` | physical constants are values; values live workflow-side |
+| stdlib physical constants (`R`, `Avogadro`, etc.) | workflow-injected via `bind(path, Constant(...))` or stdlib default bindings | physical constants are values; values live workflow-side |
 | float and unit-qualified literal numerics in `.myco` value position | CC1: banned in value position; must enter through the workflow as universal bindings. Exception positions (unit defs, affine conversion bodies, structural positions) unchanged. Bare dimensionless integer literals in value position are legal via stdlib desugar to `integer<N: val>` universal (§4). | no two-trust-posture split; all `.myco` files obey one rule; integer-only carve-out keeps ergonomic arithmetic without introducing float-magic-number risk |
 | terrain-as-field on irregular domain boundaries (v2.1) | terrain-as-field on a flat domain (the supported v2.1 pattern) | irregular-boundary terrain treatment is an elegance and efficiency concern, not a correctness concern; the flat-domain plus terrain-field composition covers all practical v2.1 use cases; irregular boundaries deferred beyond v2.1 |
 | dimensionless-ratio literal carve-out (`0.5`, `2.0` in a dimensionless expression) | CC1 applies uniformly: bind the ratio as a universal | earlier drafts allowed "obvious" dimensionless ratios inline; CC1 is now position-based not dimensionality-based, so no carve-out exists |

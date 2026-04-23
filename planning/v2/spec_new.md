@@ -250,12 +250,12 @@ Triangular, Orthogonal).
 
 **Summary.** Module-scope typed names (`universal R: Scalar<J_mol_K>`)
 that every consumer in a run shares. Value comes from the workflow via
-`assume_constant` or `learn_constant`; CC1 forbids literals in `.myco`.
+`Constant` or `Trainable` sources; CC1 forbids literals in `.myco`.
 
 Module-scope typed names shared across all instances that reference
 them. `universal R: Scalar<J_mol_K>` declares a name with a type; the
-value is supplied by the workflow via `assume_constant` or
-`learn_constant`. CC1: no literal value in `.myco`. Semantics:
+value is supplied by the workflow via `bind(path, Constant(...))` or
+`bind(path, Trainable(...))`. CC1: no literal value in `.myco`. Semantics:
 universals are "same value for every consumer in this run": physical
 constants, cross-entity shared coefficients. Distinct from ordinary
 fields, which vary per instance.
@@ -362,7 +362,7 @@ for named types + refinements + conservation-group hierarchies.
 Scalar-value generics. A generic parameter may itself be a typed
 scalar (e.g., `LOW: Scalar<U>`) rather than a type. Scalar-value
 generics participate in refinements and shape-tuple positions and
-are bound at compile time through the same workflow verbs as
+are bound at compile time through the same workflow source model as
 ordinary universals (§4 exception classes cover their declaration
 sites).
 
@@ -543,7 +543,7 @@ parametric universal `integer<N: val>: Scalar<dimensionless>`. The
 default workflow binding for `integer<N>` is `N` itself, so a user
 who never rebinds gets the natural value. Sensitivity analysis or
 alternative bindings are available through the standard
-universal-binding verbs (`assume_constant`). See `spec_dev_notes.md`
+universal-binding mechanism (`bind(path, Constant(...))`). See `spec_dev_notes.md`
 for the derivation.
 
 Exception positions accept literals directly. Unit definitions,
@@ -565,7 +565,7 @@ universal catalog (new named constants, parametric families beyond
 source-language surface concern.
 
 Workflow bindings enter the e-graph as equalities. A workflow
-constant supplied at compile time merges an observation-tagged
+constant supplied at compile time merges a workflow-value-tagged
 equality between the universal's e-class and a literal term in the
 B2 rewrite layer (§17). Numeric values therefore participate in
 rewriting and extraction without appearing in `.myco` source.
@@ -575,11 +575,11 @@ merges `integer<N>` with the literal `N`, so ring/field axioms
 
 #### 4.1 CC1 Diagnostic Surface
 
-**Summary.** CC1 violations surface as `mycoc` compile errors with a
+**Summary.** CC1 violations surface as `hypha` compile errors with a
 consistent shape: identify the literal, name why it is rejected
 (float, unit-qualified, or out-of-position), and point to the
-resolution (declare a universal, use `assume_constant` /
-`assume_series`, or remove the unit annotation for an integer
+resolution (declare a universal, bind a `Constant` / `Series` source,
+or remove the unit annotation for an integer
 literal).
 
 Rejection reasons. A float literal (any numeric token containing a
@@ -593,9 +593,9 @@ unit suffix (`1 meter`) in value position is rejected on the same
 grounds as the float case; the integer carve-out applies only to
 dimensionless use.
 
-Resolutions. The diagnostic points to the canonical resolution verb:
-`assume_constant` or `assume_series` (§24) for a universal-lifted
-value, or an affine-convert-body rewrite for a unit-qualified
+Resolutions. The diagnostic points to the canonical resolution:
+`bind(path, Constant(...))` or `bind(path, Series(...))` (§24) for a
+universal-lifted value, or an affine-convert-body rewrite for a unit-qualified
 magnitude that belongs in a conversion. The wording keeps CC1
 enforcement actionable instead of cryptic.
 
@@ -732,25 +732,25 @@ converts between affine and absolute forms.
 
 #### 5.5 Workflow-Boundary Unit Parameter
 
-**Summary.** External data enters with a declared unit via
-`assume_series(..., unit='K')`. The workflow layer converts from the
-declared unit to base units at the binding boundary. See §24 for the
-full workflow-verb inventory.
+**Summary.** External data enters with a declared unit via a source
+object such as `Series(data, unit='K')`. The workflow layer converts
+from the declared unit to base units at the binding boundary. See §24
+for the workflow source model.
 
 External data sources are unit-naive (raw floats, CSV columns). The
-`assume_series` verb accepts a `unit` keyword argument naming the
-unit in which the data is expressed:
+`Series` source accepts a `unit` keyword argument naming the unit in
+which the data is expressed:
 
 ```python
-experiment.assume_series('atm.temperature', data_in_kelvin, unit='K')
-experiment.assume_series('atm.pressure', data_in_mpa, unit='MPa')
+experiment.bind('atm.temperature', Series(data_in_kelvin, unit='K'))
+experiment.bind('atm.pressure', Series(data_in_mpa, unit='MPa'))
 ```
 
 When the dimension of the declared unit matches the declared type of
 the bound field, the workflow layer converts to base units at the
 binding boundary. A dimension mismatch is an error at composition
-time. See §24 for the full workflow-verb inventory and gradient-flow
-implications of `assume_series`.
+time. See §24 for the source inventory and gradient-flow implications
+of source objects.
 
 ### 6. Functions
 
@@ -1210,8 +1210,8 @@ body is a compile error (see §7 for the cross-link statement).
 **Summary.** `dt` is not reserved, not a universal, not a special
 verb. For ODE form the compiler (or integrator) owns step size; for
 discrete form tick cadence is an ordinary workflow binding via
-`assume_constant("config.dt", ...)`. Time `t` is not a universal
-either.
+`bind("config.dt", Constant(...))` or `bind("config.dt", Series(...))`.
+Time `t` is not a universal either.
 
 `dt` is not a reserved name in `.myco`, not a universal, not a
 special verb. Two cases:
@@ -1220,8 +1220,8 @@ special verb. Two cases:
   model. The compiler (or the backend-selected integrator) owns
   integration step size.
 - **`step(x) = expr` (discrete form):** tick cadence is a normal
-  workflow binding via `assume_constant("config.dt", ...)` or
-  `assume_series(...)`. No `bind_dt` verb.
+  workflow binding via `bind("config.dt", Constant(...))` or
+  `bind("config.dt", Series(...))`. No `bind_dt` verb.
 
 Within a `step(·)` equation, unsubscripted RHS references read the
 prior-tick value and the LHS writes the current-tick value.
@@ -1276,8 +1276,8 @@ uniqueness is a pre-analysis hygiene check.
 **Summary.** Four mutually exclusive mechanisms initialize the value
 of a temporal quantity at the start of a simulation. The compiler
 emits a diagnostic for any fully-expanded temporal quantity path that
-lacks exactly one of the four. Workflow verbs for the three non-
-inline mechanisms are defined in §24.
+lacks exactly one of the four. The three non-inline mechanisms are
+workflow bindings against source objects (§24).
 
 Every fully-expanded temporal quantity path must have exactly one
 initialization mechanism. The four options are:
@@ -1304,27 +1304,27 @@ initialization mechanism. The four options are:
   Here `moisture_field_capacity` is a universal or workflow-bound
   quantity.
 
-- **`assume_initial(path, value)`.** A workflow verb that injects a
-  fixed constant as the initial value. The path is the
-  fully-qualified obligation key. The value is workflow-supplied and
-  not written into `.myco` source.
+- **`bind(path.initial, Constant(value))`.** A workflow binding that
+  injects a fixed constant as the initial value. The path is the
+  fully-qualified obligation key plus the `initial` facet. The value
+  is workflow-supplied and not written into `.myco` source.
 
-- **`learn_initial(path, prior)`.** A workflow verb that declares the
-  initial value as a learnable parameter, initialized from the given
-  prior and trained via the standard gradient pipeline.
+- **`bind(path.initial, Trainable(prior, init=...))`.** A workflow
+  binding that declares the initial value as a trainable source,
+  initialized from the given prior or initial guess and trained via
+  the standard gradient pipeline.
 
-- **`learn_trajectory(path, ...)`.** A workflow verb that declares
-  the full time trajectory as a learned function, not just the t=0
-  slice. This subsumes initialization: the trajectory model is
-  responsible for predicting the state at every timestep.
+- **`bind(path, Trainable(trajectory=...))`.** A workflow binding
+  that declares the full time trajectory as a learned source, not
+  just the t=0 slice. This subsumes initialization: the trajectory
+  source is responsible for predicting the state at every timestep.
 
 The four mechanisms are mutually exclusive per path. If a path
 receives more than one, the compiler emits a diagnostic naming the
 conflicting declarations. If a fully-expanded path receives none, the
 compiler emits a missing-initialization diagnostic naming the path
-and its declaration site. Detailed verb semantics for
-`assume_initial`, `learn_initial`, and `learn_trajectory` are in
-§24.
+and its declaration site. Detailed source semantics for `Constant`
+and `Trainable` bindings are in §24.
 
 #### 9.4 Locus-Scoped Temporal Blocks
 
@@ -1420,7 +1420,7 @@ Three stdlib policies ship:
 
 Users may supply custom Python policies. The Python API signature
 for scheduling policies is a workflow-layer concern and lives in
-§24 (workflow verbs); §10 commits only to the contract that such
+§24 (workflow source model); §10 commits only to the contract that such
 a policy exists and the three stdlib policies above. Keeps the
 `.myco`-side story focused on event semantics rather than Python
 surface.
@@ -2200,9 +2200,9 @@ structure.
   scope, `initial:`, or any `~` whose LHS is neither data-bound
   nor in temporal/event scope). Reduces with observation via
   Bayesian update; participates in training. Workflow-side
-  prior binding for epistemic `~` uses `assume_prior` (§24.4),
-  which attaches a distributional fact to the e-class at
-  training time.
+  prior binding for epistemic `~` uses `bind(path, Prior(D))`
+  (§24), which attaches a distributional fact to the e-class at
+  training or inference time.
 
 The classification is compiler-derived, not user-annotated.
 The user writes `~` uniformly; the compiler inspects graph
@@ -2276,8 +2276,8 @@ marginalization without user directive. Criteria:
 The marginalized form lives as an envelope fact on the
 resulting parent distribution. Failed marginalization falls
 through to Tier B/C dispatch (§13.2). Users who want to forbid
-a particular marginalization attach an `observe`-style tether
-that keeps the latent's value in scope. Markov-structured
+a particular marginalization attach workflow evidence that keeps
+the latent's value in scope. Markov-structured
 discrete latents (HMM-style temporal dependencies) are a
 compile error with diagnostic guidance; they require structural
 handling (forward-backward, particle filter) as specified in
@@ -2343,8 +2343,8 @@ for MVN machinery:
   and ε via the affine relationship; likelihood flows back to
   the training loss through matrix-calculus rewrites.
 
-L can be supplied directly by the workflow
-(`learn_constant` on L with positive-diagonal refinement) or
+L can be supplied directly by the workflow as a `Constant` or
+`Trainable` source on L with positive-diagonal refinement, or
 derived from a specified Σ at compile time. Non-MVN joints
 that structurally factor as affine-in-noise trigger the same
 pattern via `ReparameterizedSampleable` (§7.2).
@@ -2374,17 +2374,19 @@ positional index access.
 
 #### 13.8 Observation Injection and Likelihood Back-Propagation
 
-**Summary.** `observe(data, x ~ D)` attaches observed data as a
-layer-2 envelope fact on x's e-class (no equational merge with the
-data). Downstream samples condition on it; `D.log_pdf(data)` adds
-to the SCC's training loss. Distinct from `identify`: observation
-narrows the distribution, not the value.
+**Summary.** Workflow `observe(path, data)` attaches observed data
+as a layer-2 envelope fact on the observed e-class (no equational
+merge with the data). Downstream samples condition on it; the
+relevant `D.log_pdf(data)` term adds to the SCC's training loss.
+Distinct from `identify`: observation narrows the distribution, not
+the value.
 
-`observe(data, x ~ D)` injects observed data into a
-stochastic SCC. Mechanism:
+`observe` is a workflow verb, not `.myco` source syntax. When a
+workflow observes a path whose e-class carries `x ~ D`, the compiler
+uses the following mechanism:
 
 1. The observed value becomes an envelope fact on the e-class
-   of x (layer 2 of the three-layer split; §16). The e-class
+   of the observed quantity (layer 2 of the three-layer split; §16). The e-class
    itself is not merged with a constant.
 2. Downstream relations that read x's sampled value see the
    observation; downstream samples are conditioned on it.
@@ -2393,7 +2395,7 @@ stochastic SCC. Mechanism:
    the model graph reaches learnable upstream parameters.
 
 The critical distinction from `identify` (§17 merge source 4)
-is that `observe` does not make `x = data` equationally. It
+is that workflow observation does not make `x = data` equationally. It
 narrows the distribution, not the value. The same x elsewhere
 in the model stays stochastic — the observation is information,
 not an equation.
@@ -3088,14 +3090,13 @@ unit-preserving rewrites. The 2x3 faithfulness x orientation matrix
 covering `convert`, `identify`, `approximate`, relation `=`.
 Unified rewrite-predicate language.
 
-Terminology note. "Workflow constant injection" is the merge
-source by which a workflow-bound numeric constant (`provider.bind`,
-`assume_constant`, `bind_known_constants`) collapses the e-class
-of a model variable with the e-class of a literal value. This is
-distinct from the probabilistic `observe` verb (§13.8), which
-attaches distributional metadata as an envelope fact and is not
-a merge source. Two mechanisms, one unfortunately-similar name;
-the distinction is by layer (§16.1), not by spelling.
+Terminology note. "Workflow value injection" is the merge source by
+which a workflow-bound fixed source such as `bind(path, Constant(v))`
+collapses the e-class of a model variable with the e-class of a
+literal value. This is distinct from workflow `observe` (§13.8),
+which attaches distributional metadata as an envelope fact and is not
+a merge source. Two mechanisms, one unfortunately-similar colloquial
+name; the distinction is by layer (§16.1), not by spelling.
 
 #### 17.1 The Eight Authorization Sources — Prose
 
@@ -3135,13 +3136,12 @@ appear). Downstream tooling reads source tags uniformly.
    inline `x = expr` asserts an equation; the compiler merges
    the e-class of `x` with the e-class of `expr`. The canonical
    user-visible source.
-2. **Workflow constant injection.** `assume_constant`,
-   `bind_known_constants`, and related workflow verbs (§24)
-   collapse a model variable with a literal value supplied by
-   the workflow. Mechanism: at workflow composition the binding
-   becomes an equation `variable = <literal>` and fires as
-   source 1. Distinct from the probabilistic `observe` verb,
-   which writes layer 2 (§13.8, §13.9).
+2. **Workflow value injection.** `bind(path, Constant(v))` and
+   equivalent fixed-source bindings (§24) collapse a model variable
+   with a literal value supplied by the workflow. Mechanism: at
+   workflow composition the binding becomes an equation
+   `variable = <literal>` and fires as source 1. Distinct from
+   workflow `observe`, which writes layer 2 (§13.8, §13.9).
 3. **Algebraic rewrites.** Commutativity, associativity,
    distributivity, identity elements, and similar ring-algebra
    rewrites fire from stdlib declarations on arithmetic
@@ -3324,7 +3324,7 @@ buckets:
   predicate (§17.4) holds. Includes: relation-`=` merges,
   algebraic rewrites (A-group), stdlib function-inverse
   rewrites (E-group), named-type conversion, unit-preserving
-  rewrites, `identify`, `assume_constant` injections. All
+  rewrites, `identify`, workflow value injections. All
   lossless or modeler-asserted.
 - **Default-off.** Fire only inside an authorizing
   `approximate` block (§15.1). Includes: Tier B statistical
@@ -3711,9 +3711,9 @@ compilation choices. Inspection is a debugging affordance.
 
 **Summary.** Part III defines the boundary between `.myco` and the
 Python workflow that drives it: the compiler declares structure,
-Python supplies values, initial conditions, topology, and observations.
-Covers the eight workflow verbs, training emission, and how the
-boundary keeps the compiler projection-free.
+Python supplies sources, topology, evidence, run configuration, and
+execution orchestration. Covers the workflow source model, training
+emission, and how the boundary keeps the compiler projection-free.
 
 The boundary between `.myco` and Python.
 
@@ -3728,21 +3728,20 @@ cross-study callable reuse, and the two error tiers.
 `.myco` declares structure; Python supplies values and drives
 execution. The compiler does not auto-emit projection or solver
 selection; those are workflow choices (§0.1 projection-free
-compiler). All numeric values (physical constants, fit parameters,
-data series, initial conditions, topology, observations) cross
-this boundary.
+compiler). All materialized values (physical constants, fit
+parameters, data series, initial conditions, topology, observations)
+cross this boundary.
 
 **Dumb-data Python layer.** Python never sees `.myco` types as
 Python classes. The compiled artifact exposes a node catalog (path,
-declared type shape, binding role, units); Python verbs (`bind`,
-`observe`, `run`) operate over those path names, not over spore-
-specific symbols. Spore authors ship one artifact (`.myco` sources
-plus `myco.toml`); there is no Python mirror package. The Python
-library grows along one axis only — generic data primitives — not
-along the shape of any particular model. Locked in
-`v2.1_chunk_reports/09_workflow_data_layer.md`; exact syntax for
-node paths, the typing of the catalog, and the observe output-format
-menu remain open (§35).
+declared type shape, binding role, units, refinement bounds where
+declared). Workflow verbs operate over those path names, not over
+spore-specific Python symbols. Spore authors ship one artifact
+(`.myco` sources plus `myco.toml`); there is no Python mirror
+package. The Python library grows along one axis only — generic
+source, evidence, and run primitives — not along the shape of any
+particular model. Exact syntax for node paths, the typing of the
+catalog, and output-query formats remain open (§35).
 
 #### 23.1 Runtime `where` at Workflow Composition
 
@@ -3762,7 +3761,7 @@ artifact carries only the selected bindings.
 - **Workflow composition gate (this subsection).** A
   workflow binding may attach a `where` predicate that
   gates the binding's application. Example:
-  `assume_constant("config.dt", 0.01, where=scenario ==
+  `bind("config.dt", Constant(0.01), where=scenario ==
   "high_res")`. The predicate evaluates at composition,
   not at runtime; the compiled artifact carries only the
   selected bindings.
@@ -3774,23 +3773,23 @@ diagnostics name the layer when the keyword appears ambiguously.
 #### 23.2 Multi-Binding Compilation
 
 **Summary.** One `.myco` compiles once to a parameterized plan;
-many workflows bind the same plan under different value
+many workflows bind the same plan under different source and evidence
 configurations. Trained controller weights persist across runs that
-bind the same callable, so calibration on one dataset transfers to
-prediction on another without recompilation.
+bind the same controller source, so calibration on one dataset
+transfers to prediction on another without recompilation.
 
 One `.myco` compiles once to a plan; many workflows bind the
-same plan under different value configurations.
+same plan under different source and evidence configurations.
 
 - **Plan.** Compile emits a plan parameterized by its binding
-  surface: which constants, series, topology, controllers,
-  priors, and observations the plan accepts.
+  surface: which sources, topology, observations, and run-config
+  fields the plan accepts.
 - **Instantiation.** Each workflow supplies concrete values
-  for the parameterized surface via §24 verbs. The compiled
+  for the parameterized surface via §24. The compiled
   artifact is shared across workflows; binding is cheap.
 - **Callable weight reuse.** Trained weights on callables
-  attached via `bind_controller` (§24.1) persist across
-  workflows that bind the same controller's contract.
+  attached through `Controller` sources (§24.2) persist across
+  workflows that bind the same controller contract.
   Calibration on one dataset transfers to prediction on
   another without recompilation.
 
@@ -3808,18 +3807,17 @@ surface matches can bind the trained instance. No separate "data
 contract" kind, no stateful cross-workflow runtime; the shared
 artifact is trained weights plus a plain contract.
 
-Callables cross study boundaries by conforming to plain
-contracts (§7). The "data contract" kind is retired (see
-anti_spec.md); callables advertise their output type's
-contract, and workflows accepting that contract can bind the
-callable.
+Callables cross study boundaries by conforming to plain contracts
+(§7). The "data contract" kind is retired (see anti_spec.md);
+controller sources advertise input and output contracts, and
+workflows accepting those contracts can bind the callable.
 
 Example. A controller trained in study A outputs values
 satisfying `PhotosynthesisRate : Scalar<μmol_CO2_m2_s> +
 Positive`. A workflow in study B that consumes
 `PhotosynthesisRate` can bind the same trained callable,
 provided study B's required input contract matches the
-callable's declared input contract. Contract satisfaction is
+contract attached to the `Controller` source. Contract satisfaction is
 checked at workflow composition; mismatches surface as §23.4
 composition errors.
 
@@ -3830,7 +3828,7 @@ no extra machinery.
 
 #### 23.4 Error Tiers: Compile vs Workflow Composition
 
-**Summary.** Errors split into two tiers: `mycoc` compile errors
+**Summary.** Errors split into two tiers: `hypha` compile errors
 (structural problems visible without bindings) and workflow
 composition errors (problems visible only once bindings arrive, like
 shape mismatches, contract violations, or N-max ceiling overrun).
@@ -3839,7 +3837,7 @@ this spec.
 
 Errors surface at two distinct layers:
 
-- **`mycoc` compile errors.** Structural problems in the
+- **`hypha` compile errors.** Structural problems in the
   `.myco`: type mismatches, missing contracts, unresolved
   universals, undischargeable relations, conservation
   violations (§3.7), provable inconsistency (§8.6 case 2),
@@ -3855,104 +3853,112 @@ Errors surface at two distinct layers:
   plan exists but cannot run.
 
 Both tiers emit user-directed diagnostics. Tooling
-distinction: `mycoc check` catches tier-1 errors; workflow
+distinction: `hypha check` catches tier-1 errors; workflow
 composition surfaces tier-2. Runtime errors (numerical
 divergence, overflow, solver non-convergence) are a third
 tier that this spec does not address normatively; they live
 in backend and deployment surfaces.
 
-### 24. Eight Workflow Verbs
+### 24. Workflow Source Model
 
-**Summary.** Eight verbs form the workflow-composition surface:
-`assume_constant`, `assume_series`, `learn_constant`, `learn_initial`,
-`learn_trajectory`, `bind_controller`, `bind_topology`, `observe`.
-Each verb binds a specific surface with specific gradient-flow
-implications. Subsections detail controllers, topology binding,
-future candidates, and run-config.
+**Summary.** The workflow-composition surface has three binding
+verbs: `bind(path, source)`, `bind_topology(path, geometry)`, and
+`observe(path, data)`. Fixed values, time series, trainable
+parameters, priors, controllers, and Gaussian-process priors are
+source objects passed to `bind`, not separate verbs. Run mode
+decides how sources participate in execution, training, or PPL.
 
-`assume_constant`, `assume_series`, `learn_constant`, `learn_initial`,
-`learn_trajectory`, `bind_controller`, `bind_topology`, `observe`. For
-each verb: what it binds, when it fires, gradient-flow implications.
+`.myco` states world claims. Workflow composition materializes those
+claims for a particular experiment by attaching sources and evidence
+to paths in the compiled node catalog.
 
-#### 24.1 `bind_controller`, Contract I/O Specification
+#### 24.1 The Three Binding Verbs
 
-**Summary.** `bind_controller(path, fn, input_contract,
-output_contract)` attaches a Python callable to a named `.myco`
-site. Both contracts are plain contracts; there is no separate
-"data contract" kind. The controller is a purely workflow concept,
-with no `.myco` keyword introducing it.
+**Summary.** `bind` attaches a source object to a node path,
+`bind_topology` materializes geometry, and `observe` attaches
+evidence. Orchestration verbs such as `load`, `spawn`, `run`,
+`checkpoint`, and output queries are workflow-library operations, not
+model bindings.
 
-`bind_controller(path, fn, input_contract, output_contract)`
-attaches a Python callable to a named `.myco` site. Both
-contracts are plain contracts (§7); there is no separate
-"data contract" kind (retired to anti_spec.md; subsumed
-2026-04-21).
+- **`bind(path, source)`.** Attaches a source object to a node path or
+  path facet such as `path.initial`. The source declares its value
+  shape, units, dtype, gradient participation, and any contracts.
+- **`bind_topology(path, geometry)`.** Supplies concrete topology or
+  discretization data for a declared geometry (§11).
+- **`observe(path, data)`.** Attaches evidence to a path as layer-2
+  envelope metadata (§13.8, §13.9). It does not assert equality with
+  the data unless the `.myco` model explicitly states a hard
+  observation model.
 
-- **Path.** Names the binding site in the `.myco` model.
-  One path per controller instance; multi-binding is
-  supported (§23.2) through the same mechanism other
-  verbs use.
-- **`fn`.** The Python callable. Typically a neural net
-  module, but any callable that conforms to the declared
-  contracts works.
-- **Input contract.** Types the controller reads from its
-  scope. Names fields, units, refinements the controller
-  requires. Compiler checks at workflow composition that
-  the named fields exist in scope at the binding site.
-- **Output contract.** Types the controller returns.
-  Capability obligations on the output (e.g.,
-  `Differentiable`, `Positive`, refinement bounds) drive
-  downstream gradient flow and admissibility.
+The verbs fire at workflow composition. Bind-time type checking
+validates shape, dtype, units, path existence, contract satisfaction,
+N-max ceilings, and backend capability requirements before the run
+starts.
 
-Controllers are purely workflow concept. No `.myco` keyword
-introduces a controller; the binding is the only mechanism.
-This retires the `slot` / `learn_slot` machinery and the
-transparent-heuristic ABI (anti_spec.md).
+#### 24.2 Source Objects
 
-#### 24.2 `bind_controller`, Gradient-Flow Semantics
+**Summary.** Source objects carry value, training, prior, and
+controller semantics. Compile/run mode decides whether a source is
+held fixed, optimized, sampled, or used as an opaque external
+callable.
 
-**Summary.** Controllers register their learnable parameters with
-the training loss at composition. Gradient flow happens via the
-backend's AD: the compiler treats the controller as a differentiable
-black box advertising `Differentiable` on its output contract. Non-
-differentiable controllers fall back to opaque. Trained weights
-persist across runs that bind the same callable.
+Representative source objects:
 
-Controllers usually wrap differentiable components (neural
-nets with learnable weights). Gradient semantics:
+- **`Constant(value, unit=None)`.** Fixed scalar, tensor, structured
+  value, or small table supplied by the workflow.
+- **`Series(data, unit=None, index=None)`.** Time-indexed or
+  coordinate-indexed data supplied by the workflow.
+- **`Trainable(prior=None, init=None, trajectory=None)`.** Value that
+  participates in gradient training. The same source can represent a
+  learned constant, initial value, or trajectory depending on the
+  bound path and arguments.
+- **`Prior(distribution)`.** Epistemic distributional source used by
+  inference/PPL modes without implying gradient training by name.
+- **`Controller(fn, reads, writes, input_contract, output_contract,
+  trainable=True)`.** External callable source. `reads` and `writes`
+  are path lists; contracts are plain Myco contracts (§7). No
+  `.myco` keyword introduces a controller.
+- **`GPPrior(kernel, hyperparameters=...)`.** Structured prior source
+  for functions; hyperparameters may themselves be `Trainable`
+  sources.
 
-- **Parameter registration.** The controller's internal
-  learnable parameters register with the training loss at
-  workflow composition. The workflow decides whether this
-  particular run trains the controller (`learn_`) or
-  freezes it (`assume_`); the choice is per-run, not per-
-  controller.
-- **Backward pass.** Loss gradients from `observe` (§13.8)
-  flow through the model graph to the controller's output,
-  into the controller's parameters, via the backend's AD
-  facility (§31). The compiler treats the controller as a
-  differentiable black box: it advertises
-  `Differentiable` on its output contract; implementation
-  is the backend's business.
-- **Opaque-fn fallback.** Controllers without
-  `Differentiable` are opaque: no gradient flows back, the
-  parameters cannot be learned in the current run. Useful
-  for fixed heuristics or non-differentiable routines
-  (decision trees, symbolic rules) that replace a prior
-  hard-coded behavior.
-- **Cross-run weight persistence.** Trained weights
-  persist across runs that bind the same callable (§23.3).
-  A controller trained in one workflow is available as
-  frozen in a later workflow by binding the same trained
-  instance.
+All source objects are dumb workflow data. They do not expose Myco
+types as Python classes and they do not create new source-language
+constructs.
 
-The controller is the seam where neural machinery attaches to
-the scientific model. Gradient flow at this seam supports the
-"neural controllers replacing heuristics" research direction;
-opaque-fn fallback supports interop with non-differentiable
-legacy code.
+#### 24.3 Controller Gradient-Flow Semantics
 
-#### 24.3 `bind_topology` and §11 Geometry
+**Summary.** Controllers register learnable parameters through their
+source object. Gradient flow happens via the backend's AD when the
+source advertises a differentiable output contract. Non-
+differentiable controllers are opaque unless the workflow explicitly
+uses them in a fixed context. Trained weights persist across runs
+that bind the same controller source.
+
+Controllers usually wrap differentiable components (neural nets with
+learnable weights). Gradient semantics:
+
+- **Parameter registration.** A `Controller(..., trainable=True)`
+  registers its internal learnable parameters with the training loss
+  at workflow composition. A workflow may bind the same trained
+  controller later with `trainable=False` to freeze it.
+- **Backward pass.** Loss gradients from workflow observations
+  (§13.8) flow through the model graph to the controller's output,
+  into the controller's parameters, via the backend's AD facility
+  (§31). The compiler treats the controller as a differentiable black
+  box when its output contract advertises `Differentiable`.
+- **Opaque callable fallback.** Controllers without `Differentiable`
+  are opaque: no gradient flows back and parameters cannot be learned
+  in the current run. Useful for fixed heuristics or
+  non-differentiable routines.
+- **Cross-run weight persistence.** Trained weights persist across
+  runs that bind the same controller (§23.3).
+
+The controller is the seam where neural machinery attaches to the
+scientific model, but the seam is workflow-side: `.myco` sees only
+the world claims involving the bound path.
+
+#### 24.4 `bind_topology` and §11 Geometry
 
 **Summary.** `bind_topology` is the workflow counterpart to `.myco`
 geometry declarations: it supplies a concrete mesh, boundary
@@ -3983,47 +3989,19 @@ it. The verb is the only path by which geometry becomes
 executable: `.myco` declares the locus structure, the verb
 materializes a specific instance.
 
-#### 24.4 Future Verbs Beyond the Eight
-
-**Summary.** The eight verbs are the complete workflow-composition
-surface for this release. Candidate future additions
-(`bind_known_constants`, `bind_parameters`, `assume_prior`) are
-tracked but deferred because the existing verbs cover shipped use
-cases. Revisit if later work creates concrete demand.
-
-Positive statement of scope: the eight verbs listed in the
-§24 preamble are the complete workflow-composition surface
-for this release. No additional verbs ship in the first release.
-
-Candidate future additions tracked for later:
-
-- **`bind_known_constants`.** Batch form for binding many
-  physical constants at once from a workflow-side table.
-- **`bind_parameters`.** Batch binding for empirical-fit
-  parameter vectors (e.g., a full parameter sweep).
-- **`assume_prior`.** Explicit prior-distribution binding
-  distinct from `learn_constant`, for cases where the user
-  wants to specify a prior without declaring the constant
-  as learned.
-
-Each is deferred because the eight verbs cover the shipped
-use cases and adding surface without concrete demand risks
-coupling to specific workflow idioms. Revisit when Tier 2
-PPL (§13.10) and chunk 08 lock; some may subsume into
-existing verbs by that point.
-
 #### 24.5 Run-Config and Workflow Configuration Surface
 
 **Summary.** Run-config is the non-binding configuration the
 workflow supplies at composition: seed, backend, verbosity, dt
-(when used), profile hints. Distinct from the eight verbs since
-run-config does not bind model values; it configures how the
+(when used), profile hints, gradient regime, and fallback policy.
+Distinct from source binding since run-config does not bind model
+values; it configures how the
 compiled plan executes. Different runs of one plan can use
 different run-config without recompilation.
 
 Run-config is the non-binding configuration the workflow
-supplies at composition. Distinct from the eight verbs: run-
-config does not bind model values; it configures how the
+supplies at composition. Distinct from `bind`: run-config
+does not bind model values; it configures how the
 compiled plan executes.
 
 Representative fields:
@@ -4032,13 +4010,16 @@ Representative fields:
 - `run.config.backend`. Backend selection and its
   capability-fallback mode (error / host / emulate, §31).
 - `run.config.verbosity`. Diagnostics level.
-- `run.config.dt`. Referenced via `assume_constant` in a
-  discrete-time model (§9.1).
+- `run.config.dt`. Referenced via `bind("config.dt", Constant(...))`
+  or `bind("config.dt", Series(...))` in a discrete-time model
+  (§9.1).
+- `run.config.gradient_regime`. Long-rollout gradient strategy:
+  `full_BPTT`, `truncated_BPTT(k)`, or `checkpointed`.
 - `run.config.profile`. Execution-profile hints (batch
   size, memory budget).
 
-Run-config fields are referenced from workflow verbs as
-strings (`assume_constant("run.config.dt", 0.01)`); the
+Run-config fields may be referenced from workflow bindings as
+paths (`bind("run.config.dt", Constant(0.01))`); the
 compiler does not bake them into the plan beyond the
 binding surface. Different runs of the same plan can use
 different run-config without recompilation.
@@ -4046,19 +4027,20 @@ different run-config without recompilation.
 ### 25. Training Emission
 
 **Summary.** Training SCCs compile to gradient-trainable code with
-warm-start semantics drawn from `assume_constant` initial values or
-`learn_constant` priors. Workflow selects projection flavor
+warm-start semantics drawn from `Constant` initial values or
+`Trainable` priors. Workflow selects projection flavor
 (`hard_clip`, `sigmoid`, `soft_clip`). Per-residual loss exposure
 lets users attach losses to named residuals; constraint enforcement
 discharges at compile time where possible, otherwise at runtime.
 
 How the compiler emits gradient-trainable code for SCCs classified as
 training (§20). Warm-start semantics (initial values from
-`assume_constant`, or priors from `learn_constant`). Projection-
-flavor selection (`hard_clip` / `sigmoid` / `soft_clip`) chosen by
-the workflow. Per-residual loss exposure: users attach losses to
-named residuals. Constraint enforcement strategy: compile-time
-discharge where possible, runtime projection otherwise.
+`Constant` sources, or priors / initial guesses from `Trainable`
+sources). Projection-flavor selection (`hard_clip` / `sigmoid` /
+`soft_clip`) chosen by the workflow. Per-residual loss exposure:
+users attach losses to named residuals. Constraint enforcement
+strategy: compile-time discharge where possible, training penalty or
+runtime projection where explicitly selected by workflow policy.
 
 ---
 
@@ -4333,8 +4315,8 @@ auto-satisfies `UnitInterval`.
 mixture of n component distributions with non-negative weights
 summing to 1. Components can be distinct families; shared-
 support requirement is enforced structurally. Weights are
-themselves values, workflow-supplied (`assume_constant` or
-`learn_constant`). Capabilities: `Mixture` is a `Distribution`
+themselves values, workflow-supplied as `Constant` or `Trainable`
+sources. Capabilities: `Mixture` is a `Distribution`
 but closes under fewer algebraic operations than its
 components; specifically, `AffineSelfClosed` survives only
 when every component satisfies it.
@@ -4706,13 +4688,13 @@ downstream code treats them as opaque draws.
 #### 31.3 Opaque-Callable Runtime
 
 **Summary.** The backend supplies the runtime that calls back into
-Python during simulation for `bind_controller` callables, threads
+Python during simulation for `Controller` sources, threads
 gradients through Python for training emission, and manages memory
 and device-residency for interop. The compiler sees only the
 callable's advertised input and output contract, not its interior.
 
-`bind_controller` (§24.1) hands the compiler a Python callable (a
-learned function, typically a neural network). The backend provides
+`bind(path, Controller(...))` (§24.2) hands the compiler a Python
+callable (a learned function, typically a neural network). The backend provides
 the runtime that calls back into Python-land during simulation,
 threads gradients back through Python for training emission (§25),
 and manages any memory / device-residency needed for the interop.
@@ -4780,13 +4762,12 @@ in favor of the trait-based approach.
 **Summary.** Open items in the backend design: AD ownership (Myco-
 owned, backend-delegate, hybrid; leans hybrid), PPL protocol
 specifics (message schema, inference-kind enumeration), gradient-
-flow semantics for `bind_controller`, the mixed-backend policy, and
-the first concrete backend choice.
+flow semantics for `Controller` sources, the mixed-backend policy,
+and the first concrete backend choice.
 
 AD ownership fork (Myco-owned / backend-delegate / hybrid, leans
 hybrid). PPL protocol specifics (message schema, inference-kind
-enumeration). Gradient-flow semantics for `bind_controller`
-callables.
+enumeration). Gradient-flow semantics for `Controller` callables.
 
 #### 32.1 Mixed-Backend Policy
 
@@ -4934,7 +4915,7 @@ surfaces belong in the language / stdlib vs which are workflow
 idioms the user builds on their own. The goal is to avoid baking
 project-specific patterns into the language while still exposing
 enough machinery that workflow authors can implement them cleanly
-against `bind_controller` (§24.1).
+against `Controller` sources (§24.2).
 
 **Tier 2 distribution machinery.** Joint-declaration syntax (B2),
 coupling / correlated-sample machinery (B4), copulas, Wishart /
@@ -5062,14 +5043,13 @@ deferred post-v2.1 per chunk 10. Cross-refs §2, §36, §37.
 **Event scheduling-policy Python API signature.** §10.1 commits to
 the contract (a Python-side policy orders competing firings; three
 stdlib policies ship: priority, random-with-seed, FIFO) but defers
-the exact Python API signature to §24 (workflow verbs) since it is
+the exact Python API signature to §24 (workflow source model) since it is
 a workflow-layer concern. Open: the canonical signature for custom
 policies (e.g., `policy(pending_firings, state) -> List[Firing]`
 vs. a class-based interface with explicit hook methods), how custom
 policies interact with determinism and reproducibility guarantees,
 and the exact menu of state the policy sees. Should be resolved
-when §24 workflow verbs are fleshed out during Phase 1 batch 5
-(§20-§24 audit).
+with the workflow API details around §24.
 
 ---
 
@@ -5264,7 +5244,7 @@ selection, residual simplification, and SCC invariance. LOCKED.
 - B1. Literal arithmetic and transcendentals at identity points
   (`2+3→5`, `exp(0)→1`, `log(1)→0`, `sin(0)→0`, `cos(0)→1`, `sqrt(1)→1`)
 - B2. Universal bound to literal after workflow binding (e.g. `R →
-  8.314` once `assume_constant` fires). Per the CC1 literal-numerics
+  8.314` once `bind("R", Constant(...))` fires). Per the CC1 literal-numerics
   lock (§4) the value enters from the workflow; no literal appears in
   `.myco` value position.
 
@@ -5413,8 +5393,8 @@ tightening. LOCKED.
 
 - S1. `f(x)` where `f` is opaque — forward edge only; no recovery of
   `x` from `f(x)`
-- S2. `bind_controller`-attached callable: `g(inputs) → output` forward
-  only (black box, §24.1)
+- S2. `Controller` source callable: `g(inputs) → output` forward
+  only (black box, §24.2)
 
 **T. One-way convert.** Explicit user-declared non-invertible transform.
 LOCKED.
