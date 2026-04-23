@@ -100,14 +100,14 @@ explicit composition (§3.3). Inheritance is not in the language.
 
 **Traceability and provenance.** Every e-class merge, rewrite
 application, and workflow-injected value carries a provenance record
-accessible via `mycoc explain` (§22). Workflow-constant injections
+accessible via `hypha explain` (§22). Workflow-value injections
 (§17) are tagged separately from compiler rewrites, which are tagged
 separately from user-declared equalities. Observations (§13.9) are
 layer-2 facts with their own tag. Provenance is durable across plan
 serialization.
 
 **Error-reporting philosophy.** Diagnostics split into three tiers
-by where the problem surfaces. `mycoc` compile errors catch type,
+by where the problem surfaces. `hypha` compile errors catch type,
 unit, contract, and structural problems that are visible in `.myco`
 alone. Workflow-composition errors (§19.4) catch binding problems
 that become visible only once plan meets workflow values. Runtime
@@ -147,7 +147,7 @@ optionally advertise via capability (§31.1).
 axis. Aleatoric content (stochastic SCCs and the distributional
 machinery of §13) lives on the `.myco` side. Epistemic content
 (measurements, priors, training directives) lives on the workflow
-side and uses the verbs of §24.
+side and uses the source model of §24.
 
 **Conversion-graph cost model.** Open. Unit conversions, tensor
 reshapes, sparse or dense representation transitions, and
@@ -161,23 +161,23 @@ projection operators or solver selection to satisfy a constraint.
 `constraint` declarations (§8.1) carry three explicit discharge
 paths: compile-time proof via e-graph and refinement reasoning,
 runtime projection selected by the workflow via §25's projection-
-flavor verbs, or training loss penalty on SCCs classified training
+flavor policy, or training loss penalty on SCCs classified training
 (§20). The compiler surfaces which discharge path each constraint
 uses, and the workflow picks among projection flavors when that
 path applies. The compiler does not insert projection silently.
 This keeps constraint-satisfaction a named modeler decision, never
 an implicit compiler behavior.
 
-**Generated code is the product.** The run-time artifact is the
-compiled plan plus the workflow bindings that produced it. The
-`.myco` source and workflow Python together fully reproduce the
-plan under a fixed compiler version (§31.4). Inspection
-affordances (§22 `mycoc explain`, plan serialization, provenance
-records) let users audit the compiled output and the choices the
-compiler made. Myco is a compiled language: the plan is the unit
-of execution, the source is the unit of reproduction. Plans are
-durable, serializable, and shareable independent of the source
-they were compiled from.
+**Artifacts and generated code.** Four artifacts have distinct roles.
+The source bundle is `.myco` plus workflow Python. The plan is the
+canonical, serializable IR emitted by the compiler. Backend-emitted
+code is the generated product users may inspect, own, and run. A run
+record is a plan plus concrete sources, evidence, backend, seed, and
+version data. The source bundle reproduces the plan under a fixed
+compiler version (§31.4); the plan emits backend code; the run record
+reproduces output. Inspection affordances (§22 `hypha explain`, plan
+serialization, provenance records) let users audit the compiled
+output and the choices the compiler made.
 
 ---
 
@@ -3040,7 +3040,7 @@ readers, and no invalidator:
   select closed-form or approximate routing.
 - **Extraction pipeline** (§19) reads refinement and tolerance
   facts to choose projection flavors.
-- **Diagnostics / `mycoc explain`** (§22) reads every envelope
+- **Diagnostics / `hypha explain`** (§22) reads every envelope
   fact and surfaces provenance.
 - **Plan inspection** reads envelope facts to report the
   derivation chain visible to workflow tooling.
@@ -3195,7 +3195,7 @@ appear). Downstream tooling reads source tags uniformly.
    are lossless by construction and always fire.
 
 The eight are enumerated because downstream tooling
-(diagnostics, `mycoc explain`, provenance reporting) needs to
+(diagnostics, `hypha explain`, provenance reporting) needs to
 know which source produced any given merge. Source tags travel
 with merges through the e-graph.
 
@@ -3245,7 +3245,7 @@ that produce the same layer-1 merge deduplicate at the merge
 level (the e-class is merged once) but both persist in provenance:
 diagnostics (§22) surface every declaration that contributed,
 even when all produced the same merge. This keeps
-`mycoc explain` honest when a modeler writes two `identify`
+`hypha explain` honest when a modeler writes two `identify`
 calls intending to state different facts that happen to collapse
 to the same layer-1 equation.
 
@@ -3712,17 +3712,94 @@ array plus an alive mask.
 
 ### 22. Plan Inspection
 
-**Summary.** The compiled program is an output artifact, not the
-source of truth: reproducibility rests on `.myco` plus workflow
-Python together. The `mycoc explain` CLI exposes the compiled plan
-for auditing, debugging, and verifying compilation choices.
-Inspection is a debugging affordance, not a required step.
+**Summary.** Plan inspection is a first-class workflow affordance.
+The compiled plan exposes textual explanation, one machine-readable
+IR, per-path `inspect`, and bounded symbolic `prove` queries. Rendered
+graph visualizations are optional downstream tooling, not a v2.1
+commitment.
 
-The compiled program is an output artifact. Reproducibility is
-guaranteed by `.myco` plus workflow Python together. Compiled code
-is inspectable via `mycoc explain` (and related CLI surfaces, §36)
-for users who want to audit the plan, debug behavior, or verify
-compilation choices. Inspection is a debugging affordance.
+The compiled plan is a canonical output artifact. Reproducibility
+rests on the source bundle and workflow (§0.1), but the plan is the
+unit users inspect when they want to understand what the compiler
+proved, rewrote, approximated, lowered, or left unresolved.
+
+#### 22.1 `hypha explain`
+
+**Summary.** `hypha explain` emits a textual plan report and can emit
+the canonical machine-readable plan IR. It reports SCCs, symbolic
+resolutions, residuals, fallbacks, execution order, temporal state,
+workflow bindings, and provenance.
+
+The textual report includes:
+
+- SCC classification and lowering target (§20, §21).
+- Symbolic resolutions, closure-policy choices, and rewrite groups.
+- Residual graph nodes, original relation names, and extraction costs
+  (§19).
+- Numerical fallbacks, backend capability requirements, and selected
+  fallback policy (§31).
+- Execution order and temporal state requirements.
+- Observation, source, and topology bindings that materialize the
+  plan.
+- Envelope facts: bounds, distributions, approximation tolerances,
+  provenance, and rewrite traces (§16).
+
+`hypha explain --format ir` emits the canonical machine-readable IR.
+Renderer targets such as Mermaid, D2, Graphviz, or Cytoscape may be
+built on top of that IR, but the spec does not commit to renderer
+output as part of v2.1.
+
+#### 22.2 `inspect(path)`
+
+**Summary.** `inspect(path)` asks what the plan currently knows about
+a node. It returns a symbolic expression or residual frontier,
+free-variable set, status, envelope facts, dependencies, and
+reduction trace.
+
+Representative result fields:
+
+- `expression` — canonical expression if the path reduces to one.
+- `free_variables` — workflow sources or unresolved symbols required
+  to ground the expression.
+- `status` — `ground`, `symbolic`, `overdetermined`,
+  `inconsistent`, or `unresolved`.
+- `value` — available only when the expression is ground under the
+  current workflow binding.
+- `depends_on` — source paths, topology paths, observations, and
+  relevant run-config fields.
+- `envelope` — bounds, distributional facts, tolerances, capability
+  facts, and provenance.
+- `reduction_trace` — the merges, rewrites, and relation invocations
+  that produced the expression or residual.
+
+`inspect` is the plan-query surface for partial evaluation. It is not
+a runtime graph mutation API.
+
+#### 22.3 `prove(claim)`
+
+**Summary.** `prove` is a bounded symbolic truth-claim query over the
+compiled plan. It returns `proven`, `refuted`, `undetermined`, or
+`contingent`, with a trace, counterexample, or required conditions
+when available.
+
+`prove` is not a general theorem prover. It succeeds when the claim
+is visible to Myco's existing machinery: type/refinement facts,
+conservation groups, e-graph equalities, monotonicity, unit algebra,
+distributional envelope facts, or solver/lowering certificates. It
+is useful for claims such as "this conservation law holds at every
+step", "this path is bounded under the current sources", or "these
+two expressions are equivalent after rewrite saturation."
+
+#### 22.4 Hypothetical Rebinding
+
+**Summary.** Hypothetical analysis is a rebind/recompile convenience,
+not plan mutation. Tooling may expose `with_binding_override` or an
+equivalent workflow helper that constructs a new run record with one
+or more source bindings changed, then reuses plan-cache state where
+valid.
+
+The original plan remains immutable. Any hypothetical result carries
+its own run record and provenance so comparisons are reproducible.
 
 ---
 
@@ -5067,8 +5144,7 @@ lockfile) and the overall shape follows Cargo + uv conventions
 (chunk 10). Resolver algorithm, version semantics (what counts as
 a breaking change for a parameterized relation, a contract, or a
 capability shift), feature model, build-script / codegen surface,
-workspace ↔ Python interaction, cross-spore relation visibility
-(`pub(crate)`-style private relations), registry story, and
+workspace ↔ Python interaction, cross-spore export policy, registry story, and
 platform / backend metadata in the manifest are all open. None of
 this blocks the core language lock; full spec-level prose is
 deferred post-v2.1 per chunk 10. Cross-refs §2, §36, §37.
@@ -5086,46 +5162,72 @@ with the workflow API details around §24.
 
 ---
 
-## Part VII — Developer Experience (Deferred)
+## Part VII — Developer Experience
 
 **Summary.** Part VII names developer-experience surfaces outside the
 language and compiler proper: CLI, dependency management, editor
-tooling, doc generation, agent/LLM integration. Deferred until Parts
-I-IV lock; listed to keep the surfaces from being forgotten.
+tooling, doc generation, agent/LLM integration. Some surfaces are
+committed at the vocabulary/API level (`hypha`, `hypha check`,
+`hypha explain`, `hypha doc`); detailed flags, schemas, and editor
+behavior remain open.
 
-Outside the language and compiler proper, but on the roadmap. Deferred
-until Parts I–IV are locked. Listed here so the surfaces aren't
-forgotten during consolidation.
+Outside the language and compiler proper, but on the roadmap. Listed
+here so the surfaces remain tied to the language design without
+pretending every tool detail is locked.
 
 ### 36. Command-Line Interface
 
-**Summary.** The `myco` CLI spans compile, run, check, fmt, explain,
-and related subcommands, with flag conventions, exit codes, and
-output formats yet to lock.
+**Summary.** `hypha` is the single user-facing CLI. It spans compile,
+run, check, fmt, explain, doc generation, and package-management
+subcommands. Flag conventions, exit codes, and most output formats
+remain open, but `hypha check` and `hypha explain` are committed
+surfaces.
 
-The `myco` CLI: compile, run, check, fmt, explain, and related
-subcommands. Flags, exit codes, output conventions.
+`hypha` is the user-facing CLI, analogous to `cargo` or `uv`.
+Whether an internal compiler binary exists behind it is an
+implementation detail. Committed subcommands:
+
+- `hypha check` catches tier-1 `.myco` compile errors without
+  workflow binding or code generation (§23.4).
+- `hypha explain` exposes textual plan reports and the
+  machine-readable IR (§22).
+- `hypha fmt` formats source once the grammar is locked.
+- `hypha doc` generates documentation (§39).
+- Package-management subcommands operate on spores (§37).
 
 ### 37. Dependency Management and Package Registry
 
-**Summary.** How `.myco` packages declare dependencies, resolve
-versions, publish, and lock. Interacts with but stays distinct from
-the Python workflow layer's package system.
+**Summary.** A distributable Myco package is a spore. Spores use
+`myco.toml` manifests and `myco.lock` lockfiles. `hypha` manages
+compile/run/check/fmt/explain/doc and package-management subcommands.
+The package approach follows the Cargo + uv convention: explicit
+manifests, reproducible locks, and a registry story that remains open.
 
-How `.myco` packages declare dependencies on each other. Version
-resolution. Package registry layout and publishing workflow. Lockfile
-format. Interaction with the Python workflow layer's package system
-(distinct but adjacent).
+Locked vocabulary:
+
+- **Spore.** A distributable Myco package: source files, manifest,
+  docs, tests, and optional generated artifacts.
+- **`myco.toml`.** Spore manifest.
+- **`myco.lock`.** Reproducibility lockfile.
+- **`hypha`.** User-facing CLI for language and package operations.
+
+Open package items: resolver semantics, version constraints, feature
+model, build scripts, workspace-Python interaction, registry layout,
+platform/backend metadata, and cross-spore export policy. The minimum
+scope is local path dependencies, manifest parsing, lockfile writing,
+and deterministic source resolution.
 
 ### 38. Editor Tooling
 
 **Summary.** Editor-side surfaces: a language server (LSP), VS Code
-extension, tree-sitter grammar, and the full syntax-highlighting,
-diagnostics, hover, goto-definition, and refactoring affordances.
+extension, tree-sitter grammar, formatter, linter, and the full
+syntax-highlighting, diagnostics, hover, goto-definition, and
+refactoring affordances.
 
 Language server (LSP). VS Code extension. Tree-sitter grammar. Syntax
 highlighting, diagnostics, hover, goto-definition, refactoring
-affordances.
+affordances. Formatter and linter surfaces are tracked here; their
+CLI spellings route through §36.
 
 ### 39. Documentation Generation and Website
 
@@ -5133,9 +5235,12 @@ affordances.
 types, contracts, events, and universals, and a website layout
 covering language reference, tutorials, API docs, and examples.
 
-Docstring conventions. Doc generator for user-defined types, contracts,
-events, universals. Website layout: language reference, tutorials, API
-docs, examples.
+Docstring conventions. `hypha doc` generates documentation for
+user-defined types, contracts, events, universals, parameterized
+relations, and spores. Website layout: language reference, tutorials,
+API docs, examples. Generated docs may embed diagrams produced from
+the §22 machine-readable IR, but renderer targets remain optional
+tooling rather than a core spec commitment.
 
 ### 40. Agent / LLM Integration
 
@@ -5162,7 +5267,7 @@ punctuation, and stdlib-reserved identifiers. Additions to this list
 are a breaking change to the parse surface.
 
 The `.myco` surface reserves the following keywords. Reserved keywords
-cannot be used as user identifiers and will emit a `mycoc` parse error
+cannot be used as user identifiers and will emit a `hypha` parse error
 if encountered in identifier position.
 
 **Declaration keywords.** `type`, `node`, `universal`, `fn`,
