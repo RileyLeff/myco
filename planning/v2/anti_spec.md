@@ -54,7 +54,7 @@ gap-review stale list, subsequent design locks.
 | dimensionless-ratio literal carve-out (`0.5`, `2.0` in a dimensionless expression) | CC1 applies uniformly: bind the ratio as a universal | earlier drafts allowed "obvious" dimensionless ratios inline; CC1 is now position-based not dimensionality-based, so no carve-out exists |
 | universals carrying values (`universal R: Scalar<U> = 8.314`) | `universal R: Scalar<U>` declaration only; value from workflow | CC1 scope |
 | contract composition alias (`contract C := A + B`) | nothing | multi-contract satisfaction (`: A + B + C`) + supertraits already cover the bundle case; alias adds a second spelling with no new expressive power |
-| user-facing `Dual` numeric representation | backend-owned AD | Part V commits backend-delegated AD (burn-style tensor tracks operations); user-facing `Dual` would duplicate backend machinery and risks conflicting with backend AD representation. Forward-mode AD is a backend concern, not a user-facing scalar type |
+| user-facing `Dual` numeric representation | hybrid AD boundary (§31) | symbolic/algorithmic derivatives are compiler-owned and runtime AD is backend-owned; user-facing `Dual` would duplicate machinery and risk conflicting with backend AD representation |
 
 ## Retired architectural framing
 
@@ -71,7 +71,7 @@ gap-review stale list, subsequent design locks.
 | "structural-predicate-gated" as the X-category name | "site-gated strict" | collision with §16.4 structural tolerance and §17.4 structural shape; X fires on a site or geometric predicate owned by a geometry, not on structural envelope properties |
 | "eight merge sources" as a monolithic framing (all sources directly write merges) | "eight authorization sources" with direct-writer vs rewrite-class-authorizer split: sources 1, 2, 3, 7, 8 directly write merges; sources 4 (`identify` via Layer-3 site records), 5 (stdlib inverses via E-group), 6 (`convert`) authorize rewrite classes that subsequently effect merges | clarifies that the e-graph's Layer-1 merge surface is narrower than the set of §17 sources; resolves the identify-as-merge-source vs identify-via-Layer-3 tension raised by opus_identify_review.md. Resolved 2026-04-22 |
 | within-event index-order tiebreak | §10.4 three-case exhaustive analysis | ordering is not needed once the three cases are classified. The v2.1_in_progress "tiebreak by index order, overridable from Python" framing predates the three-case analysis; §10.4 is the replacement |
-| "`deriv` always symbolic / no runtime cost" framing | three-mode lowering (symbolic / algorithmic / runtime) per §14.4 | v2.1_in_progress stale framing predates compile-time-size-threshold lowering; runtime AD is the authorized fallback for SCCs too large to expand symbolically, gated on B6 backend-AD ownership |
+| "`deriv` always symbolic / no runtime cost" framing | three-mode lowering (symbolic / algorithmic / runtime) per §14.4 | runtime AD is the authorized fallback for SCCs too large to expand symbolically under the hybrid AD boundary (§31) |
 | spec.md §12.3 "canonical evaluator" framing for residual | residual as user-facing projection from the e-graph via cost-vector-guided extraction (§19) | canonical-evaluator narrative predates the three-layer e-graph; residual is a projection parameterized by cost preference. Subsumed by the broader "residual as core semantic object" retirement but called out for legacy-doc readers |
 
 ## Retired open questions (closed or structurally void)

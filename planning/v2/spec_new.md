@@ -2619,8 +2619,8 @@ cannot expand symbolically).
   rewrites.
 - **Runtime.** When the SCC exceeds a size threshold or contains
   unexpanded closure policies, `deriv` lowers to the backend's
-  autodiff facility. Fallback for large SCCs; gated on §33 B6
-  backend-AD ownership. Runtime AD does not participate in the
+  autodiff facility. Runtime AD is the fallback for large SCCs under
+  the hybrid AD boundary (§31); it does not participate in the
   equational core.
 
 The chosen mode is inspectable via `.mode` on the `deriv`
@@ -2960,8 +2960,9 @@ principle is restated in §0 as a structural commitment.
    - Per-event copies keyed on event firing (§10).
    - Identity-tagged instances of heterogeneous collections.
    - SCC decomposition results keyed on SCC identifier; carries
-     class assignment (algebraic / stochastic / training /
-     fixed-point / iterative-solve / stepper; §20).
+     the canonical four-way class assignment (static / dynamic /
+     stochastic / training; §20) plus any lowering solver-strategy
+     metadata (algebraic, fixed-point, iterative-solve, stepper).
    - Workflow provider bindings keyed on the handle identifying
      which workflow-side component supplied a value, observation,
      or learned parameter (§24).
@@ -3563,6 +3564,13 @@ closed-form marginalization), **training** (gradient-optimized).
 Classification pivots lowering, training emission, and backend
 dispatch.
 
+Solver-strategy labels such as algebraic, fixed-point,
+iterative-solve, and stepper are lowering sub-dispatch metadata under
+the four-way class, not additional SCC classes. Separately,
+overdetermination classification (§19.3) describes equation-count and
+consistency status. Diagnostics may show all of these labels, but the
+canonical SCC class is the four-way execution role above.
+
 ### 21. Lowering
 
 **Summary.** Lowering compiles the residual graph into a backend
@@ -3600,6 +3608,12 @@ Classification is a module-level fact; a dynamic module
 remains dynamic even if only one of its SCCs is actually
 time-dependent.
 
+Within a dynamic module, the compiler may still classify individual
+collections as bind-static for lowering. A collection with no
+event-time churn can skip mask-update machinery even though the
+module as a whole has a runtime loop. This is an optimization and
+inspection fact, not a separate module semantic.
+
 #### 21.2 Four-Way SCC Lowering Targets
 
 **Summary.** Each SCC class lowers through a distinct path: static
@@ -3619,7 +3633,9 @@ The four targets are distinct compilation paths:
 - **Dynamic SCCs.** Per-tick computation in the runtime
   loop body. Intra-SCC ordering resolved by the residual
   graph's topology; values at tick t depend on values at
-  tick t-1 via explicit temporal terms (§21.3).
+  tick t-1 via explicit temporal terms (§21.3). Dynamic SCC
+  lowering may sub-dispatch to algebraic, fixed-point,
+  iterative-solve, or stepper strategies.
 - **Stochastic SCCs.** Lowered to backend PPL primitives
   (§31) or an explicit sampler. Tier A closed-form
   marginals resolve at compile time; Tier B approximate
@@ -3629,7 +3645,9 @@ The four targets are distinct compilation paths:
   computation. Loss exposure per residual (§25) enables
   workflow-selected scalar combinations; differentiability
   propagates through contained stdlib atoms via their
-  `Differentiable` contracts (§7.2).
+  `Differentiable` contracts (§7.2). Myco owns symbolic and
+  algorithmic derivatives; runtime AD delegates to the selected
+  backend (§31).
 
 Class dominance: an SCC inherits the most expensive class
 among its members. A stochastic variable inside an
@@ -3637,6 +3655,10 @@ otherwise dynamic SCC promotes the whole SCC to stochastic.
 The compiler diagnoses the promotion at classification time
 so the modeler can decide whether to split the SCC
 structurally (by refactoring) or accept the promotion.
+
+Lowering checks backend capability advertisements (§31.1). Missing
+required capabilities fail by default; `host` and `emulate` fallback
+modes are explicit run-config choices.
 
 #### 21.3 `y[t]` and `y[t+1]` as Ground Terms
 
@@ -3673,6 +3695,12 @@ For a bounded-time run with T ticks, the backend allocates
 T slots per temporal field; streaming runs use rolling
 buffers sized to the maximum temporal-lookback depth the
 module references.
+
+Symbolic claims are append-only; materialized runtime state is a
+cache. A streaming executor may evict backend storage for old ticks
+once the maximum lookback and requested outputs no longer need them,
+but the plan's symbolic claims and provenance remain reproducible
+from the source bundle and run record.
 
 #### 21.4 N-max Slots and Alive Masks
 
@@ -4745,6 +4773,14 @@ the compiler and workflow negotiate what a particular backend
 supports. The subsections below commit the shape; concrete signatures
 land in chunk 06.
 
+**AD ownership boundary.** Myco owns symbolic and algorithmic
+differentiation: rewrite-based derivatives, structural chain-rule
+expansion, Jacobian construction, and derivative-related provenance.
+Backends own runtime AD over emitted kernels and opaque callables,
+advertised through capability flags. This hybrid boundary is
+normative: runtime AD is delegated, but the compiler remains
+responsible for the mathematical derivative structure it can see.
+
 #### 31.1 Capability Advertising and Fallback Modes
 
 **Summary.** Backends advertise capabilities (complex support,
@@ -4762,7 +4798,7 @@ missing, the compiler consults the workflow's fallback policy:
 
 - **`error`.** Fail at plan-binding time with a capability-mismatch
   diagnostic (workflow-composition error tier, §19.4). Conservative
-  default.
+  default. `host` and `emulate` never happen silently.
 - **`host`.** Route the offending subgraph to a host-side reference
   implementation. Correctness preserved at the cost of device-host
   traffic. Useful for CPU-only families (e.g. `Rational` arithmetic,
@@ -4774,7 +4810,8 @@ missing, the compiler consults the workflow's fallback policy:
   keyed state) so its effect on guarantees is tracked.
 
 Fallback mode is set per-run via `run.config.backend` (§24.5);
-workflows can also scope fallback to specific capabilities.
+workflows can also scope fallback to specific capabilities. If no
+fallback policy is specified, the mode is `error`.
 
 #### 31.2 PPL Handoff Protocol
 
@@ -4869,37 +4906,29 @@ in favor of the trait-based approach.
 
 ### 32. Open Backend Items
 
-**Summary.** Open items in the backend design: AD ownership (Myco-
-owned, backend-delegate, hybrid; leans hybrid), PPL protocol
-specifics (message schema, inference-kind enumeration), gradient-
-flow semantics for `Controller` sources, the mixed-backend policy,
-and the first concrete backend choice.
+**Summary.** Open items in the backend design: exact PPL message
+schema, inference-kind enumeration, opaque-callable fallback choices,
+future mixed-backend execution, and the first concrete backend
+choice. AD ownership is no longer open: §31 locks the hybrid boundary.
 
-AD ownership fork (Myco-owned / backend-delegate / hybrid, leans
-hybrid). PPL protocol specifics (message schema, inference-kind
-enumeration). Gradient-flow semantics for `Controller` callables.
+The backend trait shape is intentionally lean. Minimum required
+operations versus advertised optional capabilities remain to be
+spelled out in concrete trait signatures.
 
 #### 32.1 Mixed-Backend Policy
 
-**Summary.** Whether a single run can span multiple backends is
-open. Current lean is single-backend-per-run: if a workflow needs
-specialized handling for one SCC, the intended escape hatch is
-workflow-layer glue rather than cross-backend marshalling in the
-compiler. Not yet locked; chunk 06.
+**Summary.** A single run targets one backend in the current scope.
+Future SCC-level mixed-backend execution remains open. If a workflow
+needs specialized handling for one SCC today, the intended escape
+hatch is workflow-layer glue rather than compiler-managed
+cross-backend marshalling.
 
-Open question: should a single Myco run be permitted to span multiple
-backends, or must each run commit to exactly one? Arguments for
-single-backend-per-run: simpler capability negotiation, no cross-
-backend data marshalling, deterministic reproducibility across runs.
-Arguments for mixed: allow a specialized backend for one SCC (e.g. a
-PPL-specialized backend for a Tier C stochastic SCC) while a
-general-purpose backend handles the rest.
-
-Current lean: single-backend-per-run. If a workflow needs specialized
-handling for one SCC, the intended escape hatch is to run the
-specialized SCC in isolation and pass its samples / outputs into the
-main run via workflow-layer glue, rather than to implement
-cross-backend marshalling in the compiler. Not yet locked; chunk 06.
+Single-backend-per-run keeps capability negotiation, device
+residency, and reproducibility understandable. A workflow that needs
+a specialized PPL backend for one SCC can run that SCC in isolation
+and pass its samples / outputs into the main run through workflow
+sources. Compiler-managed SCC-level backend handoff is a future
+backend item, not a current guarantee.
 
 #### 32.2 First Concrete Backend
 
@@ -4920,7 +4949,7 @@ construction.
 **Summary.** Part VI enumerates open design items (B-tagged blockers,
 chunk-slotted work, and a catalog of smaller opens) carried forward
 explicitly so they are not silently committed during consolidation.
-Covers matrix heterogeneous-unit resolution, backend AD ownership,
+Covers matrix heterogeneous-unit resolution, backend trait details,
 joint distribution syntax, residual-graph mechanics, and more.
 
 Carried forward explicitly so they are not silently committed during
@@ -4936,7 +4965,8 @@ matrix heterogeneous-unit resolution, B6 backend abstraction.
 - **B2.** Joint declaration syntax.
 - **B4.** Coupling machinery.
 - **B5.** Matrix heterogeneous-unit resolution.
-- **B6.** Backend abstraction (see Part V).
+- **B6.** Backend abstraction details beyond the locked hybrid AD
+  boundary (see Part V).
 
 ### 34. Chunk-Slotted Work
 
@@ -4955,11 +4985,12 @@ substrate lock), chunk 11 sum types / enums.
   explicit bridge / B unified term-e-graph / C type graph compiled
   to e-graph rules at elaboration) and Q1-Q7 tracked in
   `planning/v2/v2.1_chunk_reports/07_type_graph_in_progress.md`.
-- **Chunk 08.** B2 + B4 joint syntax / coupling; user-`fn` ban and
-  parameterized-relation lock (design resolved, §6 / §7 / §8 prose
-  pending application). Canonical reference:
-  `planning/v2/v2.1_chunk_reports/08_relation_fix_whoops.md`.
-- **Chunk 03.** Kernels, resume after substrate lock.
+- **Chunk 08.** User-`fn` ban and parameterized-relation lock
+  (applied in §6 / §7 / §8 / §28). Distribution contract shape and
+  B2/B4 joint syntax remain tied to later PPL work.
+- **Chunk 03.** Kernels, resumed after substrate lock; sparse
+  assembly, low-rank rewrites, integration operators, and cost
+  machinery remain open.
 - **Chunk 11.** Sum types / enums. Motivation and shape locked
   (§3.10 stub); exact syntax, pattern-matching power, event-
   triggered variant transitions, lifted-arithmetic sugar, and
@@ -5000,8 +5031,7 @@ event-driven topology mutation (incremental saturation strategy
 when events add nodes, edges, or locus structure mid-run). O4.8
 spatial operator lowering (rewrite group P1 architectural call:
 e-graph rewrite versus pre-e-graph codegen; geometry chunk 01
-cross-ref). Backend AD ownership (Part V §32, listed separately for
-visibility). Macros (dropped from the current surface; revisit if
+cross-ref). Macros (dropped from the current surface; revisit if
 concrete boilerplate pain emerges). `softmax` and weighted-sum
 aggregation surface (stdlib primitive vs user-composed from `exp` +
 `sum`; collection-aggregation syntax pending zip/alignment semantics
