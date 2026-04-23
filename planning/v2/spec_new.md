@@ -3258,42 +3258,80 @@ preferring one.
 
 #### 16.4 Envelope Flavors
 
-**Summary.** Tolerance envelopes carry one of four flavors:
-entry-wise (per-element), operator-norm (induced matrix norm),
-spectral (eigenvalue/singular-value behavior), or structural
-(combinatorial / pattern-preserving). Each flavor has its own
-composition rule; `approximate` blocks declare flavor in
-`tolerance_class`.
+**Summary.** Envelopes for scalar and matrix-valued expressions are
+multi-view bundles attached to e-classes. The four standard views are
+entry-wise, norm, spectral, and structural. No view is canonical, and
+the compiler does not coerce one view into another unless a named rule
+proves the implication. Each primitive declares which views it consumes
+and emits; contradictions become refuted facts or unmet obligations.
 
-Tolerance envelopes (a subclass of envelope facts) carry a
-flavor declaring how error is measured. Four flavors:
+Tolerance envelopes (a subclass of envelope facts) carry one or more
+parallel views declaring how error, bounds, or exact structural
+certificates are represented:
 
-- **Entry-wise.** Error bound applies independently per
-  element. Used for tolerance-class statements about scalar
-  fields, component-wise vector results.
-- **Operator-norm.** Error measured by induced matrix norm
-  (spectral radius, Frobenius, etc.). Used for
-  matrix-valued approximations where worst-case singular
-  behavior matters.
-- **Spectral.** Error bound on eigenvalue / singular-value
-  behavior specifically. Used when the downstream consumer
-  cares about spectral properties (stability analysis,
-  conditioning).
-- **Structural.** Error bound on combinatorial or pattern
-  properties (sparsity pattern preserved, positive-definiteness
-  preserved). Zero-numerical-tolerance flavor — either the
-  structural property holds or the rewrite does not apply.
+- **Entry-wise.** Per-element bounds such as
+  `A[i,j] in [lo[i,j], hi[i,j]]`. Used for scalar fields,
+  component-wise vector results, sign checks, diagonal positivity,
+  provider-validation diagnostics, and elementwise arithmetic.
+- **Norm.** Matrix / vector norm bounds such as `||A||_2 <= c`,
+  `||A - A_approx||_F <= eps`, or named operator-norm bounds.
+  Used for perturbation analysis, matmul error propagation,
+  solver-error bounds, approximation accounting, and
+  `condition_of`.
+- **Spectral.** Eigenvalue / singular-value facts such as
+  `lambda_min(A) >= a`, `lambda_max(A) <= b`,
+  `sigma_min(A) >= a`, `sigma_max(A) <= b`, or
+  `spectral_radius(A) <= r`. Used for positive-definiteness,
+  stability, condition bounds, Cholesky eligibility, implicit-solve
+  safety, and covariance validity.
+- **Structural.** Exact certificates such as `symmetric(A)`,
+  `diagonal(A)`, `lower_triangular(A)`, `row_sum_zero(A)`,
+  `graph_laplacian(A)`, `block_diagonal(A, blocks)`, or
+  `zero_pattern(A)`. This is the zero-numerical-tolerance view:
+  either the structural property holds or the fact is refuted /
+  unavailable.
 
-Each flavor has its own composition rule: entry-wise bounds
-compose by summation under triangle inequality; operator-norm
-by sub-multiplicativity; spectral by Weyl-style inequalities;
-structural by set intersection. `approximate` blocks (§15.1)
-declare flavor in `tolerance_class`; Tier B rewrites
-(§13.2) route via flavor to the appropriate approximation
-family. The composition rules as stated cover the scalar case;
-tensor-shape extension (how tolerance envelopes compose across
-tensor-valued expressions) is tracked in chunk 05 §3.3 (matrix
-and tensor types).
+These views are parallel. A matrix envelope may contain entry-wise
+bounds, several norm bounds, spectral intervals, and structural
+certificates simultaneously. There is no single canonical envelope
+representation into which the others must project.
+
+Merge and join behavior is per view:
+
+- Entry-wise joins intersect or widen compatible interval records
+  according to the evidence source and monotonicity rule.
+- Norm joins keep named norm bounds and derive tighter composite
+  bounds only when a rule is available.
+- Spectral joins intersect compatible eigenvalue / singular-value
+  intervals and otherwise retain separate evidence records.
+- Structural joins union exact certificates and run contradiction
+  checks. `positive_definite(A)` and `negative_semidefinite(A)` on
+  the same e-class, for example, produce a coherence diagnostic
+  unless another fact restricts the case to a compatible degenerate
+  condition.
+
+Propagation is primitive-specific. Examples:
+
+- `A + B` consumes entry-wise and norm views; it emits interval
+  addition and norm bounds via triangle inequality.
+- `A * B` consumes norm views strongly and entry-wise views only
+  where a stdlib rule supplies the needed bound; it emits norm bounds
+  via sub-multiplicativity.
+- `cholesky(A)` consumes structural and spectral views
+  (`symmetric`, `positive_definite`, factorable unit law); it emits
+  `lower_triangular(L)`, `positive_diagonal(L)`, and the factorization
+  identity.
+- Spatial-operator lowering may emit structural views such as
+  `graph_laplacian`, `row_sum_zero`, `stencil_pattern`, plus spectral
+  sign facts when the discretization proves them.
+
+`approximate` blocks (§15.1) declare a `tolerance_class` naming the
+view in which the bound is measured. Tier B rewrites (§13.2) route
+via the declared view to the appropriate approximation family. A fact
+in one view never silently implies a fact in another: entry-wise
+bounds do not prove PSD, PSD does not provide useful entry-wise
+bounds, norm bounds do not imply symmetry, and symmetry does not imply
+positive definiteness without an additional rule.
 
 ### 17. Equality-Introducing Machinery
 

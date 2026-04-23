@@ -35,6 +35,7 @@ gap-review stale list, subsequent design locks.
 | `basis` declaration for matrix axes | plain contracts / field-set shapes plus compiler-facing matrix facts | axis signatures do not need a new source construct; contracts already name fields and units |
 | user-marked matrix role types (`LinearMap<...>`, `Covariance<...>`, `Precision<...>`) | matrix facts derived from relations, constraints, stdlib construction provenance, and provider validation | roles would be unchecked annotation mechanics; operations consume facts, not labels |
 | shape expressions in runtime value position | structural-position shape expressions only | shapes are compile-time / plan-time metadata for tensor compatibility, not model values relations can observe |
+| single canonical matrix-envelope representation | parallel envelope views: entry-wise, norm, spectral, structural | the views carry genuinely different evidence; coercion between them requires named rules |
 
 ## Retired annotations / attributes
 
@@ -86,6 +87,7 @@ gap-review stale list, subsequent design locks.
 | two-phase non-convergence penalty semantics as language feature | backend/runtime failure policy plus workflow-selected objective terms | solver non-convergence is backend/runtime behavior; Myco exposes diagnostics and residuals but does not hard-code convergence-penalty injection |
 | automatic semantic fallback when required matrix facts are unknown | unmet-obligation diagnostics unless the user explicitly writes a different valid operation / workflow policy | unknown `positive_definite`, kernel-PD, scaling, or axis facts do not authorize opaque handoff or "make it work" behavior |
 | treating dynamic topology dimensions as silently static tensor shapes | `ShapePhase` facts (`provider_validated`, `runtime_bounded`, `dynamic_unknown`) | runtime topology counts must carry evidence phase; static-specialized code cannot assume them without proof or provider validation |
+| automatic cross-view envelope implication (`entrywise -> PSD`, `PSD -> entrywise`, `norm -> symmetric`, etc.) | named stdlib/compiler implication rules only | envelope views are parallel; no view silently proves another just because both are attached to the same e-class |
 
 ## Retired open questions (closed or structurally void)
 

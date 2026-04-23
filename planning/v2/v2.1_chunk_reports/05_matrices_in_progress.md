@@ -267,37 +267,47 @@ question. Remaining chunk-05 work is fact propagation: envelope
 flavors, shape refinements, structural fact lattice, sparse-pattern
 facts, and primitive fact contracts.
 
-### 3.3 Envelope flavors for matrix-valued quantities — OPEN
+### 3.3 Envelope flavors for matrix-valued quantities — RESOLVED: parallel views
 
-Chunk 04 §3 layered state: equality substrate / envelope metadata /
-adjacent keyed. Envelopes for scalars are intervals `[lo, hi]`. For
-tensors:
+Decision (2026-04-23): matrix envelopes are **multi-view bundles** on
+Layer-2 e-class metadata. The standard views are entry-wise, norm,
+spectral, and structural. No view is canonical; the compiler does not
+coerce one view into another unless a named rule proves the
+implication.
 
-- **Entry-wise bounds.** Each entry has a scalar envelope. Simple;
-  survives elementwise ops cleanly. Fails under matmul (matrix
-  norms aren't subadditive over elementwise bounds).
-- **Operator-norm bounds.** `‖A‖_p ≤ ε` for some norm. Composes
-  under matmul (submultiplicative). Loses entry-level information.
-- **Spectral bounds.** Eigenvalue / singular-value intervals
-  `λ_min(A) ≥ a`, `λ_max(A) ≤ b`. **Needed for Level III
-  `condition_of`.** Composes under some ops (Cholesky preserves
-  positive definiteness), fails under others.
-- **Structural bounds as facts.** "This matrix is PosDef" is itself
-  an envelope fact — not a numerical interval but a structural
-  claim. Enables specialized solver dispatch at lowering.
+- **Entry-wise bounds.** Each entry has a scalar envelope such as
+  `A[i,j] in [lo, hi]`. Best for elementwise ops, sign checks,
+  provider-validation diagnostics, and local bounds.
+- **Norm bounds.** Bounds such as `||A||_2 <= c` or
+  `||A - A_approx||_F <= eps`. Best for matmul perturbation,
+  solver-error bounds, approximation accounting, and `condition_of`.
+- **Spectral bounds.** Eigenvalue / singular-value intervals such as
+  `lambda_min(A) >= a`, `lambda_max(A) <= b`,
+  `sigma_min(A) >= a`, `spectral_radius(A) <= r`. Needed for
+  Cholesky eligibility, covariance validity, stability, and Level III
+  `condition_of`.
+- **Structural certificates.** Exact facts such as `symmetric(A)`,
+  `positive_definite(A)`, `diagonal(A)`, `graph_laplacian(A)`,
+  `row_sum_zero(A)`, `block_diagonal(A, blocks)`, and
+  `zero_pattern(A)`. Zero-numerical-tolerance view: either the
+  property holds or the fact is refuted / unavailable.
 
-Probably all four are needed; they merge differently under different
-ops. Key design questions:
+Merge behavior is per view: entry-wise intervals join as interval
+records; norm bounds remain named and derive tighter bounds only under
+known rules; spectral intervals intersect where compatible; structural
+certificates union with contradiction checks.
 
-- **Canonical form.** Is there a canonical envelope representation
-  that all four flavors project into? Probably not — they capture
-  genuinely different information.
-- **Storage / merging rules.** When two e-classes merge and one has
-  entry-wise bounds and another has spectral, what's the combined
-  envelope?
-- **Propagation rules per op.** A matmul / solve / inverse /
-  decomposition each has a different envelope transformation table.
-  Stdlib must specify these.
+Primitive propagation is explicit. `A + B` consumes entry-wise and
+norm views; `A * B` primarily consumes norm views; `cholesky(A)`
+consumes structural + spectral facts; spatial lowering emits
+structural facts such as `graph_laplacian`, `row_sum_zero`, and
+`stencil_pattern`, plus spectral facts when the discretization proves
+them.
+
+Guardrail: entry-wise bounds do not automatically prove PSD, PSD does
+not imply useful entry-wise bounds, norm bounds do not imply symmetry,
+and symmetry does not imply positive definiteness. Cross-view
+implications must be named compiler / stdlib rules.
 
 ### 3.4 Structural subtype lattice — OPEN
 
