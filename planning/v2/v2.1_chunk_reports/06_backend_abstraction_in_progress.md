@@ -28,10 +28,11 @@ concrete execution through a workflow-selected backend plugin:
 - **GPU lowering for collections / tensor ops** — chunk 02's
   collection aggregation lowering and chunk 05's matrix ops both
   target device kernels. The backend is the same concern.
-- **Opaque callables / neural controllers** — `bind_controller`
-  attaches Python/PyTorch/JAX functions as opaque factors in the
-  graph. The callable runs in some backend's runtime; gradient flow
-  through it depends on backend AD.
+- **Opaque callables / neural controllers** — workflow
+  `bind(path, Controller(...))` attaches Python/PyTorch/JAX
+  functions as opaque factors in the graph. The callable runs in
+  some backend's runtime; gradient flow through it depends on
+  backend AD.
 - **Autodiff ownership** — forward- and reverse-mode AD can be
   Myco-owned (symbolic `deriv` through the graph) or backend-owned
   (JAX `grad`, PyTorch autograd, burn autodiff). Cross-cuts all the
@@ -68,9 +69,9 @@ Nothing is formalized. Ad-hoc mentions scattered across:
 - **Enzyme + Rust** — `v2.1_in_progress.md:1789` mentions "long-term
   Enzyme + Rust path for LLVM-level AD" as an implementation
   direction. No interface lock.
-- **`bind_controller`** — `v2.1_in_progress.md:867, 880-909`
-  attaches opaque callables. No statement about which backend runs
-  them or how gradients flow back.
+- **`Controller` source binding** — older notes around
+  `v2.1_in_progress.md:867, 880-909` attach opaque callables. No
+  statement about which backend runs them or how gradients flow back.
 - **GPU lowering for collections** — `02_collections_iteration_
   report.md:233-242` has a lowering table from collection ops to
   device primitives, but without a backend trait the lowering is
@@ -103,9 +104,10 @@ No single surface ties these together; this chunk is that surface.
    log-density assembly recipe); what backend returns (samples,
    gradients, MCMC traces, diagnostic metadata); serialization of
    stochastic e-classes.
-5. **Opaque callable protocol.** How `bind_controller` attaches
-   callables; how gradient flow works; whether the callable runs in
-   the same backend as the rest of the graph or in a separate one.
+5. **Opaque callable protocol.** How workflow
+   `bind(path, Controller(...))` attaches callables; how gradient
+   flow works; whether the callable runs in the same backend as the
+   rest of the graph or in a separate one.
 6. **Mixed-backend policy.** Single-backend-per-run (simpler) vs.
    SCC-level or op-level backend dispatch (more flexible, more
    machinery).
@@ -169,6 +171,10 @@ CapabilityProfile LinearAlgebraDecompositions
 CapabilityProfile PPLHMC
   requires CoreBackend, RuntimeADReverse
   provides hamiltonian_monte_carlo, mcmc_diagnostics
+
+CapabilityProfile OpaqueCallableAD
+  requires CoreBackend, opaque_callable_runtime, RuntimeADReverse
+  provides opaque_callable_ad, controller_gradients
 ```
 
 Optionality is represented as advertised evidence. The compiler
@@ -322,24 +328,40 @@ posterior geometry, support constraints, and deterministic transforms.
 Per-factor handoff would hide the joint problem from the backend and
 is retired for v2.1.
 
-### 4.5 Opaque callable protocol
+### 4.5 Opaque callable protocol — RESOLVED
 
-`bind_controller(path, fn, input_contract)` currently says "attach
-a callable." Unsaid:
+Decision (2026-04-24): `Controller` sources execute in the selected
+run backend context by default. A callable may be used as a fixed
+opaque source with `opaque_callable_runtime`; it may participate in
+training gradients only when the callable and backend jointly
+advertise differentiability / AD support. Silent gradient stops are
+not allowed.
 
-- Which backend runs the callable (same as the rest of the graph,
-  or separate)?
-- How does gradient flow work when the callable is inside a
-  training-time SCC? Backend AD through the callable requires the
-  callable to live in the same AD frame as the rest of the
-  computation.
-- Can a neural controller with Matrix/Tensor I/O use a different
-  backend than the main numerical workload?
-- Portability: can a callable trained against one backend run
-  against another?
+Committed semantics:
 
-Lean: v2.1 commits to same-backend-per-run for simplicity.
-Cross-backend callable interop is v2.2+.
+- **Runtime context.** Opaque callables run in the same backend
+  context as the rest of the run. Cross-backend callable interop is
+  not a v2.1 guarantee; workflows that need it isolate the callable
+  into a separate run and pass outputs back as sources.
+- **Fixed opaque callable.** A non-trainable controller may execute
+  without AD when it satisfies its input / output contracts and the
+  backend advertises `opaque_callable_runtime`.
+- **Trainable differentiable callable.** A trainable controller
+  requires a differentiable callable contract, `opaque_callable_ad`,
+  and a compatible runtime AD profile such as `RuntimeADReverse`.
+  The callable must live in the selected backend's AD frame.
+- **Required gradient path.** If a training objective requires
+  gradients through a controller and the callable or backend cannot
+  provide them, workflow composition errors with a differentiability
+  / capability diagnostic.
+- **Explicit gradient stop.** A workflow may explicitly mark the
+  controller boundary as a gradient stop. Then the controller may
+  influence downstream values, but its internal parameters are not
+  learned in the current run and the stop is recorded in gradient
+  provenance.
+
+This keeps fixed heuristics and non-differentiable services usable
+without letting an accidental black box silently sever training.
 
 ### 4.6 Mixed-backend policy
 
@@ -384,7 +406,7 @@ policy early, not late.
 - **Chunk 05 (matrices).** All linear-algebra primitives in
   chunk 05's stdlib list (§4) lower through the backend. Chunk 05
   explicitly defers backend-specific choices here.
-- **Spec `bind_controller` section.** Opaque callable protocol
+- **Spec `Controller` source section.** Opaque callable protocol
   (§4.5 above).
 - **Workflow surface.** `run.config.backend`, capability probing,
   fallback policy, version pinning — all new workflow verbs.
@@ -398,7 +420,7 @@ With this chunk locked:
 - Chunk 05's numerical primitives have a concrete target to lower to.
 - Chunk 04's Tier C distributional inference has a concrete protocol.
 - `condition_of` Level III has a concrete `condest` target.
-- `bind_controller` gradient-flow semantics lock.
+- `Controller` source gradient-flow semantics lock.
 - GPU lowering for collections and matrices unifies under one path.
 - Enzyme-via-LLVM direction (from `v2.1_in_progress.md:1789`) can
   be framed as "one possible backend implementation," not a
@@ -416,7 +438,9 @@ With this chunk locked:
    `error`, with `host` / `emulate` as explicit workflow choices.
 4. PPL backend protocol is resolved (§4.4): whole stochastic SCC
    `InferenceTask` handoff.
-5. Draft opaque callable protocol (§4.5).
+5. Opaque callable protocol is resolved (§4.5): same-backend runtime
+   by default, explicit AD capabilities for trainable callables, no
+   silent gradient stops.
 6. Single-backend-per-run is resolved in the canonical spec (§32.1).
 7. Backend versioning is resolved in the canonical spec (§31.4).
 8. Write the v2.1 commitment text into the spec.
@@ -442,7 +466,11 @@ chunk's backend trait surface.
 - **Q4.** PPL backend protocol concrete form. RESOLVED 2026-04-24:
   whole unresolved stochastic SCC handoff after Tier A/B exhaustion;
   backend returns opaque draws / diagnostics, not parametric facts.
-- **Q5.** Opaque callable gradient-flow semantics?
+- **Q5.** Opaque callable gradient-flow semantics. RESOLVED
+  2026-04-24: fixed opaque callables may run without AD; trainable
+  callables require compatible opaque-callable AD capabilities;
+  non-differentiable callables on required gradient paths error
+  unless the workflow explicitly marks a gradient stop.
 - **Q6.** Mixed-backend policy for v2.1. RESOLVED in canonical spec
   §32.1: single-backend-per-run; SCC-level cross-backend handoff is
   future work.

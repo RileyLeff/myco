@@ -4662,10 +4662,13 @@ constructs.
 
 **Summary.** Controllers register learnable parameters through their
 source object. Gradient flow happens via the backend's AD when the
-source advertises a differentiable output contract. Non-
-differentiable controllers are opaque unless the workflow explicitly
-uses them in a fixed context. Trained weights persist across runs
-that bind the same controller source.
+source advertises a differentiable output contract and the selected
+backend advertises opaque-callable runtime / AD support. Fixed opaque
+controllers may run without AD. Non-differentiable controllers on a
+required training-gradient path are workflow-composition errors
+unless the workflow explicitly marks the boundary as a gradient stop.
+Trained weights persist across runs that bind the same controller
+source.
 
 Controllers usually wrap differentiable components (neural nets with
 learnable weights). Gradient semantics:
@@ -4677,12 +4680,25 @@ learnable weights). Gradient semantics:
 - **Backward pass.** Objective gradients from workflow observations
   (§13.8) flow through the model graph to the controller's output,
   into the controller's parameters, via the backend's AD facility
-  (§31). The compiler treats the controller as a differentiable black
-  box when its output contract advertises `Differentiable`.
-- **Opaque callable fallback.** Controllers without `Differentiable`
-  are opaque: no gradient flows back and parameters cannot be learned
-  in the current run. Useful for fixed heuristics or
-  non-differentiable routines.
+  (§31). This requires the controller's contract to advertise
+  `Differentiable` where gradients must pass, and requires the
+  selected backend to advertise `opaque_callable_runtime`,
+  `opaque_callable_ad`, and the relevant runtime AD profile.
+- **Opaque fixed callable.** A controller may run as a fixed opaque
+  source without AD, for example `Controller(..., trainable=False)`.
+  Useful for fixed heuristics, lookup services, or non-differentiable
+  routines whose outputs are model inputs.
+- **Required gradient path.** If a training objective requires
+  gradients through a controller and the controller or backend cannot
+  provide them, workflow composition fails with a capability /
+  differentiability diagnostic. The compiler does not silently insert
+  a gradient stop.
+- **Explicit gradient stop.** A workflow may explicitly mark the
+  controller boundary as a gradient stop. In that case the controller
+  may influence downstream values, but its internal parameters are
+  not learned in the current run and upstream gradient accounting
+  records the stop. Exact Python spelling is a workflow API detail;
+  the semantic requirement is explicitness.
 - **Cross-run weight persistence.** Trained weights persist across
   runs that bind the same controller (§23.3).
 
@@ -5690,6 +5706,10 @@ CapabilityProfile LinearAlgebraDecompositions
 CapabilityProfile PPLHMC
   requires CoreBackend, RuntimeADReverse
   provides hamiltonian_monte_carlo, mcmc_diagnostics
+
+CapabilityProfile OpaqueCallableAD
+  requires CoreBackend, opaque_callable_runtime, RuntimeADReverse
+  provides opaque_callable_ad, controller_gradients
 ```
 
 The compiler lowers each plan or SCC to a set of required backend
@@ -5730,13 +5750,15 @@ Backends advertise capabilities (e.g. `supports_complex`,
 `supports_hamiltonian_monte_carlo`, `supports_sparse_matmul`,
 `supports_cholesky`, `supports_svd`,
 `supports_runtime_bounded_shapes`, `supports_event_replan`,
-`supports_dynamic_keyed_axes`) and capability profiles such as
+`supports_dynamic_keyed_axes`, `opaque_callable_runtime`,
+`opaque_callable_ad`) and capability profiles such as
 `LinearAlgebraBasic`, `LinearAlgebraDecompositions`,
-`RuntimeADReverse`, `DynamicTopology`, or `PPLHMC`. Profiles expand
-through their `requires` / `provides` / `implies` rules into concrete
-capability requirements. The compiler verifies the resulting
-requirement set at plan-binding time. When a required capability is
-missing, the compiler consults the workflow's fallback policy:
+`RuntimeADReverse`, `DynamicTopology`, `OpaqueCallableAD`, or
+`PPLHMC`. Profiles expand through their `requires` / `provides` /
+`implies` rules into concrete capability requirements. The compiler
+verifies the resulting requirement set at plan-binding time. When a
+required capability is missing, the compiler consults the workflow's
+fallback policy:
 
 - **`error`.** Fail at plan-binding time with a capability-mismatch
   diagnostic (workflow-composition error tier, §19.4). Conservative
@@ -5795,6 +5817,8 @@ Python during simulation for `Controller` sources, threads
 gradients through Python for training emission, and manages memory
 and device-residency for interop. The compiler sees only the
 callable's advertised input and output contract, not its interior.
+Trainable callables require compatible backend opaque-callable AD;
+fixed opaque callables do not.
 
 `bind(path, Controller(...))` (§24.2) hands the compiler a Python
 callable (a learned function, typically a neural network). The backend provides
@@ -5804,6 +5828,22 @@ and manages any memory / device-residency needed for the interop.
 The opaque-callable runtime sits at the backend ↔ workflow boundary;
 the compiler does not see the callable's interior, only its advertised
 input / output contract.
+
+Opaque callables execute in the selected run backend context by
+default (§32.1). A callable may execute as a fixed value-producing
+source when it satisfies its input / output contracts and the backend
+advertises `opaque_callable_runtime`. A callable may participate in
+training gradients only when the workflow marks it trainable, the
+callable contract advertises the necessary differentiability, and
+the selected backend advertises `opaque_callable_ad` plus a compatible
+runtime AD profile. A callable trained under one backend is portable
+to another only when serialization, tensor layout, callable runtime,
+and AD capabilities are compatible (§23.3).
+
+If a non-differentiable or backend-incompatible callable lies on a
+required training-gradient path, workflow composition errors by
+default. Gradient-stop behavior is legal only when explicitly marked
+by the workflow; it is never inferred silently.
 
 #### 31.4 Backend Versioning
 
