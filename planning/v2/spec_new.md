@@ -824,15 +824,20 @@ polymorphism** — a value that is one of several shapes — where
 contracts capture **behavioral polymorphism**. Variants may be unit,
 positional, or struct-like. Dispatch uses flat, exhaustive `match`;
 there is no wildcard/default arm in the core surface, and enum-typed
-values must be narrowed by `match` before variant fields are
-accessed. The compiler picks compile-time specialization (when the
-discriminant is static after workflow binding) or a runtime
+values must be narrowed before variant fields are accessed. Ordinary
+model bodies narrow with `match`; event bodies may also narrow with an
+event `where ... is Variant` guard. The compiler picks compile-time
+specialization (when the discriminant is static after workflow
+binding) or a runtime
 discriminant-tagged kernel (when dynamic). Enums compose with
 contracts; variant fields may themselves be contract-typed. Stdlib
 ships at least `Prior<S>` (fixed value or distribution over sample
 type S), `Maybe<T>`, and `Result<T, E>`. Event-triggered variant
-transitions (FSMs), lifted-arithmetic sugar through `Prior<S>`, and
-workflow binding surface are open.
+transitions use event-only `becomes` with full explicit construction
+of the next variant. Workflow enum binding uses dumb-data tagged
+records, with optional thin Python helpers that produce those records.
+`Prior<S>` has no lifted arithmetic or `materialize` sugar in v2.1;
+users write the exhaustive `match` explicitly.
 
 Four independent pressures motivate enums as a single mechanism:
 number-or-distribution materialization of the same model, Mode B
@@ -894,8 +899,9 @@ matching beyond destructuring the top-level variant. Those features
 can be added later as sugar only if they preserve exhaustiveness and
 diagnostic clarity.
 
-Enum fields are not projected implicitly. This is invalid even if some
-variants contain a `height` field:
+Enum fields are not projected implicitly. Outside an explicit
+narrowing context, this is invalid even if some variants contain a
+`height` field:
 
 ```myco
 stage.height
@@ -915,6 +921,63 @@ If many variants share a meaningful behavioral surface, the modeler
 should express that behavior as a contract, or as a relation on the
 enum that matches internally. Shared field names alone do not create
 a structural projection surface.
+
+Event-triggered variant transitions use `becomes` in event bodies:
+
+```myco
+event germinate(p: Plant where p.stage is Seed) {
+    p.stage becomes Seedling {
+        age: p.stage.age,
+        height: germination_height,
+    }
+}
+```
+
+`becomes` is valid only in `event` bodies and always crosses a
+regime boundary (§8.10, §10). The event's `where p.stage is Seed`
+guard narrows `p.stage` inside the event body so old-variant fields
+may be read while constructing the next variant. The new variant must
+be fully constructed: every field required by `Seedling` must be
+provided, preserved fields must be copied explicitly, and same-name
+fields never carry over implicitly. Fields from the old variant that
+are not copied leave scope in the next regime. Historical values must
+be written explicitly into the new variant or into a separate event /
+history record. `replaces` remains only for named obligation
+retraction (§10.5); an ordinary variant transition does not imply
+`replaces`.
+
+Workflow binding for enum-typed fields uses catalog-validated tagged
+records, not generated Python enum classes:
+
+```python
+workflow.bind("growth_rate", {"tag": "Fixed", "value": 0.03})
+workflow.bind("stage", {"tag": "Seedling",
+                         "fields": {"age": 12.0, "height": 0.08}})
+```
+
+Unit variants omit payload, positional variants use `value` (or an
+ordered payload record if the variant has multiple positional
+fields), and struct-like variants use `fields`. The Python library may
+offer helpers such as `myco.variant("Fixed", value=...)`, but helpers
+only produce the same dumb-data representation. They do not make
+Python classes mirror `.myco` enum types.
+
+`Prior<S>` is explicit-match-only in v2.1. There is no arithmetic
+lifting through `Prior<S>` and no stdlib `materialize(prior, out)`
+sugar:
+
+```myco
+match growth_rate {
+    Fixed(r) => {
+        d(height) = r * height
+    }
+    Random(dist) => {
+        let r: Scalar<per_day>
+        r ~ dist
+        d(height) = r * height
+    }
+}
+```
 
 ### 4. Values and Literal Numerics
 
@@ -1860,13 +1923,15 @@ the compiler assembles the full update from the resolved keys.
 
 **Summary.** `event` declarations mutate the simulation graph
 structure. Referential-truth semantics: entities do not know they are
-dead, events add facts, no tombstoning, no retraction. Firing order,
-generic expansion, cross-container events, and `replaces` /
-monotonicity live here.
+dead, events add facts, no tombstoning, no retraction. Enum variant
+transitions use event-only `becomes` with explicit next-regime
+construction. Firing order, generic expansion, cross-container
+events, and `replaces` / monotonicity live here.
 
 `event` declarations for topology change. Referential-truth semantics:
 things do not know they are dead. Events add facts; no tombstoning, no
-retraction.
+retraction. When an event changes an enum variant, it constructs the
+next variant explicitly with `becomes` (§10.6).
 
 #### 10.0 Event Triggers
 
@@ -2029,6 +2094,49 @@ The harder case of a user-written `event` that logically retracts
 a prior user claim remains open and is tracked in §35 Other
 Opens. Events only add facts; `replaces` applies only
 to compiler-generated defaults, not arbitrary prior claims.
+
+#### 10.6 Enum Variant Transitions
+
+**Summary.** Event-triggered enum variant transitions use `becomes`.
+They are event-only regime-boundary crossings, not ordinary
+assignment. The next variant is fully constructed explicitly; no
+same-name field carryover occurs. Removed old-variant fields leave
+scope unless copied into the next variant or an event/history record.
+
+Enums whose discriminant changes over time participate in the same
+regime-boundary model as shape-changing SCCs (§8.10). Source syntax:
+
+```myco
+event mature(p: Plant where p.stage is Seedling) {
+    p.stage becomes Mature {
+        age: p.stage.age,
+        height: p.stage.height,
+        dbh: initial_dbh,
+    }
+}
+```
+
+Rules:
+
+- `becomes` is valid only in `event` bodies.
+- The event guard `where p.stage is Seedling` narrows the old variant
+  for the event body.
+- The right-hand side names the next variant and supplies every field
+  required by that variant.
+- Preserved values are ordinary expressions and must be copied
+  explicitly.
+- Same-name fields never carry over implicitly.
+- Fields that existed only on the old variant leave scope after the
+  transition.
+- Historical values are available only if the model writes them into
+  the new variant or a separate event/history record.
+- `becomes` does not retract relations and does not imply `replaces`;
+  `replaces` is still only for named obligation retraction (§10.5).
+
+Lowering may represent a dynamic enum with tags, branches, masks, or
+regime-specific plans depending on backend capability, but the Myco
+semantics are one event-boundary variant replacement with explicit
+field construction.
 
 ### 11. Geometry and Locus
 
@@ -4671,6 +4779,28 @@ types at runtime. Per-instance heterogeneity must be represented in
 the source model, with sum types / enum variants as the intended
 mechanism (§3.10, §35).
 
+Enum-typed workflow bindings use dumb-data tagged records. The
+canonical representation is a mapping with a `tag` plus either
+`value` for a single positional payload or `fields` for a struct-like
+payload:
+
+```python
+workflow.bind("growth_rate", {"tag": "Fixed", "value": 0.03})
+workflow.bind("stage", {"tag": "Seedling",
+                         "fields": {"age": 12.0, "height": 0.08}})
+```
+
+The Python library may provide thin helpers such as
+`myco.variant("Fixed", value=...)`, but helpers only produce the same
+tagged record. They do not import or generate Python mirror classes
+for `.myco` enum types. The compiled node catalog owns validation:
+unknown tags, missing fields, extra fields, field-type mismatches,
+and unit/schema mismatches are workflow-composition errors. A binding
+whose discriminant is uniform for a whole field or population can be
+specialized statically; per-instance tagged data remains a dynamic
+discriminant and lowers according to backend capability (§3.10,
+§10.6, §21).
+
 #### 23.1 Runtime `where` at Workflow Composition
 
 **Summary.** The `where` keyword spans three layers: compile-time
@@ -6294,11 +6424,13 @@ references.
   machinery remain open.
 - **Chunk 11.** Sum types / enums. Core surface locked (§3.10):
   `enum`, flat exhaustive `match`, unit / positional / struct-like
-  variants, no wildcard/default arm, match-before-field-access, and
-  static-vs-dynamic discriminant lowering. Event-triggered variant
-  transitions, lifted-arithmetic sugar, workflow binding surface, and
-  some lowering details remain open. Resolves the Mode B open in §35
-  and the number-or-distribution materialization question.
+  variants, no wildcard/default arm, explicit narrowing before field
+  access, static-vs-dynamic discriminant lowering, event-only `becomes`
+  transitions, workflow tagged-record binding, and explicit-match-only
+  `Prior<S>` in v2.1. Extended pattern sugar, diagnostics, and some
+  implementation-level lowering details remain open. Resolves the
+  Mode B open in §35 and the number-or-distribution materialization
+  question.
 - **Chunk 12.** Resolved cost/objective vocabulary. `cost_of(expr)`
   owns planner/extraction economics (§14.2, §19.1);
   `objective_terms(residual)` owns training-objective decomposition
@@ -6472,10 +6604,10 @@ typed variant field inside an enum lets a population carry mixed VC
 families or any other contract-bound heterogeneity, with the compiler
 picking compile-time specialization when the discriminant is static
 and a runtime discriminant-tagged kernel when per-instance. Core enum
-syntax and exhaustive flat matching are locked. Remaining chunk 11
-items are event-triggered variant transitions (FSM / life-stage
-dynamic topology), workflow binding surface for enum-typed fields,
-lifted sugar, and implementation-level lowering details.
+syntax, exhaustive flat matching, event-only `becomes` transitions,
+and workflow tagged-record binding are locked. Lifted `Prior<S>` sugar
+does not ship in v2.1. Remaining chunk 11 items are extended pattern
+sugar, diagnostics, and implementation-level lowering details.
 Cross-refs chunk 08 (three modes), chunk 09 (dumb-data Python),
 chunk 11 (sum types), §3.10 (enums), §7 (contracts), §12
 (collections / populations).
@@ -6622,7 +6754,7 @@ if encountered in identifier position.
 
 **Body-form keywords.** `let`, `if`, `else`, `for`, `in`, `is`,
 `match`, `trace`, `requires`, `replaces`, `conserved`, `approximate`,
-`initial`, `temporal`, `when`, `as`, `on`, `field`.
+`initial`, `temporal`, `when`, `becomes`, `as`, `on`, `field`.
 
 **Stochastic operator.** `~` (distribution-binding operator;
 stochastic relation). SDE families carry integration-convention type

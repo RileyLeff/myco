@@ -6,12 +6,13 @@ syntax sketch, the compile-time-vs-runtime specialization story, the
 relationship to contracts, the stdlib `Prior<S>` example, and the
 open items.
 
-**Status: core surface locked. Motivation, `enum` declaration syntax,
-flat exhaustive `match`, match-before-field-access, static/dynamic
-discriminant lowering, contract composition, and stdlib `Prior<S>` /
-`Maybe<T>` / `Result<T, E>` are committed. Event-triggered variant
-transitions, lifted-arithmetic sugar, workflow binding surface, and
-implementation-level lowering details remain open.**
+**Status: core surface closed. Motivation, `enum` declaration syntax,
+flat exhaustive `match`, explicit narrowing before variant-field
+access, static/dynamic discriminant lowering, contract composition,
+event-only `becomes` variant transitions, workflow tagged-record
+binding, explicit-match-only `Prior<S>`, and stdlib `Prior<S>` /
+`Maybe<T>` / `Result<T, E>` are committed. Extended pattern sugar,
+diagnostics, and implementation-level lowering details remain open.**
 
 ## Why enums
 
@@ -71,7 +72,7 @@ injection breaks.
 
 Structural polymorphism keeps the distinction visible. An enum
 `Prior<S> = Fixed(S) | Random(some Distribution<S>)` requires
-the user (or a lifted-arithmetic sugar) to match on the variant, at
+the user to match on the variant, at
 which point `~ d` appears syntactically on the `Random` branch and
 the PPL machinery sees it.
 
@@ -131,7 +132,9 @@ missing variants are a hard error. The core surface has no wildcard
 arm, no default arm, no guards, no or-patterns, and no deep nested
 patterns. The match destructures only the top-level enum variant.
 
-Enum-typed values must be narrowed before variant fields are accessed:
+Enum-typed values must be narrowed before variant fields are accessed.
+Ordinary model bodies narrow with `match`; event bodies may also
+narrow with an event `where ... is Variant` guard:
 
 ```myco
 // invalid
@@ -148,6 +151,41 @@ match stage {
 Common field names do not create an implicit projection surface. If
 variants share behavior, express that behavior through a contract or
 through a relation on the enum that matches internally.
+
+## Event-triggered variant transitions
+
+Variant transitions use `becomes` in event bodies:
+
+```myco
+event germinate(p: Plant where p.stage is Seed) {
+    p.stage becomes Seedling {
+        age: p.stage.age,
+        height: germination_height,
+    }
+}
+```
+
+Rules:
+
+- `becomes` is the only source form for enum-variant transition.
+- `becomes` is valid only in `event` bodies.
+- A variant transition is always a regime-boundary crossing.
+- The event guard `where p.stage is Seed` narrows the old variant for
+  the event body.
+- The next variant must be fully constructed.
+- Preserved fields must be copied explicitly.
+- Same-name fields never carry over implicitly.
+- Removed old fields leave scope in the next regime.
+- Historical values must be copied into the next variant or into an
+  event/history record if the model needs them.
+- `replaces` is only for named obligation retraction; ordinary
+  variant transition does not imply `replaces`.
+
+This keeps dynamic shape change explicit without making users model
+backend masks by hand. A JAX-style backend may lower dynamic enums
+with masks, a CPU backend may branch, and a replan-oriented backend
+may switch plans at the event boundary; those are execution choices,
+not different source semantics.
 
 ## Compile-time vs runtime specialization
 
@@ -281,7 +319,37 @@ Open what else ships. Candidates: `Either<L, R>`, `NonEmpty<T>`,
 `OrderedPair<T>`. All of these can be added post-v2.1; only `Prior`,
 `Maybe`, `Result` look load-bearing for the core story.
 
-## Sugar: lifted arithmetic through `Prior<S>`
+## Workflow binding
+
+Python binds enum-typed fields with dumb-data tagged records, not
+generated Python enum classes:
+
+```python
+workflow.bind("growth_rate", {"tag": "Fixed", "value": 0.03})
+workflow.bind("stage", {"tag": "Seedling",
+                         "fields": {"age": 12.0, "height": 0.08}})
+```
+
+Canonical payload shape:
+
+- Unit variant: `{"tag": "None"}`
+- Single positional variant: `{"tag": "Fixed", "value": ...}`
+- Multi-positional variant: tagged record with ordered payload
+  according to the catalog's variant schema.
+- Struct-like variant: `{"tag": "Seedling", "fields": {...}}`
+
+The Python library may expose thin helpers such as
+`myco.variant("Fixed", value=...)`, but helpers only produce the same
+tagged record. They do not import `.myco` enum types as Python
+classes and do not drive dispatch by Python class identity.
+
+Validation belongs to the compiled node catalog: unknown tags,
+missing fields, extra fields, field-type mismatches, unit/schema
+mismatches, and invalid contract-typed variant payloads are workflow-
+composition errors. A uniform tag for a whole field/population enables
+static specialization; per-instance tags remain dynamic discriminants.
+
+## No lifted arithmetic through `Prior<S>` in v2.1
 
 Writing explicit matches in every relation body is painful when the
 enum wraps a single-value variant plus a distribution variant:
@@ -300,19 +368,11 @@ temporal y:
     }
 ```
 
-Proposed sugar: arithmetic operators (`+`, `*`, etc.) and relation
-invocation lift through `Prior<S>` automatically. `a * t + b` where
-`a: Prior<Pa>` desugars to a match that injects `~` on the `Random`
-branch and the concrete value on the `Fixed` branch.
-
-This is convenience, not core semantics. It can land post-v2.1 once
-the base enum mechanism is shipped. Users can write explicit matches
-in the interim.
-
-Open whether the sugar extends to all enums or only to stdlib
-`Prior<S>`, `Maybe<T>`, etc. (special-cased). Rust's approach
-(explicit match for user enums, `?` operator for `Result`, etc.) is a
-reasonable reference.
+Decision: no lifted arithmetic, no automatic relation invocation
+lifting, and no stdlib `materialize(prior, out)` sugar in v2.1.
+Users write the exhaustive match. Sugar may be reconsidered only
+after real Myco models show that explicit matching is painful enough
+to justify a new surface.
 
 ## What this locks
 
@@ -323,15 +383,21 @@ reasonable reference.
   exhaustiveness at type-check time.
 - The core match surface has no wildcard/default arm, guards,
   or-patterns, or deep nested patterns.
-- Enum-typed values must be matched before variant fields are
-  accessed; common field names do not auto-project.
+- Enum-typed values require explicit narrowing before variant fields
+  are accessed; common field names do not auto-project.
+- Event-triggered variant transitions use event-only `becomes`, with
+  full explicit construction and no implicit field carryover.
 - Lowering has two paths: compile-time specialization when the
   discriminant is static after workflow binding, runtime
   discriminant-tagged kernel when dynamic. Compiler picks.
 - Enums compose with contracts; enum variants can carry contract-
   typed fields. Contracts handle behavioral polymorphism; enums
   handle structural polymorphism.
+- Workflow binding uses dumb-data tagged records; Python helpers are
+  optional record constructors, not generated enum classes.
 - Stdlib ships `Prior<S>`, `Maybe<T>`, `Result<T, E>` at minimum.
+- `Prior<S>` is explicit-match-only in v2.1; no lifted arithmetic and
+  no `materialize(prior, out)` sugar.
 
 ## Open items
 
@@ -344,23 +410,16 @@ reasonable reference.
 - **Generics interaction.** How enums interact with the type-generic
   system (§3.6). `Prior<S>` should just work, but the implementation
   machinery needs to be spelled out.
-- **Event-triggered variant transitions.** For FSM use (life stages),
-  events mutate the variant. How this interacts with `replaces`
-  obligations, the e-graph's monotonicity invariant, and the
-  dynamic-topology machinery in §10. Likely clean but needs spelling
-  out.
 - **Projection sugar after narrowing.** The core rule is match first;
   no implicit projection from enum-typed values. Future sugar may
   reduce repetition after explicit narrowing, but must preserve the
   same semantics.
-- **Lifted arithmetic sugar.** Whether it ships in v2.1, post-v2.1,
-  or never. If it ships, for which enums.
-- **Serialization / workflow binding.** How Python binds an enum-
-  typed field. Candidates: tagged dict (`{"tag": "Fixed", "value":
-  3.0}`), factory pattern (`myco.fixed(3.0)` returns a tagged handle
-  Python-side), discriminator string (`bind("a", variant="Fixed",
-  value=3.0)`). Chunk 09 dumb-data principle applies; the Python side
-  should not import the enum as a Python type.
+- **Prior sugar.** Lifted arithmetic and `materialize(prior, out)` do
+  not ship in v2.1. Revisit only after real models show repeated
+  explicit matches are painful enough to justify sugar.
+- **Workflow binding helpers.** Tagged records are canonical. Exact
+  helper names (`myco.variant(...)`, factory functions, or
+  `bind_variant(...)`) are workflow API polish.
 - **Discriminant representation.** Integer tag, string tag, pointer-
   based tagged pointer. Backend-specific; probably not a language
   surface concern. Flag in §31.
@@ -395,14 +454,17 @@ reasonable reference.
 - Compile-time specialization when discriminant is static
 - Runtime discriminant-tagged kernels when dynamic
 - Contract-typed variant fields
-- Workflow-binding primitives (dumb-data, factory pattern)
+- Event-only `becomes` variant transitions
+- Workflow-binding tagged records (helpers optional)
+- Explicit-match-only `Prior<S>`
 
 Deferred post-v2.1:
 
 - Nested patterns, guards, or-patterns
-- Lifted-arithmetic sugar through `Prior<S>`
-- Event-triggered variant mutation (FSM dynamic topology) — depends
-  on §10 open items
+- Lifted-arithmetic / `materialize` sugar through `Prior<S>` if real
+  model pressure justifies it
+- Projection sugar after explicit enum narrowing
+- Exact Python helper names and backend tag representation
 
 ## Status
 
@@ -410,6 +472,8 @@ Motivation locked (four converging pressures; contracts insufficient
 alone). Core surface locked (`enum`, unit / positional / struct-like
 variants, flat exhaustive `match`, no wildcard/default arm, no
 implicit enum-field projection, static/dynamic lowering, composition
-with contracts, stdlib `Prior<S>` / `Maybe<T>` / `Result<T, E>`).
-Event-triggered variant transitions, lifted sugar, workflow binding,
-and implementation-level lowering details remain open.
+with contracts, event-only `becomes` transitions, workflow tagged
+records, explicit-match-only `Prior<S>`, stdlib `Prior<S>` /
+`Maybe<T>` / `Result<T, E>`). Extended pattern sugar, diagnostics,
+exact workflow helper names, and implementation-level lowering
+details remain open.
