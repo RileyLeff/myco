@@ -161,7 +161,7 @@ are further refinements on `Matrix<U, n, n>`.
 Tensor<U, shape>           # primitive; arbitrary rank
 Vector<U, n>   := Tensor<U, (n,)>
 Matrix<U, m, n> := Tensor<U, (m, n)>
-Scalar<U>      := Tensor<U, ()>   # reconciliation with existing Scalar TBD
+Scalar<U>      := Tensor<U, ()>   # normative source spelling for rank 0
 ```
 
 Rank-specific operations are statically scoped on the refinement:
@@ -185,18 +185,30 @@ Vector / Matrix / Tensor primitives):**
   their runtime — the type system captures rank statically; the
   backend (chunk 06) handles execution.
 
-**Reconciliation with existing Scalar<U>.** `Scalar<U>` today is a
-dimensioned number, not a rank-0 tensor. Options:
+**Scalar reconciliation — RESOLVED (2026-04-24).** `Scalar<U>` is
+formally sugar for `Tensor<U, ()>`, while remaining the normative
+source spelling for ordinary rank-0 quantities.
 
-- (i) Redefine `Scalar<U> := Tensor<U, ()>`. Unifies everything;
-  breaks no user code (Scalar continues to behave the same).
-- (ii) Keep `Scalar<U>` distinct; provide bidirectional implicit
-  conversion with `Tensor<U, ()>`. Less disruptive internally;
-  requires clear conversion rules.
+Users write:
 
-Lean: (i) — unification is cleaner and the ergonomic surface stays
-the same. Users write `Scalar<meters>`, compiler sees
-`Tensor<meters, ()>`.
+```myco
+temp: Scalar<kelvin>
+```
+
+The compiler elaborates:
+
+```text
+temp: Tensor<kelvin, ()>
+shape(temp) = ()
+rank(shape(temp)) = 0
+```
+
+Diagnostics preserve `Scalar<U>` unless shape reasoning is the point
+of the diagnostic. There is no `Scalar <-> Tensor0` conversion edge:
+the two are not distinct semantic types. This unifies shape, unit,
+envelope, AD, distribution, `convert`, and `approximate` machinery on
+one value substrate without making users write rank-0 tensor syntax
+in ordinary models.
 
 ### 3.2 Heterogeneous-unit question — RESOLVED: matrix facts
 
@@ -266,8 +278,7 @@ obligation to prove or validate the fact, not a grant of the fact.
 
 This closes the type-signature branch of the heterogeneous-unit
 question. Remaining chunk-05 work after the resolved sections below:
-scalar reconciliation, matrix literal syntax, and final commitment
-text.
+matrix literal syntax and final commitment text.
 
 ### 3.3 Envelope flavors for matrix-valued quantities — RESOLVED: parallel views
 
@@ -680,13 +691,12 @@ closing):
 Completed: §3.6 shape-expression model, §3.3 envelope views, §3.4
 structural fact lattice, §3.5 tensor `convert` scope, §3.7
 collections boundary, §3.8 dynamic topology shape handling, and §4
-primitive catalog.
+primitive catalog. Scalar reconciliation is also closed: `Scalar<U>`
+is rank-0 `Tensor<U, ()>` with scalar source spelling.
 
-1. **Resolve scalar reconciliation (§3.1 Q6).** Decide
-   `Scalar<U> := Tensor<U, ()>` vs distinct scalar constructor.
-2. **Resolve matrix literal syntax (§4 Q11).** Does v2.1 ship a
+1. **Resolve matrix literal syntax (§4 Q11).** Does v2.1 ship a
    literal form, or constructors/providers only?
-3. **Write the final v2.1 commitment text into the spec.**
+2. **Write the final v2.1 commitment text into the spec.**
 
 Parallelizable with chunk 06 (backend abstraction) — chunk 06
 needs this chunk's primitive list to have lowering targets; this
@@ -717,8 +727,9 @@ fact contracts being established for `Σ`.
   materialization with proven pattern facts, and
   structural-refinement widening; precision, storage order, device
   placement, and role relabels are out (§3.5).
-- **Q6.** Scalar reconciliation — redefine `Scalar<U> := Tensor<U,
-  ()>` or keep distinct with implicit conversion? (§3.1)
+- **Q6.** Scalar reconciliation. RESOLVED 2026-04-24:
+  `Scalar<U>` is rank-0 `Tensor<U, ()>` with `Scalar` retained as
+  the normative source spelling (§3.1).
 - **Q7.** Sparse pattern facts. RESOLVED 2026-04-23:
   `zero_pattern` / `banded` / `block_sparse` are facts with evidence
   phase; storage representation remains backend-level (§3.4).

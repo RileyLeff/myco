@@ -395,21 +395,39 @@ interaction, field-level conservation.
 
 #### 3.8 Scalar, Tensor, and Shape Expressions
 
-**Summary.** How `Scalar<U>` relates to `Tensor<U, ()>`, how
-collections relate to tensor axes, which transformations live in
-`convert` versus the backend trait, and how shape expressions attach
-structure to tensors. Shapes are structural expressions over
-dimensions, axes, products, partitions, and provider-bound quantities.
-They may appear in type parameters, refinement predicates, stdlib
-primitive contracts, and diagnostics; they are not runtime model
-values. The spec defines the broad shape-expression AST now, while
-the guaranteed solver subset is intentionally staged.
+**Summary.** `Scalar<U>` is the normative source spelling for rank-0
+tensor values and elaborates to `Tensor<U, ()>`. `Vector` and
+`Matrix` are rank-refined tensor aliases. Collections relate to
+tensor axes only through explicit extraction. `convert` handles
+meaning-preserving tensor isomorphisms / materializations /
+widenings, while backend layout remains a backend fact. Shapes are
+structural expressions over dimensions, axes, products, partitions,
+and provider-bound quantities. They may appear in type parameters,
+refinement predicates, stdlib primitive contracts, and diagnostics;
+they are not runtime model values. The spec defines the broad
+shape-expression AST now, while the guaranteed solver subset is
+intentionally staged.
 
-Open: whether `Scalar<U>` is formally sugar for `Tensor<U, ()>`
-(shape-zero tensor) or a distinct primitive with coercion rules
-(chunk 05 Q6). The unification is attractive: it lets structural
-refinements, convert variants, and envelope flavors live on a single
-hierarchy. Chunk 05 carries the resolution.
+`Scalar<U>` is formally sugar for `Tensor<U, ()>`. Users should write
+`Scalar<U>` for ordinary rank-0 quantities; compiler internals record
+one unified tensor substrate:
+
+```text
+Scalar<U> := Tensor<U, ()>
+Vector<U, n> := Tensor<U, (n,)>
+Matrix<U, m, n> := Tensor<U, (m, n)>
+
+shape(scalar_value) = ()
+rank(shape(scalar_value)) = 0
+```
+
+Diagnostics preserve the humane spelling: a temperature field is
+reported as `Scalar<kelvin>` unless the diagnostic is specifically
+about shape reasoning. There is no implicit `Scalar <-> Tensor0`
+conversion edge because there are not two semantic types to convert
+between. Unit envelopes, distribution facts, derivative facts,
+tensor facts, and `convert` / `approximate` metadata all attach to
+the same underlying value.
 
 Shape expressions are compile-time / plan-time structural metadata.
 They describe tensor extent and compatibility; they do not introduce
@@ -782,8 +800,6 @@ different mathematical operation.
 
 Remaining chunk-05 matrix work:
 
-- **Scalar reconciliation.** `Scalar<U> := Tensor<U, ()>` vs a
-  distinct scalar constructor remains a separate scope call.
 - **Matrix literal syntax.** Whether v2.1 ships a literal form or
   relies on constructors / providers remains open.
 
@@ -901,11 +917,12 @@ and the modeler-facing invariants.
 #### 5.0 Unit System Fundamentals
 
 **Summary.** `base_unit` introduces an orthogonal dimension axis.
-`Scalar<U>` is the unit-parameterized quantity primitive. Derived units
-are products, quotients, and scalar multiples of existing units.
-Internally, all computation uses base-SI magnitudes; declared units are
-a presentation layer. No implicit unit inference: every `Scalar<U>`
-must have its unit established syntactically or by workflow binding.
+`Scalar<U>` is the unit-parameterized rank-0 quantity spelling.
+Derived units are products, quotients, and scalar multiples of
+existing units. Internally, all computation uses base-SI magnitudes;
+declared units are a presentation layer. No implicit unit inference:
+every `Scalar<U>` must have its unit established syntactically or by
+workflow binding.
 
 A `base_unit` declaration introduces a new orthogonal axis in the
 dimension exponent vector. Example:
@@ -916,9 +933,10 @@ base_unit second
 base_unit kilogram
 ```
 
-`Scalar<U>` is the built-in parameterized type for "a real number
-measured in unit U". Derived units are defined as products, quotients,
-and scalar multiples of existing units:
+`Scalar<U>` is the built-in source spelling for "a real number
+measured in unit U"; internally it is the rank-0 tensor
+`Tensor<U, ()>` (§3.8). Derived units are defined as products,
+quotients, and scalar multiples of existing units:
 
 ```myco
 unit meter_per_second = meter / second
@@ -5805,9 +5823,9 @@ vocabulary is resolved and kept here only as a completed reference.
 - **Chunk 05.** Matrix details. Heterogeneous-unit type mechanics are
   resolved by matrix facts (§3.9); shape expressions, envelope
   views, the structural fact lattice, tensor `convert` scope, dynamic
-  topology shape handling, and the primitive catalog are locked.
-  Remaining work covers scalar reconciliation and matrix literal
-  syntax.
+  topology shape handling, scalar reconciliation, and the primitive
+  catalog are locked. Remaining work covers matrix literal syntax and
+  final commitment text.
 - **Chunk 06.** Backend abstraction.
 - **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04
   (expression e-graph substrate), 05 (refinement-lattice examples
