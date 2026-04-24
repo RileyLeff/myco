@@ -816,21 +816,23 @@ layout / device selection, and runtime estimators are chunk-06
 concerns; they do not reopen the type, fact, assembly, or obligation
 model above.
 
-#### 3.10 Sum Types / Enums (STUB)
+#### 3.10 Sum Types / Enums
 
-**Summary.** Tagged sum types (enums) are a core composite-type form
+**Summary.** Tagged sum types (`enum`) are a core composite-type form
 alongside newtype and record. They capture **structural
-polymorphism** — a field that is one of several shapes — where
+polymorphism** — a value that is one of several shapes — where
 contracts capture **behavioral polymorphism**. Variants may be unit,
-positional, or struct-like; matches are exhaustive; the compiler
-picks compile-time specialization (when the discriminant is static
-after workflow binding) or a runtime discriminant-tagged kernel
-(when dynamic). Enums compose with contracts; variant fields may
-themselves be contract-typed. Stdlib ships at least `Prior<T>`
-(number-or-distribution), `Maybe<T>`, and `Result<T, E>`. Exact
-syntax, pattern-matching power, event-triggered variant transitions
-(FSMs), lifted-arithmetic sugar through `Prior<T>`, and workflow
-binding surface are open.
+positional, or struct-like. Dispatch uses flat, exhaustive `match`;
+there is no wildcard/default arm in the core surface, and enum-typed
+values must be narrowed by `match` before variant fields are
+accessed. The compiler picks compile-time specialization (when the
+discriminant is static after workflow binding) or a runtime
+discriminant-tagged kernel (when dynamic). Enums compose with
+contracts; variant fields may themselves be contract-typed. Stdlib
+ships at least `Prior<S>` (fixed value or distribution over sample
+type S), `Maybe<T>`, and `Result<T, E>`. Event-triggered variant
+transitions (FSMs), lifted-arithmetic sugar through `Prior<S>`, and
+workflow binding surface are open.
 
 Four independent pressures motivate enums as a single mechanism:
 number-or-distribution materialization of the same model, Mode B
@@ -842,7 +844,77 @@ machinery (§13) or collapsing structural differences that the
 compiler needs to see.
 
 Full design lives in `v2.1_chunk_reports/11_sum_types_enums.md`.
-This subsection is a stub; detailed prose lands when chunk 11 closes.
+
+Declaration syntax:
+
+```myco
+enum Prior<S> {
+    Fixed(S),
+    Random(some Distribution<S>),
+}
+
+enum LifeStage {
+    Seed { age: Scalar<days> },
+    Seedling { age: Scalar<days>, height: Scalar<m> },
+    Mature { age: Scalar<days>, height: Scalar<m>, dbh: Scalar<cm> },
+}
+
+enum Maybe<T> {
+    Some(T),
+    None,
+}
+```
+
+`match` is a body-form construct. It dispatches on one enum-typed
+value, binds fields from the chosen variant, and each arm contributes
+ordinary body statements such as equations, relation invocations,
+constraints, or nested matches:
+
+```myco
+match stage {
+    Seed { age } => {
+        active = false
+    }
+    Seedling { age, height } => {
+        active = true
+        canopy_height = height
+    }
+    Mature { age, height, dbh } => {
+        active = true
+        canopy_height = height
+        dbh_proxy = dbh * dbh
+    }
+}
+```
+
+Matches must be exhaustive over the enum's declared variants. Missing
+variants are a type-check error. The core surface has no wildcard
+arm, no default arm, no guards, no or-patterns, and no nested pattern
+matching beyond destructuring the top-level variant. Those features
+can be added later as sugar only if they preserve exhaustiveness and
+diagnostic clarity.
+
+Enum fields are not projected implicitly. This is invalid even if some
+variants contain a `height` field:
+
+```myco
+stage.height
+```
+
+The model must narrow first:
+
+```myco
+match stage {
+    Seed { age } => { has_height = false }
+    Seedling { height, age } => { has_height = true }
+    Mature { height, dbh, age } => { has_height = true }
+}
+```
+
+If many variants share a meaningful behavioral surface, the modeler
+should express that behavior as a contract, or as a relation on the
+enum that matches internally. Shared field names alone do not create
+a structural projection surface.
 
 ### 4. Values and Literal Numerics
 
@@ -6220,10 +6292,12 @@ references.
 - **Chunk 03.** Kernels, resumed after substrate lock; sparse
   assembly, low-rank rewrites, integration operators, and cost
   machinery remain open.
-- **Chunk 11.** Sum types / enums. Motivation and shape locked
-  (§3.10 stub); exact syntax, pattern-matching power, event-
-  triggered variant transitions, lifted-arithmetic sugar, and
-  workflow binding surface open. Resolves the Mode B open in §35
+- **Chunk 11.** Sum types / enums. Core surface locked (§3.10):
+  `enum`, flat exhaustive `match`, unit / positional / struct-like
+  variants, no wildcard/default arm, match-before-field-access, and
+  static-vs-dynamic discriminant lowering. Event-triggered variant
+  transitions, lifted-arithmetic sugar, workflow binding surface, and
+  some lowering details remain open. Resolves the Mode B open in §35
   and the number-or-distribution materialization question.
 - **Chunk 12.** Resolved cost/objective vocabulary. `cost_of(expr)`
   owns planner/extraction economics (§14.2, §19.1);
@@ -6393,17 +6467,17 @@ mechanism for declaring that different instances of the same
 population can carry different contract implementations, since the
 Python dumb-data layer cannot drive per-instance type dispatch
 (chunk 09 principle). Resolution path: chunk 11 (sum types / enums,
-§3.10 stub) introduces tagged unions as the core mechanism; a
-contract-typed variant field inside an enum lets a population carry
-mixed VC families or any other contract-bound heterogeneity, with
-the compiler picking compile-time specialization when the
-discriminant is static and a runtime discriminant-tagged kernel
-when per-instance. Open items live in chunk 11: the exact syntax,
-event-triggered variant transitions (FSM / life-stage dynamic
-topology), workflow binding surface for enum-typed fields, and
-whether v2.1 ships the full mechanism or a minimum viable subset.
+§3.10) introduces tagged unions as the core mechanism; a contract-
+typed variant field inside an enum lets a population carry mixed VC
+families or any other contract-bound heterogeneity, with the compiler
+picking compile-time specialization when the discriminant is static
+and a runtime discriminant-tagged kernel when per-instance. Core enum
+syntax and exhaustive flat matching are locked. Remaining chunk 11
+items are event-triggered variant transitions (FSM / life-stage
+dynamic topology), workflow binding surface for enum-typed fields,
+lifted sugar, and implementation-level lowering details.
 Cross-refs chunk 08 (three modes), chunk 09 (dumb-data Python),
-chunk 11 (sum types), §3.10 (enum stub), §7 (contracts), §12
+chunk 11 (sum types), §3.10 (enums), §7 (contracts), §12
 (collections / populations).
 
 **Package dependency story.** Vocabulary is locked (`spore` for
@@ -6547,7 +6621,7 @@ if encountered in identifier position.
 `Collection`, `impl`, `some`, `val`, `where`.
 
 **Body-form keywords.** `let`, `if`, `else`, `for`, `in`, `is`,
-`trace`, `requires`, `replaces`, `conserved`, `approximate`,
+`match`, `trace`, `requires`, `replaces`, `conserved`, `approximate`,
 `initial`, `temporal`, `when`, `as`, `on`, `field`.
 
 **Stochastic operator.** `~` (distribution-binding operator;
@@ -6558,8 +6632,6 @@ parameters such as `BrownianMotion<Ito>` and
 
 **Reserved but not yet assigned semantics.** `self` (reserved for
 refinement-predicate body use and future module-instance use).
-`match` is committed as exhaustive sum-type dispatch for `enum`
-values; exact surface syntax remains tied to the sum-type work.
 
 **Structural punctuation.** `::` (path separator), `->` / `<->`
 (convert-direction arrows), `<=`, `>=`, `<`, `>`, `==`, `!=`,
