@@ -4233,6 +4233,9 @@ The textual report includes:
   plan.
 - Envelope facts: bounds, distributions, approximation tolerances,
   provenance, and rewrite traces (§16).
+- Regime boundaries and relaxation ledger entries: detected surfaces,
+  continuity / derivative class, selected crossing policy, and any
+  workflow-authorized surrogate used by the run (§8.10, §24.6).
 
 `hypha explain --format ir` emits the canonical machine-readable IR.
 Renderer targets such as Mermaid, D2, Graphviz, or Cytoscape may be
@@ -4269,6 +4272,8 @@ Representative result fields:
   relevant run-config fields.
 - `envelope` — bounds, distributional facts, tolerances, capability
   facts, and provenance.
+- `regime_boundaries` — any boundary records affecting the path,
+  including selected crossing policies and relaxation status.
 - `reduction_trace` — the merges, rewrites, and relation invocations
   that produced the expression or residual.
 
@@ -4623,7 +4628,8 @@ materializes a specific instance.
 
 **Summary.** Run-config is the non-binding configuration the
 workflow supplies at composition: seed, backend, verbosity, dt
-(when used), profile hints, gradient regime, and fallback policy.
+(when used), profile hints, gradient regime, relaxation policy, and
+fallback policy.
 Distinct from source binding since run-config does not bind model
 values; it configures how the
 compiled plan executes. Different runs of one plan can use
@@ -4647,6 +4653,8 @@ Representative fields:
   (§9.1).
 - `run.config.gradient_regime`. Long-rollout gradient strategy:
   `full_BPTT`, `truncated_BPTT(k)`, or `checkpointed`.
+- `run.config.relaxations`. Crossing / surrogate policy for regime
+  boundaries (§8.10, §24.6). Default is `strict`.
 - `run.config.extraction_policy`. Preference over
   `cost_of` fields: compute-first, memory-first, faithfulness-first,
   or weighted (§19.1).
@@ -4668,6 +4676,118 @@ paths (`bind("run.config.dt", Constant(0.01))`); the
 compiler does not bake them into the plan beyond the
 binding surface. Different runs of the same plan can use
 different run-config without recompilation.
+
+#### 24.6 Relaxation Opportunity Inventory
+
+**Summary.** Relaxations are workflow-authorized surrogate choices
+over regime boundaries. The compiler exposes a passive inventory of
+opportunities with stable IDs, compatible handlers, defaults, and
+diagnostics. Default behavior is strict; no smoothing or surrogate is
+applied unless written in `.myco` as a model claim or selected by the
+workflow for a run.
+
+Every compiled model exposes a passive opportunity inventory:
+
+```python
+ops = model.relaxation_opportunities()
+```
+
+The call does not change the plan. It returns stable records for
+regime boundaries (§8.10) that may require a crossing policy in
+gradient-demanding, optimization, or accelerated-execution contexts.
+Representative record shape:
+
+```python
+{
+    "leaf.pv_curve.turgor_loss": {
+        "kind": "piecewise_boundary",
+        "surface": "leaf.turgor = 0",
+        "continuity": "value_jump | value_continuous_kink | unknown",
+        "derivative": "one_sided | none | unknown",
+        "affected": ["leaf.water_potential"],
+        "compatible_handlers": [
+            "strict",
+            "within_regime",
+            "one_sided",
+            "subgradient",
+            "smooth_step_blend"
+        ],
+        "default": "strict",
+    }
+}
+```
+
+Opportunity IDs are stable under source-preserving recompilation
+where the boundary path and guard are unchanged. They are diagnostic
+handles, not `.myco` symbols.
+
+The workflow selects handlers explicitly:
+
+```python
+run.config.relaxations = {
+    "leaf.pv_curve.turgor_loss": SmoothStep(width=0.02, budget=0.001),
+    "hydraulics.segment_split": EventReplan(),
+}
+```
+
+or by typed policy rules:
+
+```python
+run.config.relaxations = RelaxationPolicy(
+    default="strict",
+    rules=[
+        match(kind="piecewise_boundary", path="leaf.*")
+            .use(SmoothStep(width="auto", budget=0.001)),
+        match(kind="topology_event")
+            .use(EventReplan()),
+    ],
+)
+```
+
+Handlers are typed by opportunity kind:
+
+- **`Strict`.** Default. Preserve the source model exactly; reject
+  ordinary gradients through nonsmooth / discontinuous crossings.
+- **`WithinRegime`.** Differentiate only inside the active regime;
+  boundary-crossing sensitivity is not claimed.
+- **`OneSided`.** Use left / right directional derivatives at a
+  boundary where the side is determined by the active regime.
+- **`Subgradient`.** Use a supported subgradient rule for convex or
+  explicitly supported nonsmooth primitives.
+- **`Saltation` / `ResetSensitivity`.** For hybrid events with a
+  declared reset map; unsupported for arbitrary topology mutation
+  unless the event provides the required mapping.
+- **`Estimator`.** For stochastic discrete choices, use an explicit
+  estimator policy rather than ordinary AD.
+- **`SmoothStep` / smoothing handlers.** Build a surrogate extraction
+  plan with declared width, budget, and error / distortion ledger.
+- **`EventReplan` / `CapacityMask` / `DynamicKeyed`.** Dynamic-
+  topology crossing handlers (§21.4, §30) selected according to
+  backend capability and workflow performance needs.
+
+`AutoSmooth` is an opt-in workflow convenience that fills handler
+choices for compatible opportunities:
+
+```python
+run.config.relaxations = AutoSmooth(
+    scope="training",
+    max_error=0.001,
+    require_review=True,
+)
+```
+
+Even under `AutoSmooth`, the compiler validates handler compatibility
+and emits a relaxation ledger. If `require_review=True`, the workflow
+must accept the proposed ledger before execution. If `False`, the
+run record still captures the ledger so results remain auditable.
+
+A relaxation selected in workflow is a surrogate plan, not a source
+model rewrite. If the user writes `smooth_step` directly in `.myco`,
+that is a world claim (§8.9). If the workflow selects `SmoothStep`
+for a hard boundary, the original source model remains hard and the
+run's plan records the smoothed surrogate, handler parameters,
+affected residuals, error / distortion budget, and selected crossing
+policy.
 
 ### 25. Training Emission
 

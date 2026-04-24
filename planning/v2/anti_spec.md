@@ -93,6 +93,8 @@ gap-review stale list, subsequent design locks.
 | reshape by element count alone | reshape with a named index bijection that preserves axes, entry-unit laws, patterns, and provenance | same cardinality does not prove the same tensor meaning |
 | dense-to-sparse `convert` by threshold or over-approximate pattern | dense-to-sparse only with proven/provider-validated `zero_pattern`; thresholding routes through `approximate` | sparsification can change values and must carry an envelope |
 | ordinary-gradient-through-discontinuity semantics | regime-boundary records with explicit crossing policy | gradients flow inside regimes; crossings require one-sided, subgradient, saltation, estimator, relaxation, or strict rejection |
+| default auto-smoothing of nonsmooth source models | strict default plus workflow-selected relaxation handlers | smoothing is either a `.myco` model claim or an explicit workflow surrogate, never compiler housekeeping |
+| untracked relaxed training plans | relaxation ledger in `hypha explain` / plan IR | relaxed execution must be auditable against the hard source model |
 
 ## Retired open questions (closed or structurally void)
 
