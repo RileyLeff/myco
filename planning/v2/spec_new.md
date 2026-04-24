@@ -1675,7 +1675,7 @@ case of `event`. Sources include:
 - Hard selections such as `min`, `max`, `argmin`, and `argmax`
   (§12.2).
 - Geometry junctions and one-sided locus limits (§11.1, §11.8).
-- Compact-support kernels and kernel truncation surfaces (§28.4,
+- Compact-support kernels and kernel truncation surfaces (§28.5,
   Appendix C K).
 - Contact, active-set, complementarity, saturation, and threshold
   laws expressed in ordinary relations.
@@ -5781,14 +5781,16 @@ capability contracts (`PositiveDefinite<A>`, `Stationary<L>`,
 `Isotropic<L>`, `CompactSupport<A, B>(radius)`) rather than a separate
 keyword or type kind. Stdlib ships Matérn, RBF, rational-quadratic,
 and Wendland; composition rules preserve contracts. Finite and
-integral kernel-operator semantics are ordinary Myco math; sparse
+integral kernel-operator semantics are ordinary Myco math. Exact
+support / locality semantics are graph facts; sparse storage
 representation, low-rank rewrites, and GP/HSGP process machinery
 remain tracked work.
 
 Chunk 03 can now resume on the settled e-graph substrate; the kernel
 surface below is committed through finite assembly and ordinary
-integral / sum kernel operators, while sparse representation,
-low-rank rewrites, and GP/HSGP process machinery remain tracked work.
+integral / sum kernel operators, plus exact support / locality facts.
+Sparse storage representation, low-rank rewrites, and GP/HSGP
+process machinery remain tracked work.
 
 #### 28.1 Kernels as Parameterized Relations with Capability Contracts
 
@@ -5853,9 +5855,14 @@ Kernel facts are typed by the domain shape that makes them meaningful:
   translation has meaning; guarantees `k(x, y) = ktilde(x - y)`.
 - `Isotropic<L>`. Applies to point kernels over a normed/metric locus;
   guarantees `k(x, y) = khat(distance(x, y))`.
-- `CompactSupport<A, B>(radius)`. Applies when a distance or
-  adjacency predicate between A and B is defined; guarantees
-  `k(x, y) = 0` outside the support radius.
+- Support facts: `support(k)`, `nonzero_region(k)`,
+  `zero_when(k, predicate)`, `boundary(k)`, and
+  `boundary_smoothness(k, boundary)`. Support is predicate-shaped;
+  radius, hop count, bounding boxes, and directionality are structured
+  summaries when derivable.
+- `CompactSupport<A, B>(radius)`. A structured summary for the common
+  metric-radius case. It is derived from, or shipped alongside, exact
+  support predicates; it is not the whole support model.
 
 For brevity, examples may omit the domain parameter when it is
 obvious from the relation signature. Stdlib covariance kernels such
@@ -5864,8 +5871,8 @@ rational-quadratic, and Wendland carry audited facts. Non-stationary
 kernels (e.g. polynomial `k(x, y) = (x * y + c)^d`, Brownian
 `k(x, y) = min(x, y)`) can satisfy `PositiveDefinite` without
 satisfying `Stationary`. Cross-domain kernels can carry facts such
-as `CompactSupport<A, B>` or later operator facts without pretending
-to be same-domain GP covariance kernels.
+as exact support predicates or `CompactSupport<A, B>` summaries
+without pretending to be same-domain GP covariance kernels.
 
 The usual operations on same-domain covariance kernels preserve the
 contracts: sum preserves `PositiveDefinite` and `Stationary`, product
@@ -5965,8 +5972,10 @@ Fact emission:
 - `PositiveDefinite<A>` emits `positive_semidefinite(K)`.
 - `StrictPositiveDefinite<A>` plus `distinct(points)` emits
   `positive_definite(K)`.
-- `CompactSupport<A, A>(radius)` emits a `zero_pattern` when the
-  A-domain distance / adjacency evidence proves pairs outside support.
+- Exact support / `zero_when` facts emit `zero_pattern` when the
+  A-domain distance / adjacency evidence proves finite pairs are zero;
+  `CompactSupport<A, A>(radius)` is one common summary that can help
+  establish those facts.
 
 The PSD/PD split is intentional. Many covariance kernels prove only
 `positive_semidefinite(K)`. Ordinary `cholesky(K)` requires
@@ -6108,11 +6117,185 @@ relaxation_ledger_entry(discrete_effect)
 The compiler does not silently replace a continuous kernel integral
 with a finite computation to make a backend run.
 
+#### 28.5 Exact Support, Locality, and Truncation
+
+**Summary.** Exact support is a predicate-shaped model fact, not a
+radius-only annotation. Myco distinguishes closed support,
+nonzero-region, and exact-zero predicates; sparse zero patterns come
+from `zero_when`, not support alone. Tail bounds create approximation
+opportunities, while truncation of infinite-tail kernels is explicit
+modeling or workflow approximation, never compiler housekeeping.
+
+Support vocabulary:
+
+- `support(k) = P(x, y)`. The closed support region for a kernel
+  relation.
+- `nonzero_region(k) = Q(x, y)`. The region where the kernel may be
+  nonzero.
+- `zero_when(k, R(x, y))`. An exact predicate under which the kernel
+  value is proven zero.
+- `boundary(k) = B(x, y)`. The boundary of the support / regime.
+- `boundary_smoothness(k, B) = C0 | C1 | C2 | ... | C∞ |
+  discontinuous | unknown`. The differentiability order proven across
+  the boundary.
+- `tail_bound(k, outside_region, envelope)`. A quantitative decay
+  bound, not an exact zero fact.
+- `truncation_of(truncated, original, region)`. Provenance for an
+  explicit truncated model or workflow approximation.
+
+For a smooth compact kernel such as a Wendland family:
+
+```text
+support(k) = distance(x, y) <= r
+nonzero_region(k) = distance(x, y) < r
+zero_when(k, distance(x, y) >= r)
+boundary(k) = distance(x, y) = r
+boundary_smoothness(k, boundary) = C2
+CompactSupport<A, B>(r)
+metric_radius(k) = r
+```
+
+For a hard cutoff whose inner value is nonzero at the boundary:
+
+```myco
+where distance(x, y) <= r {
+    out = base_k(x, y)
+} else {
+    out = 0
+}
+```
+
+the compiler may derive:
+
+```text
+support(k) = distance(x, y) <= r
+zero_when(k, distance(x, y) > r)
+boundary(k) = distance(x, y) = r
+boundary_smoothness(k, boundary) = discontinuous | unknown
+```
+
+Closed support, nonzero region, and exact-zero predicates are distinct
+because they serve different downstream consumers: support/locality
+describes dependency geometry, `zero_when` drives exact sparse
+patterns, and boundary smoothness controls gradient / event behavior.
+
+**Evidence sources.** Exact support facts may come from:
+
+- visible relation bodies that branch to exact zero,
+- audited stdlib facts for curated kernels,
+- provider-validated finite artifacts such as a validated sparse
+  kernel matrix pattern or neighbor graph.
+
+User-authored `.myco` cannot assert unchecked support facts such as
+`property k is CompactSupport(r)`. Provider validation can establish
+facts about the concrete artifact it provides, e.g.
+`zero_pattern(K)`, but it does not turn the source relation into a
+globally compact kernel unless the source / stdlib evidence supports
+that relation-level fact.
+
+**Predicate-shaped locality.** The core support fact is a predicate,
+not a metric radius:
+
+```text
+support(k) = edge_exists(a, b)
+support(k) = upstream_of(y, x) && path_length(y, x) <= r
+support(k) = abs(dx) <= rx && abs(dy) <= ry && windward(x, y)
+```
+
+Structured summaries are derived from, or shipped alongside, the
+predicate:
+
+```text
+metric_radius(k) = r
+graph_hop_radius(k) = 1
+anisotropic_box(k) = (rx, ry)
+directed_support(k)
+local_coupling(k)
+```
+
+Spatial indexes and sparse lowering consume summaries such as radius,
+hop radius, bounding boxes, and directionality; exact semantic
+dependency and zero facts consume the predicate.
+
+**Support boundaries and gradients.** Support boundaries are regime
+boundaries only to the extent their smoothness affects the operation.
+Smooth compact support emits differentiability facts up to the
+proven order. Discontinuous or unknown boundaries do not silently
+authorize gradients across the boundary; gradient-sensitive use must
+route through the ordinary crossing machinery from §8.10:
+strict rejection, one-sided derivative, subgradient, relaxation, or
+estimator policy as appropriate.
+
+**Exact support vs. truncation.** If a truncated kernel is written in
+`.myco`, the truncation is a model claim:
+
+```myco
+relation truncated_rbf(x: Point<L>, y: Point<L>, out: Scalar<U>) {
+    d = distance(x, y)
+
+    where d <= cutoff {
+        out = rbf(d, ell)
+    } else {
+        out = 0
+    }
+}
+```
+
+This emits exact support / zero facts if the body proves them. If a
+workflow truncates an infinite-tail kernel for speed, the result is an
+approximation:
+
+```text
+tail_bound(rbf, distance > cutoff, eps)
+truncation_of(truncated_op, original_op, distance <= cutoff)
+approx_error(truncated_op, original_op, envelope)
+relaxation_ledger_entry(truncated_op)
+```
+
+Tail bounds expose opportunities and envelopes; they never become
+exact `zero_pattern` facts by themselves.
+
+**Downstream consequences.** Exact support may emit:
+
+```text
+local_coupling(effect)
+dependency_region(effect(x)) = { y | support(k)(x, y) }
+zero_pattern(W[i, j]) when zero_when(k(targets[i], sources[j]))
+sparse_candidate(W)
+neighbor_index_candidate(k, metric_radius = r)
+truncation_candidate(k, cutoff, envelope)  # from tail bounds only
+```
+
+Dependency / locality facts are semantic. Exact zero patterns require
+`zero_when` proof for concrete finite axes or provider validation.
+Indexing candidates are lowering opportunities, not source semantics.
+Tail-bound candidates are approximation opportunities, not sparse
+facts.
+
+**Composition.** Support facts compose through ordinary expression
+structure:
+
+- Additive combinations use the union of supports:
+  `support(k1 + k2) <= support(k1) union support(k2)`.
+  `zero_when(k1 + k2)` requires both summands to be zero unless
+  cancellation is separately proven.
+- Multiplicative combinations use the intersection:
+  `support(k1 * k2) <= support(k1) intersect support(k2)`.
+  `zero_when(k1 * k2)` holds when either factor is proven zero.
+- Scaling preserves support when the scale is proven nonzero, collapses
+  support when the scale is proven zero, and otherwise emits only the
+  conservative upper bound.
+- Operator expressions may refine dependency regions with source-side
+  masks or zero facts only when those facts are structural or
+  provider-validated. A runtime value that happens to be zero does not
+  create a static zero pattern.
+
 Remaining kernel-adjacent work:
 
-- **Sparse / compact-support representation.** Exact compact support
-  can emit zero-pattern facts; backend storage choices such as `CSR`,
-  block-sparse, or neighbor-list layouts remain lowering concerns.
+- **Sparse storage representation.** Exact support can emit
+  zero-pattern and indexing facts; backend storage choices such as
+  `CSR`, block-sparse, or neighbor-list layouts remain lowering
+  concerns.
 - **Low-rank kernel rewrites.** Nyström, inducing-point, random-feature,
   and HSGP-style basis approximations remain approximation machinery,
   not hidden kernel semantics.
@@ -6184,7 +6367,7 @@ rank is `matrix_rank(A)` to avoid collision with shape rank
 | `norm(expr, kind)` | supported kind (`"1"`, `"2"`, `"fro"`, `"inf"`), unit / scaling policy where needed | norm envelope facts used by `condition_of` and approximation accounting | Heterogeneous units without scaling policy block interpretation. |
 | `condition_of(expr)` | expression shape, unit / axis comparability, and norm / scaling policy for matrix-valued expressions | `condition_estimate(expr)`, `condition_mode`, `condition_bound` when available | Heterogeneous units without a scaling policy make condition number interpretation unknown; the diagnostic asks for scaling evidence. |
 | `matrix_rank(A)` | `rank(A)=2`, numeric entries, tolerance / scaling policy | `rank_value(A)`, full-rank / nullspace facts when classifiable | Missing tolerance / scaling policy reports an obligation. |
-| `kernel_matrix(k, xs, ys)` | kernel-domain compatibility for `k: A,B -> Scalar<U>`, finite axes for `xs: A` and `ys: B`, output-unit law | `kernel_matrix_of(W,k,xs,ys)`, row/col axes, entry-unit law, pairwise-evaluation provenance, zero-pattern facts when compact support is proven | Does not emit symmetry, PSD, or covariance facts merely because it is kernel-shaped. Missing domain/axis/unit facts are obligations. |
+| `kernel_matrix(k, xs, ys)` | kernel-domain compatibility for `k: A,B -> Scalar<U>`, finite axes for `xs: A` and `ys: B`, output-unit law | `kernel_matrix_of(W,k,xs,ys)`, row/col axes, entry-unit law, pairwise-evaluation provenance, zero-pattern facts when `zero_when` proves finite pairs are exact zeros | Does not emit symmetry, PSD, or covariance facts merely because it is kernel-shaped. Missing domain/axis/unit facts are obligations. |
 | `gram(k, points)` | same-domain kernel compatibility for `k: A,A -> Scalar<U>` and finite point axis; downstream covariance use requires the relevant kernel facts (`SymmetricKernel<A>`, `PositiveDefinite<A>`, `StrictPositiveDefinite<A>` plus `distinct(points)` for PD) | `gram_of(K,k,points)`, row/col axes, entry-unit law, pairwise-evaluation provenance, `symmetric(K)`, `positive_semidefinite(K)`, `positive_definite(K)`, and zero-pattern facts only when proven | PSD alone does not authorize ordinary Cholesky. If PD is required and unknown, report `positive_definite(K)` as unmet; the compiler does not silently add jitter, pivot, or opaque-handoff. |
 | `zeros<U>(shape)` | structural shape expression and unit parameter | zero tensor, zero-pattern facts | Shape expressions outside the solved subset become obligations. |
 | `ones(shape)` | structural shape expression | dimensionless all-ones tensor | Shape expressions outside the solved subset become obligations. |
@@ -7174,17 +7357,21 @@ reductions. LOCKED.
 
 **Fuzzy / tolerance-gated rewrites (uni unless marked).**
 
-**K. Kernel truncation.** The headline fuzzy rewrite from §28 kernels.
+**K. Kernel support and truncation.** Exact support consequences and
+approximation-gated truncations from §28.5.
 
-- K1. `K(a,b) → 0` when `distance(a,b) > radius` for kernels carrying
-  `CompactSupport(radius)`. Turns O(N²) integrals into O(N·k).
-  LOCKED.
+- K1. `K(a,b) → 0` when `zero_when(k, predicate(a,b))` is proven,
+  including metric-radius cases summarized by `CompactSupport(radius)`.
+  This is exact and may emit sparse zero patterns. LOCKED.
 - K2. Separable decomposition: `K((x₁,y₁),(x₂,y₂)) → K_x(x₁,x₂) *
   K_y(y₁,y₂)` when declared or inferred. OPEN (§35, kernels chunk 03;
   bidi when exact, uni when approximate).
 - K3. Low-rank `K → U·Vᵀ` (truncated SVD, Nyström, random Fourier
   features). DEFERRED (post-current-scope; §28 names it as future
   kernel machinery, not a v2.1 rewrite).
+- K4. Infinite-tail truncation `K(a,b) → 0` outside a chosen region
+  requires workflow approximation policy or an explicit `.myco`
+  `approximate` claim plus tail-bound / error-ledger facts. LOCKED.
 
 **L. Smoothing rewrites.** User-written smooth forms only; `where` is
 never silently smoothed (§8.3 runtime `where` lock).

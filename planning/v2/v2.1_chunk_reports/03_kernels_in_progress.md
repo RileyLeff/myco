@@ -5,8 +5,9 @@
 **Reviewers:** None yet — discussion still open
 **Status:** IN PROGRESS. Kernel identity and finite assembly
 (`kernel_matrix` / `gram`) are locked; ordinary `integrate` / `sum`
-kernel-operator semantics are locked; sparse / low-rank rewrites and
-GP/HSGP process machinery remain under discussion.
+kernel-operator semantics are locked; exact support / locality /
+truncation semantics are locked; sparse storage, low-rank rewrites,
+and GP/HSGP process machinery remain under discussion.
 
 ---
 
@@ -89,7 +90,7 @@ The useful phrase is:
   `A, B, out`.
 - **Kernel facts:** compiler-facing facts/capability contracts such as
   `PositiveDefinite<A>`, `Stationary<L>`, `Isotropic<L>`, and
-  `CompactSupport<A, B>(radius)`.
+  exact support predicates / `CompactSupport<A, B>(radius)` summaries.
 - **Kernel consumers:** operators that need those facts, such as
   `gram(k, points)`, GP/HSGP priors, convolution/integration operators, and
   sparse matrix assembly.
@@ -158,8 +159,10 @@ Fact emission:
 - `PositiveDefinite<A>` emits `positive_semidefinite(K)`.
 - `StrictPositiveDefinite<A>` plus `distinct(points)` emits
   `positive_definite(K)`.
-- `CompactSupport<A, A>(radius)` emits a `zero_pattern` when the A-domain
-  distance / adjacency evidence proves pairs outside support.
+- Exact support / `zero_when` facts emit `zero_pattern` when the A-domain
+  distance / adjacency evidence proves finite pairs are zero;
+  `CompactSupport<A, A>(radius)` is one common summary that can help establish
+  those facts.
 
 PSD and PD are intentionally separate. Ordinary Cholesky consumes
 `positive_definite(K)`, not merely `positive_semidefinite(K)`. If a downstream
@@ -233,11 +236,12 @@ receive sparse / convolution / low-rank lowering facts.
 
 Kernel facts live on kernel relations; operator facts live on recognized
 operator expressions. Use-site domain, measure, weights, boundaries, and source
-factors decide which relation facts survive. For example, compact support can
-emit `local_coupling(effect)` and a finite `zero_pattern` when axes prove
-separation. A normalized nonnegative kernel can preserve constants only when
-the full operator context preserves normalization; masks or empirical weights
-remove that fact unless separately proven.
+factors decide which relation facts survive. For example, exact support can
+emit `local_coupling(effect)`, while `zero_when` emits a finite
+`zero_pattern` only when axes prove separation. A normalized nonnegative kernel
+can preserve constants only when the full operator context preserves
+normalization; masks or empirical weights remove that fact unless separately
+proven.
 
 Finite `sum` kernel operators are exact finite semantics. The compiler may
 assemble a `kernel_matrix` and perform a matrix-vector contraction without an
@@ -256,6 +260,101 @@ relaxation_ledger_entry(discrete_effect)
 
 No continuous kernel integral is silently made finite just because a backend
 needs finite compute.
+
+## 2.3 Exact support, locality, and truncation
+
+Exact support is a predicate-shaped model fact, not a radius-only annotation.
+The core vocabulary:
+
+```text
+support(k) = P(x, y)
+nonzero_region(k) = Q(x, y)
+zero_when(k, R(x, y))
+boundary(k) = B(x, y)
+boundary_smoothness(k, B) = C0 | C1 | C2 | ... | C∞ | discontinuous | unknown
+tail_bound(k, outside_region, envelope)
+truncation_of(truncated, original, region)
+```
+
+Closed support, nonzero region, and exact-zero predicates are distinct. Support
+describes dependency geometry, `zero_when` drives exact sparse patterns, and
+boundary smoothness controls gradient / event behavior.
+
+Exact support facts may come from visible relation bodies, audited stdlib
+facts, or provider-validated finite artifacts. User-authored `.myco` cannot
+assert unchecked compact support:
+
+```myco
+# rejected shape, not real syntax
+property k is CompactSupport(r)
+```
+
+Provider validation can prove facts about a concrete run artifact, such as
+`zero_pattern(K)`, without turning the source relation into a globally compact
+kernel.
+
+Support predicates can be metric, graph, directed, anisotropic, or
+domain-specific:
+
+```text
+support(k) = distance(x, y) <= r
+support(k) = edge_exists(a, b)
+support(k) = upstream_of(y, x) && path_length(y, x) <= r
+support(k) = abs(dx) <= rx && abs(dy) <= ry && windward(x, y)
+```
+
+Structured summaries are optimization facts derived from or shipped alongside
+the predicate:
+
+```text
+metric_radius(k) = r
+graph_hop_radius(k) = 1
+anisotropic_box(k) = (rx, ry)
+directed_support(k)
+local_coupling(k)
+```
+
+Boundary smoothness decides whether a support boundary creates gradient /
+event obligations. Smooth compact kernels can emit differentiability facts up
+to their proven order; discontinuous or unknown boundaries require ordinary
+crossing policy for gradient-sensitive use.
+
+Exact compact support and workflow truncation are separate. If a truncated
+kernel is written in `.myco`, truncation is a model claim and can emit exact
+support / zero facts when proven. If a workflow truncates an infinite-tail
+kernel such as RBF, it is an approximation:
+
+```text
+tail_bound(rbf, distance > cutoff, eps)
+truncation_of(truncated_op, original_op, distance <= cutoff)
+approx_error(truncated_op, original_op, envelope)
+relaxation_ledger_entry(truncated_op)
+```
+
+Tail bounds create approximation opportunities and envelopes, never exact
+`zero_pattern` facts by themselves.
+
+Downstream consequences:
+
+```text
+local_coupling(effect)
+dependency_region(effect(x)) = { y | support(k)(x, y) }
+zero_pattern(W[i, j]) when zero_when(k(targets[i], sources[j]))
+sparse_candidate(W)
+neighbor_index_candidate(k, metric_radius = r)
+truncation_candidate(k, cutoff, envelope)
+```
+
+Support composition follows ordinary expression structure:
+
+- Additive combinations use support union; exact zero requires every summand
+  to be zero unless cancellation is proven.
+- Multiplicative combinations use support intersection; exact zero follows
+  when either factor is zero.
+- Scaling preserves support with nonzero evidence, collapses support with
+  zero evidence, and otherwise emits only conservative bounds.
+- Source-side masks refine dependency regions only with structural or
+  provider-validated zero facts, not runtime accidents.
 
 ---
 
@@ -290,14 +389,13 @@ v2.1. Parents expose scalar coordinate fields; children sample the parent via
 
 ---
 
-## 5. Sparsity / characteristic length — deferred
+## 5. Support / locality locked; sparse storage deferred
 
-Riley's instinct: characteristic length (how far a kernel "reaches") belongs as
-a parameter on the relation declaration in `.myco`, and its concrete value gets
-bound from the workflow layer like any other parameter. Not yet fully locked.
-Revisit after the e-graph / cost / unified-machinery layer is drawn up, because
-the right answer depends on whether the compiler can derive effective support
-from the relation body / stdlib facts vs. needs a separate evidence path.
+Characteristic length is one structured summary of exact support, not the
+support model itself. Radius, hop count, directionality, and bounding boxes are
+optimization facts derived from predicate-shaped support or audited stdlib
+facts. Backend storage formats (`CSR`, block-sparse, neighbor lists) remain
+lowering choices.
 
 ---
 
@@ -377,9 +475,9 @@ the e-graph (internal equality substrate).
      facts; no resurrected `property` annotation surface)
    - tolerance plumbing (how workflow-level tolerance reaches the compiler's
      extraction decisions)
-4. With the machinery drawn up, revisit Section 5 (sparsity) and the remaining
-   low-rank / process-consumer questions. Section 6's source semantics are now
-   locked at the ordinary-expression layer; lowering policy remains open.
+4. With the machinery drawn up, revisit low-rank / process-consumer questions.
+   Section 5's support semantics and Section 6's source semantics are locked;
+   storage / approximation policy remains open.
 
 ---
 
@@ -390,7 +488,6 @@ the e-graph (internal equality substrate).
 - Whether `condition_weighted` closure policy gets resurrected with a
   `condition_of(expr)` intrinsic now that we're taking cost modeling
   seriously
-- Syntax for compact support and piecewise-defined kernels
 - Whether separability is declared or inferred
 - Kernel composition (kernel of kernels) — out of scope until primary
   machinery is locked
