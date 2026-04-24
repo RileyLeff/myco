@@ -7,8 +7,8 @@
 (`kernel_matrix` / `gram`) are locked; ordinary `integrate` / `sum`
 kernel-operator semantics are locked; exact support / locality /
 truncation semantics are locked; sparse / index lowering semantics
-are locked; low-rank rewrites and GP/HSGP process machinery remain
-under discussion.
+are locked; low-rank / feature approximation semantics are locked;
+GP/HSGP process machinery remains under discussion.
 
 ---
 
@@ -458,6 +458,136 @@ Provider validation can satisfy obligations for a concrete run artifact, but
 does not grant unchecked relation-level facts such as `support(k)` or
 `CompactSupport<A, B>(r)`.
 
+## 2.5 Separability, features, and low-rank approximation
+
+Low-rank is not one semantic category. Myco distinguishes:
+
+- exact separability,
+- exact finite feature expansion,
+- approximate feature / low-rank expansion.
+
+Exact separability is an algebraic fact over product structure:
+
+```text
+k((x1, z1), (x2, z2)) = kx(x1, x2) * kz(z1, z2)
+separable_kernel(k, product_axes=[X, Z])
+kernel_factors(k) = [kx, kz]
+product_domain(D, [X, Z])
+product_axes(points, [X_points, Z_points])
+kronecker_factorization(K, [Kx, Kz])
+```
+
+Kernel separability, product-domain / axis structure, and source
+separability are distinct. Product grids can authorize exact Kronecker Gram
+lowerings; product quadrature can authorize tensor-product operator lowerings;
+fully separated operator action additionally requires source separability.
+
+Exact finite feature expansions are exact representations:
+
+```text
+k(x, y) = sum_m phi_m(x) * lambda_m * phi_m(y)
+exact_feature_expansion(k, Phi, Lambda)
+feature_map(Phi, domain=A, feature_axis=M)
+rank_bound(gram(k, points)) <= M
+```
+
+They may be recognized from visible `.myco` relations or shipped as audited
+stdlib facts. Feature maps, modes, eigenfunctions, inducing points, and random
+features are ordinary relations or workflow artifacts, not a new source
+`basis` construct.
+
+Approximate feature expansions cover Nyström, inducing points, random
+features, truncated spectral / HSGP, truncated SVD, and related methods:
+
+```text
+approx_feature_expansion(k_M, k, Phi_M, Lambda_M)
+approximation_scope(k_M, scope)
+approx_error(k_M, k, envelope)
+relaxation_ledger_entry(k_M)
+rank_bound(gram(k_M, points)) <= M
+```
+
+Approximation scope is explicit:
+
+```text
+approx_relation(k_M, k, DomainA x DomainB, envelope)
+approx_matrix(K_M, K, axes, norm, envelope)
+approx_operator(T_M, T, source_space -> target_space, envelope)
+```
+
+A lower-scope approximation does not imply a higher-scope one. A truncated SVD
+of one Gram matrix is not a relation-level kernel fact; a relation-level
+approximation does not imply an operator bound unless measure / source-space
+facts support that propagation.
+
+Envelopes propagate only through named implication rules. Preserved structural
+facts such as symmetry, PSD, support, conservation, or rank are emitted only
+when the construction proves them. Error bounds do not silently authorize
+substituting approximate objects into exact obligations.
+
+Low-rank covariance constructions may emit PSD and rank facts:
+
+```text
+K_M = Phi * Lambda * transpose(Phi)
+nonnegative_diagonal(Lambda)
+positive_semidefinite(K_M)
+rank_bound(K_M) <= M
+```
+
+They emit `positive_definite(K_M)` only with explicit full-rank evidence or an
+explicit positive diagonal / noise component. No low-rank approximation
+silently adds jitter or upgrades PSD to PD.
+
+Authorization routes:
+
+- exact compiler rewrites when separability / feature structure is proven,
+- source `approximate` model claims,
+- workflow approximation policy.
+
+A finite-feature relation written directly in `.myco` is just the model unless
+it is explicitly related to a richer kernel by approximation provenance.
+
+Nyström / inducing-point methods are finite intermediary-axis approximations:
+
+```text
+Z = inducing_axis
+Kxz = kernel_matrix(k, X, Z)
+Kzz = gram(k, Z)
+K_approx = Kxz * solve(Kzz, transpose(Kxz))
+nystrom_approximation(K_approx, K, inducing_axis=Z)
+approximation_scope(K_approx) = finite_matrix(X)
+```
+
+All solver obligations on `Kzz` remain ordinary matrix obligations. If
+`positive_definite(Kzz)` is unknown, ordinary inverse / Cholesky routes report
+it; PSD-compatible primitives or explicit stabilization are chosen visibly.
+
+Random-feature approximations are workflow artifacts with random-draw
+provenance, not source-model stochastic roots:
+
+```text
+random_feature_approximation(k_M, k, feature_axis=M)
+feature_draw(Phi_M, distribution, seed)
+probabilistic_error_bound(k_M, k, confidence=0.99, envelope)
+reproducible_artifact(k_M) | stochastic_plan_artifact(k_M)
+```
+
+HSGP is a spectral truncation workflow approximation over explicit bounded
+domain and boundary-condition facts:
+
+```text
+spectral_family(k, domain, boundary_condition)
+mode_set(Phi_M, domain, boundary_condition, count=M)
+orthonormal_modes(Phi_M, measure)
+lambda_nonnegative(Lambda_M)
+spectral_truncation_of(k_M, k, modes=Phi_M)
+approx_feature_expansion(k_M, k, Phi_M, Lambda_M)
+tail_bound(k, modes_not_in(Phi_M), spectral_envelope)
+```
+
+GP and HSGP process machinery consumes these facts, but process-level GP
+syntax, posterior inference, and specialized PPL handoff remain separate work.
+
 ---
 
 ## 3. What was rejected
@@ -513,8 +643,8 @@ ordinary expression when the compiler can normalize it into a linear kernel
 action.
 
 This closes the need for a special kernel integration syntax. The remaining
-work is approximation policy for quadrature / low-rank transforms, concrete
-sparse backend implementations, and GP/HSGP process consumers.
+work is approximation policy for quadrature, concrete sparse / low-rank backend
+implementations, and GP/HSGP process consumers.
 
 ---
 
@@ -579,9 +709,9 @@ the e-graph (internal equality substrate).
      facts; no resurrected `property` annotation surface)
    - tolerance plumbing (how workflow-level tolerance reaches the compiler's
      extraction decisions)
-4. With the machinery drawn up, revisit low-rank / process-consumer questions.
-   Section 5's support and sparse-index semantics and Section 6's source
-   semantics are locked; low-rank approximation policy remains open.
+4. With the machinery drawn up, revisit process-consumer questions. Section
+   5's support and sparse-index semantics, Section 6's source semantics, and
+   Section 2.5's low-rank / feature approximation semantics are locked.
 
 ---
 
@@ -592,7 +722,6 @@ the e-graph (internal equality substrate).
 - Whether `condition_weighted` closure policy gets resurrected with a
   `condition_of(expr)` intrinsic now that we're taking cost modeling
   seriously
-- Whether separability is declared or inferred
 - Kernel composition (kernel of kernels) — out of scope until primary
   machinery is locked
 

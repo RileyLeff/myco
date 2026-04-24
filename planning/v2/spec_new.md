@@ -5784,15 +5784,15 @@ and Wendland; composition rules preserve contracts. Finite and
 integral kernel-operator semantics are ordinary Myco math. Exact
 support / locality semantics are graph facts. Sparse / index lowering
 is planner-owned and consumes exact facts without becoming source
-semantics. Low-rank rewrites and GP/HSGP process machinery remain
-tracked work.
+semantics. Low-rank / feature approximation semantics are graph and
+plan facts. GP/HSGP process machinery remains tracked work.
 
 Chunk 03 can now resume on the settled e-graph substrate; the kernel
 surface below is committed through finite assembly and ordinary
 integral / sum kernel operators, plus exact support / locality facts.
 Sparse / index lowering semantics are committed; concrete backend
-implementations, low-rank rewrites, and GP/HSGP process machinery
-remain tracked work.
+implementations, concrete low-rank algorithm kernels, and GP/HSGP
+process machinery remain tracked work.
 
 #### 28.1 Kernels as Parameterized Relations with Capability Contracts
 
@@ -6467,15 +6467,236 @@ lowering. It does not grant unchecked relation-level facts such as
 `support(k)` or `CompactSupport<A, B>(r)` unless the source relation
 or audited stdlib implementation already establishes them.
 
+#### 28.7 Separability, Feature Expansions, and Low-Rank Approximation
+
+**Summary.** Low-rank is not one semantic category. Myco
+distinguishes exact separability, exact finite feature expansions, and
+approximate feature / low-rank expansions. Exact forms may rewrite
+freely when proven. Approximate forms require source `approximate`
+claims or workflow approximation policy with scoped error provenance.
+Feature maps, modes, inducing points, and random features are ordinary
+relations or workflow artifacts, not a source `basis` construct.
+
+**Exact separability.** A kernel over a product structure may factor
+exactly:
+
+```text
+k((x1, z1), (x2, z2)) = kx(x1, x2) * kz(z1, z2)
+```
+
+Compiler facts:
+
+```text
+separable_kernel(k, product_axes=[X, Z])
+kernel_factors(k) = [kx, kz]
+product_domain(D, [X, Z])
+product_axes(points, [X_points, Z_points])
+```
+
+For product finite axes:
+
+```text
+K = gram(k, X_points x Z_points)
+Kx = gram(kx, X_points)
+Kz = gram(kz, Z_points)
+kronecker_factorization(K, [Kx, Kz])
+```
+
+For operators, kernel separability and product-domain facts authorize
+tensor-product quadrature / operator lowerings. A fully separated
+action additionally requires source separability:
+
+```text
+separable_source(f, product_axes=[X, Z])
+source_factors(f) = [fx, fz]
+separable_operator_action(T)
+```
+
+Approximate separability is not a kernel fact; it is an approximation
+with the same provenance and envelope requirements as other low-rank
+approximations.
+
+**Exact finite feature expansions.** A kernel may have an exact finite
+feature representation:
+
+```text
+k(x, y) = sum_m phi_m(x) * lambda_m * phi_m(y)
+```
+
+Facts:
+
+```text
+exact_feature_expansion(k, Phi, Lambda)
+feature_map(Phi, domain=A, feature_axis=M)
+rank_bound(gram(k, points)) <= M
+```
+
+These facts may be recognized from visible `.myco` relations:
+
+```myco
+relation seasonal_kernel(day1, day2, out: Scalar<U>) {
+    out = a0
+        + a1 * cos(day1) * cos(day2)
+        + b1 * sin(day1) * sin(day2)
+}
+```
+
+or shipped as audited stdlib facts for families such as fixed-degree
+polynomial kernels or finite spectral families. No new `basis`
+declaration is introduced; features are ordinary relations and axes.
+
+**Approximate feature expansions.** Nyström, inducing points, random
+features, truncated spectral / HSGP, truncated SVD, and related
+methods produce approximations unless exactness is separately proven:
+
+```text
+approx_feature_expansion(k_M, k, Phi_M, Lambda_M)
+approximation_scope(k_M, scope)
+approx_error(k_M, k, envelope)
+relaxation_ledger_entry(k_M)
+rank_bound(gram(k_M, points)) <= M
+```
+
+The approximation scope is explicit:
+
+- `approx_relation(k_M, k, DomainA x DomainB, envelope)`.
+- `approx_matrix(K_M, K, axes, norm, envelope)`.
+- `approx_operator(T_M, T, source_space -> target_space, envelope)`.
+
+A lower-scope approximation does not imply a higher-scope one. A
+truncated SVD of one Gram matrix is not a relation-level kernel fact.
+A relation-level kernel approximation does not imply an operator norm
+bound unless the required measure and source-space facts are present.
+
+**Error propagation.** Approximation envelopes propagate only through
+named implication rules that state their norm / tolerance class and
+required axis, measure, or source-space facts. For example, a uniform
+relation error over a finite point set may imply conservative matrix
+error bounds:
+
+```text
+entrywise_error(K_M, K) <= eps
+frobenius_error(K_M, K) <= n * eps
+spectral_error(K_M, K) <= n * eps
+```
+
+Stronger facts may be emitted when established directly, e.g.
+`spectral_error(K_M, K) <= eps_K` or
+`operator_error(T_M, T) <= eps_T`. Preserved structural facts such as
+symmetry, PSD, support, conservation, or rank are emitted only when
+the approximation construction proves them. Error bounds do not
+silently authorize substituting approximate objects into exact
+obligations.
+
+**PSD, PD, and rank.** Feature covariance constructions may emit PSD
+and rank facts when their algebra proves them:
+
+```text
+K_M = Phi * Lambda * transpose(Phi)
+nonnegative_diagonal(Lambda)
+positive_semidefinite(K_M)
+rank_bound(K_M) <= M
+```
+
+They emit `positive_definite(K_M)` only with explicit full-rank
+evidence or an explicit positive diagonal / noise component:
+
+```text
+K_obs = Phi * Lambda * transpose(Phi) + sigma2 * identity(n)
+sigma2 > 0
+positive_definite(K_obs)
+```
+
+No low-rank approximation silently adds jitter or upgrades PSD to PD.
+Consumers must either accept PSD / low-rank covariance, use a
+PSD-compatible primitive, or satisfy explicit PD obligations.
+
+**Three authorization routes.** Exact feature / separability rewrites
+may be compiler-selected when proven from visible relations, audited
+stdlib facts, or validated exact artifacts. Approximate low-rank /
+feature forms require either:
+
+- an explicit source `approximate` model claim, or
+- workflow approximation policy.
+
+A finite-feature relation written directly in `.myco` is simply the
+model unless it is explicitly related to a richer kernel by
+approximation provenance.
+
+**Nyström and inducing axes.** Nyström / inducing-point methods are
+finite intermediary-axis approximations, not GP-only constructs:
+
+```text
+Z = inducing_axis
+Kxz = kernel_matrix(k, X, Z)
+Kzz = gram(k, Z)
+K_approx = Kxz * solve(Kzz, transpose(Kxz))
+nystrom_approximation(K_approx, K, inducing_axis=Z)
+approximation_scope(K_approx) = finite_matrix(X)
+```
+
+All solver obligations on `Kzz` remain ordinary matrix obligations.
+If `positive_definite(Kzz)` is unknown, ordinary inverse / Cholesky
+routes report it. PSD-compatible primitives may be selected
+explicitly. Stabilization or diagonal noise is explicit model /
+workflow policy with provenance, never automatic.
+
+**Random features.** Random-feature approximations are workflow
+artifacts with random-draw provenance, not model stochastic roots:
+
+```text
+random_feature_approximation(k_M, k, feature_axis=M)
+feature_draw(Phi_M, distribution, seed)
+probabilistic_error_bound(k_M, k, confidence=0.99, envelope)
+reproducible_artifact(k_M) | stochastic_plan_artifact(k_M)
+```
+
+Fixed seeds produce reproducible artifacts. Unfixed seeds produce
+stochastic plan artifacts. Neither introduces `~` into the source
+model unless the user explicitly models that randomness.
+
+**Spectral / HSGP-style truncations.** HSGP is one spectral
+truncation pattern over an explicit bounded domain and boundary
+condition:
+
+```text
+k(x, y) = sum_m lambda_m * phi_m(x) * phi_m(y)
+k_M(x, y) = sum_{m in M} lambda_m * phi_m(x) * phi_m(y)
+```
+
+Facts:
+
+```text
+spectral_family(k, domain, boundary_condition)
+mode_set(Phi_M, domain, boundary_condition, count=M)
+orthonormal_modes(Phi_M, measure)
+lambda_nonnegative(Lambda_M)
+spectral_truncation_of(k_M, k, modes=Phi_M)
+approx_feature_expansion(k_M, k, Phi_M, Lambda_M)
+tail_bound(k, modes_not_in(Phi_M), spectral_envelope)
+```
+
+Domain, boundary, mode normalization, and spectral-density facts are
+ordinary obligations or workflow artifact facts. PSD / rank facts
+follow when the mode construction proves them; PD still requires
+full-rank or explicit positive diagonal evidence.
+
+**Consumer note.** GP and HSGP process machinery consumes the facts
+above, but process-level GP syntax, posterior inference, and
+specialized PPL handoff remain separate work. Low-rank covariance
+objects are ordinary PSD / rank-bounded matrix or operator objects
+until a process consumer uses them.
+
 Remaining kernel-adjacent work:
 
 - **Concrete sparse backend implementations.** The exactness and
   planner vocabulary is committed; backend storage kernels, cost
   calibration, and capability profiles for `CSR`, block-sparse,
   neighbor-list, and dynamic query runtimes remain implementation work.
-- **Low-rank kernel rewrites.** Nyström, inducing-point, random-feature,
-  and HSGP-style basis approximations remain approximation machinery,
-  not hidden kernel semantics.
+- **Concrete low-rank implementation kernels.** The semantic split is
+  committed; concrete backend kernels, cost calibration, and stdlib
+  family catalogs for Nyström, random features, spectral truncation,
+  and HSGP-style plans remain implementation work.
 - **Process-level GP / HSGP machinery.** GP and HSGP are consumers of
   the general kernel semantics above, not the definition of kernels.
 
@@ -7013,9 +7234,9 @@ references.
   contracts, finite assembly, Gram obligations, and ordinary
   `integrate` / `sum` kernel operators are locked (§28). Exact
   support, sparse / index lowering semantics, and provider-pattern
-  provenance are locked. Low-rank rewrites, GP/HSGP machinery,
-  concrete sparse backend implementations, and cost / approximation
-  policy remain open.
+  provenance are locked. Low-rank / feature approximation semantics
+  are locked. GP/HSGP machinery, concrete sparse / low-rank backend
+  implementations, and cost calibration remain open.
 - **Chunk 11.** Sum types / enums. Core surface locked (§3.10):
   `enum`, flat exhaustive `match`, unit / positional / struct-like
   variants, no wildcard/default arm, explicit narrowing before field
@@ -7543,11 +7764,13 @@ approximation-gated truncations from §28.5.
   including metric-radius cases summarized by `CompactSupport(radius)`.
   This is exact and may emit sparse zero patterns. LOCKED.
 - K2. Separable decomposition: `K((x₁,y₁),(x₂,y₂)) → K_x(x₁,x₂) *
-  K_y(y₁,y₂)` when declared or inferred. OPEN (§35, kernels chunk 03;
-  bidi when exact, uni when approximate).
+  K_y(y₁,y₂)` when exact `separable_kernel` and product-axis /
+  product-domain facts are proven. LOCKED (§28.7; exact only).
 - K3. Low-rank `K → U·Vᵀ` (truncated SVD, Nyström, random Fourier
-  features). DEFERRED (post-current-scope; §28 names it as future
-  kernel machinery, not a v2.1 rewrite).
+  features, spectral / HSGP truncations) requires exact feature
+  expansion facts or explicit approximation provenance with scoped
+  error / relaxation ledger facts. LOCKED (§28.7; concrete algorithm
+  catalogs remain implementation work).
 - K4. Infinite-tail truncation `K(a,b) → 0` outside a chosen region
   requires workflow approximation policy or an explicit `.myco`
   `approximate` claim plus tail-bound / error-ledger facts. LOCKED.
@@ -7746,10 +7969,10 @@ GEV). The enumeration is closed for v2.1.
 
 | faithfulness | bidi | uni | total |
 |---|---|---|---|
-| Strict | ~24 (A1-10, B1-2, C1-4, D1-3, E1-2, F1, G1-3, H1-2, I1) | ~4 (D4-5, X1, X2) | ~28 |
+| Strict | ~25 (A1-10, B1-2, C1-4, D1-3, E1-2, F1, G1-3, H1-2, I1, K2 exact) | ~5 (D4-5, K1 exact support, X1, X2) | ~30 |
 | Distribution-family | ~3 (Z1, Z5, Z10) | ~1 (Z11) | ~4 |
 | Fuzzy-model | — | ~2 (L1-2) | 2 |
-| Fuzzy-tolerance | ~4 (K2, M1, Q1-2) | ~5 (K1, M2, N1, O1, P1) | ~9 |
+| Fuzzy-tolerance | ~4 (K3 approximate forms, M1, Q1-2) | ~6 (K3 approximate forms, K4, M2, N1, O1, P1) | ~10 |
 | One-way (lossless uni) | — | ~11 (R1-3, S1-2, T1, U1-3, V1, W1) | ~11 |
 | N-way extraction | — | ~6 (Y1-6) | 6 |
 | Forbidden | 1 (J1 temporal) | — | 1 |
