@@ -5782,15 +5782,17 @@ capability contracts (`PositiveDefinite<A>`, `Stationary<L>`,
 keyword or type kind. Stdlib ships Matérn, RBF, rational-quadratic,
 and Wendland; composition rules preserve contracts. Finite and
 integral kernel-operator semantics are ordinary Myco math. Exact
-support / locality semantics are graph facts; sparse storage
-representation, low-rank rewrites, and GP/HSGP process machinery
-remain tracked work.
+support / locality semantics are graph facts. Sparse / index lowering
+is planner-owned and consumes exact facts without becoming source
+semantics. Low-rank rewrites and GP/HSGP process machinery remain
+tracked work.
 
 Chunk 03 can now resume on the settled e-graph substrate; the kernel
 surface below is committed through finite assembly and ordinary
 integral / sum kernel operators, plus exact support / locality facts.
-Sparse storage representation, low-rank rewrites, and GP/HSGP
-process machinery remain tracked work.
+Sparse / index lowering semantics are committed; concrete backend
+implementations, low-rank rewrites, and GP/HSGP process machinery
+remain tracked work.
 
 #### 28.1 Kernels as Parameterized Relations with Capability Contracts
 
@@ -6290,12 +6292,187 @@ structure:
   provider-validated. A runtime value that happens to be zero does not
   create a static zero pattern.
 
+#### 28.6 Sparse / Index Lowering and Provider Patterns
+
+**Summary.** Sparsity is semantic evidence; sparse storage is an
+execution choice. Exact `zero_when` and support facts may produce
+finite patterns, neighbor-index opportunities, and matrix-free
+lowerings. The planner may choose dense, sparse, block-sparse,
+neighbor-list, spatial-index, or matrix-free execution from legal
+exact candidates. Approximate indexes or sparsification require
+workflow approximation policy and ledger facts.
+
+The semantic layer emits facts such as:
+
+```text
+zero_pattern(W[i, j])
+sparse_candidate(W)
+dependency_region(effect(x))
+neighbor_index_candidate(effect, predicate)
+```
+
+These facts describe the mathematical object or dependency graph.
+They do not say that source-level `W` is `CSR`, `CSC`, block-sparse,
+or stored at all.
+
+**Pattern materialization.** The planner may materialize exact finite
+patterns when the zero / support predicate is decidable for finite
+axes:
+
+```text
+row_neighbors[i] = { j | not zero_when(k(xs[i], ys[j])) }
+csr_pattern_of(P, W)
+neighbor_list_for(effect, P)
+pattern_from_support(P, support(k), xs, ys)
+```
+
+Pattern materialization is exact when it is derived from exact
+`zero_when` / support facts or provider validation. It is still a
+plan artifact, not source semantics.
+
+**Coverage.** Exact sparse / index lowering requires complete
+coverage of every possibly nonzero pair:
+
+```text
+complete_for(index, support_predicate, axes)
+```
+
+meaning if `support_predicate(x, y)` may be true, `y` is returned by
+`index.query(x)`. Soundness is optional:
+
+```text
+sound_for(index, support_predicate, axes)
+```
+
+meaning every returned pair satisfies the predicate. A conservative
+index may be complete but not sound; false positives are legal if the
+lowering evaluates the exact predicate before accumulation:
+
+```text
+candidates = bbox_index.query(x)
+for y in candidates:
+    if support(k)(x, y):
+        acc += k(x, y) * source(y)
+```
+
+An approximate nearest-neighbor index that may omit possibly nonzero
+pairs is not an exact lowering unless a proof establishes
+`complete_for`. Otherwise it requires approximation policy and emits
+`approximate_index_lowering` / error-ledger facts.
+
+**Pattern phase and invalidation.** Sparse patterns and indexes carry
+phase and dependency facts:
+
+```text
+pattern_phase(P) =
+    compile_static | bind_static | step_static | dynamic_query
+depends_on(P, facts...)
+invalidates_on(P, event)
+```
+
+`compile_static` patterns are fixed by source / topology facts.
+`bind_static` patterns are fixed after workflow binding.
+`step_static` patterns may be reused inside one solve step but must
+be rebuilt when their dependencies change. `dynamic_query` patterns
+cannot be reliably prebuilt and must query at runtime or use a
+dynamic sparse runtime. Reusing a pattern outside its valid phase is
+illegal unless the workflow explicitly selects an approximation or a
+replanning / capacity-mask policy that preserves semantics.
+
+**Operator-general lowering.** Sparse / index lowering applies to
+kernel actions, not only materialized matrices. These are all legal
+lowering targets for recognized exact candidates:
+
+```text
+sparse_matrix_lowering(W)
+sparse_matvec_lowering(effect)
+neighbor_sum_lowering(effect)
+matrix_free_kernel_action(effect)
+runtime_spatial_query(effect)
+fixed_pattern_dynamic_values(effect)
+```
+
+For example:
+
+```myco
+W = kernel_matrix(k, targets, sources)
+effect = W * values
+```
+
+may materialize a sparse matrix, while:
+
+```myco
+effect(x) =
+    sum(k(x, y) * value(y) for y in sources)
+```
+
+may lower to matrix-free neighbor iteration. If the pattern is fixed
+but kernel values depend on changing parameters, the planner may
+reuse row / column indices and recompute numeric values:
+
+```text
+fixed_pattern_dynamic_values(effect)
+```
+
+All choices preserve the same exactness rules.
+
+**Workflow policy.** Workflows may rank legal exact lowerings without
+changing source semantics:
+
+```text
+lowering_candidate(effect, dense)
+lowering_candidate(effect, csr)
+lowering_candidate(effect, neighbor_list)
+lowering_candidate(effect, matrix_free)
+requires_capability(effect, sparse_matvec)
+requires_capability(effect, dynamic_query)
+cost_of(candidate) = ...
+```
+
+A workflow storage / lowering policy may prefer `matrix_free` over
+`CSR`, or `CSR` over `dense`, among legal exact candidates. It cannot
+authorize dropped pairs, ANN misses, threshold sparsification, or
+tail truncation; those are approximation policies and must route
+through §15.1 / §28.4 / §28.5 approximation provenance.
+
+`hypha explain` should expose the distinction:
+
+```text
+legal exact:
+  dense
+  csr: pattern_phase = bind_static
+  matrix_free: complete_for(index, support)
+approximate:
+  ann_query: requires approximation policy
+  tail_truncation: requires tail_bound + approximation policy
+```
+
+**Provider artifacts.** Workflow providers may supply sparse patterns,
+neighbor graphs, spatial indexes, and matrix-free query structures as
+validated artifacts:
+
+```text
+csr_pattern_of(P, W)
+complete_for(index, support_predicate, axes)
+sound_for(index, support_predicate, axes)
+pattern_phase(P) = bind_static
+depends_on(P, axes, radius)
+validated_by(P, exact_distance_check)
+validated_by(P, topology_adjacency_certificate)
+```
+
+Provider validation produces artifact-level facts for the current run.
+It may satisfy obligations on a concrete `kernel_matrix` or operator
+lowering. It does not grant unchecked relation-level facts such as
+`support(k)` or `CompactSupport<A, B>(r)` unless the source relation
+or audited stdlib implementation already establishes them.
+
 Remaining kernel-adjacent work:
 
-- **Sparse storage representation.** Exact support can emit
-  zero-pattern and indexing facts; backend storage choices such as
-  `CSR`, block-sparse, or neighbor-list layouts remain lowering
-  concerns.
+- **Concrete sparse backend implementations.** The exactness and
+  planner vocabulary is committed; backend storage kernels, cost
+  calibration, and capability profiles for `CSR`, block-sparse,
+  neighbor-list, and dynamic query runtimes remain implementation work.
 - **Low-rank kernel rewrites.** Nyström, inducing-point, random-feature,
   and HSGP-style basis approximations remain approximation machinery,
   not hidden kernel semantics.
@@ -6834,9 +7011,11 @@ references.
   domains and one scalar output, with point-point same-locus kernels
   as a specialization rather than the definition. Kernel facts /
   contracts, finite assembly, Gram obligations, and ordinary
-  `integrate` / `sum` kernel operators are locked (§28). Sparse
-  representation, low-rank rewrites, GP/HSGP machinery, and cost /
-  approximation policy remain open.
+  `integrate` / `sum` kernel operators are locked (§28). Exact
+  support, sparse / index lowering semantics, and provider-pattern
+  provenance are locked. Low-rank rewrites, GP/HSGP machinery,
+  concrete sparse backend implementations, and cost / approximation
+  policy remain open.
 - **Chunk 11.** Sum types / enums. Core surface locked (§3.10):
   `enum`, flat exhaustive `match`, unit / positional / struct-like
   variants, no wildcard/default arm, explicit narrowing before field

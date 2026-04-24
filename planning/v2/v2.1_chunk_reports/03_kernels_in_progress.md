@@ -6,8 +6,9 @@
 **Status:** IN PROGRESS. Kernel identity and finite assembly
 (`kernel_matrix` / `gram`) are locked; ordinary `integrate` / `sum`
 kernel-operator semantics are locked; exact support / locality /
-truncation semantics are locked; sparse storage, low-rank rewrites,
-and GP/HSGP process machinery remain under discussion.
+truncation semantics are locked; sparse / index lowering semantics
+are locked; low-rank rewrites and GP/HSGP process machinery remain
+under discussion.
 
 ---
 
@@ -82,7 +83,7 @@ relation neighbor_competition(
 Nothing about the name `kernel` is mechanically load-bearing in Myco. There is
 no `kernel` keyword, no kernel block, and no kernel type kind. Kernel identity
 is a relation role plus downstream consumers (`gram`, GP priors, integration /
-convolution operators, sparse assembly).
+convolution operators, sparse / index lowerings).
 
 The useful phrase is:
 
@@ -93,7 +94,7 @@ The useful phrase is:
   exact support predicates / `CompactSupport<A, B>(radius)` summaries.
 - **Kernel consumers:** operators that need those facts, such as
   `gram(k, points)`, GP/HSGP priors, convolution/integration operators, and
-  sparse matrix assembly.
+  sparse / index lowerings.
 
 **Decided:** universality is required. The standard library will provide the
 common covariance kernels (Matérn family, squared-exponential/RBF,
@@ -356,6 +357,107 @@ Support composition follows ordinary expression structure:
 - Source-side masks refine dependency regions only with structural or
   provider-validated zero facts, not runtime accidents.
 
+## 2.4 Sparse / index lowering and provider patterns
+
+Sparsity is semantic evidence; sparse storage is an execution choice. Exact
+support and `zero_when` facts may emit:
+
+```text
+zero_pattern(W[i, j])
+sparse_candidate(W)
+dependency_region(effect(x))
+neighbor_index_candidate(effect, predicate)
+```
+
+but they do not make source values `CSR`, `CSC`, block-sparse, or stored at
+all.
+
+The planner may materialize exact finite patterns:
+
+```text
+row_neighbors[i] = { j | not zero_when(k(xs[i], ys[j])) }
+csr_pattern_of(P, W)
+neighbor_list_for(effect, P)
+pattern_from_support(P, support(k), xs, ys)
+```
+
+Exact index lowering requires complete coverage:
+
+```text
+complete_for(index, support_predicate, axes)
+```
+
+If the support predicate may hold for `(x, y)`, then `index.query(x)` must
+return `y`. Soundness is optional:
+
+```text
+sound_for(index, support_predicate, axes)
+```
+
+False positives are legal when the exact predicate is checked before
+accumulation. Missing possibly-nonzero pairs are not exact; ANN or any other
+index that may miss pairs requires approximation policy and ledger facts.
+
+Patterns and indexes carry phase / invalidation:
+
+```text
+pattern_phase(P) =
+    compile_static | bind_static | step_static | dynamic_query
+depends_on(P, facts...)
+invalidates_on(P, event)
+```
+
+Planner choices include rebuilding, runtime query, dynamic sparse execution,
+host routing, replan, or capability rejection when a backend cannot preserve
+the phase semantics.
+
+Sparse / index lowering is operator-general:
+
+```text
+sparse_matrix_lowering(W)
+sparse_matvec_lowering(effect)
+neighbor_sum_lowering(effect)
+matrix_free_kernel_action(effect)
+runtime_spatial_query(effect)
+fixed_pattern_dynamic_values(effect)
+```
+
+The planner may materialize a matrix, materialize only row / column patterns,
+or use matrix-free neighbor iteration. All legal exact forms preserve the same
+support coverage and arithmetic semantics.
+
+Workflow policy may choose among legal exact lowerings:
+
+```text
+lowering_candidate(effect, dense)
+lowering_candidate(effect, csr)
+lowering_candidate(effect, neighbor_list)
+lowering_candidate(effect, matrix_free)
+requires_capability(effect, sparse_matvec)
+requires_capability(effect, dynamic_query)
+cost_of(candidate) = ...
+```
+
+Storage policy cannot authorize dropped pairs, threshold sparsification,
+tail truncation, or ANN misses; those are approximation policies.
+
+Providers may supply concrete sparse patterns, neighbor graphs, spatial
+indexes, or query structures. Validations produce artifact-level facts:
+
+```text
+csr_pattern_of(P, W)
+complete_for(index, support_predicate, axes)
+sound_for(index, support_predicate, axes)
+pattern_phase(P) = bind_static
+depends_on(P, axes, radius)
+validated_by(P, exact_distance_check)
+validated_by(P, topology_adjacency_certificate)
+```
+
+Provider validation can satisfy obligations for a concrete run artifact, but
+does not grant unchecked relation-level facts such as `support(k)` or
+`CompactSupport<A, B>(r)`.
+
 ---
 
 ## 3. What was rejected
@@ -389,13 +491,15 @@ v2.1. Parents expose scalar coordinate fields; children sample the parent via
 
 ---
 
-## 5. Support / locality locked; sparse storage deferred
+## 5. Support / locality / sparse-index lowering locked
 
 Characteristic length is one structured summary of exact support, not the
 support model itself. Radius, hop count, directionality, and bounding boxes are
 optimization facts derived from predicate-shaped support or audited stdlib
-facts. Backend storage formats (`CSR`, block-sparse, neighbor lists) remain
-lowering choices.
+facts. Sparse / index lowering semantics are locked: exact lowerings require
+complete coverage, may be conservative, carry phase / provenance facts, and
+remain operator-general. Concrete backend storage kernels and cost calibration
+remain implementation work.
 
 ---
 
@@ -409,8 +513,8 @@ ordinary expression when the compiler can normalize it into a linear kernel
 action.
 
 This closes the need for a special kernel integration syntax. The remaining
-work is lowering policy: sparse representations, quadrature choices, low-rank
-approximations, and GP/HSGP process consumers.
+work is approximation policy for quadrature / low-rank transforms, concrete
+sparse backend implementations, and GP/HSGP process consumers.
 
 ---
 
@@ -476,8 +580,8 @@ the e-graph (internal equality substrate).
    - tolerance plumbing (how workflow-level tolerance reaches the compiler's
      extraction decisions)
 4. With the machinery drawn up, revisit low-rank / process-consumer questions.
-   Section 5's support semantics and Section 6's source semantics are locked;
-   storage / approximation policy remains open.
+   Section 5's support and sparse-index semantics and Section 6's source
+   semantics are locked; low-rank approximation policy remains open.
 
 ---
 
