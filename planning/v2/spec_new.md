@@ -190,7 +190,8 @@ Terms: `variable`, `bound variable`, `free variable`, `relation`,
 `temporal`, `node`, `locus`, `geometry`, `domain`, `workflow`,
 `e-class`, `envelope`, `universal`, `SCC`, `residual graph`,
 `~` (distribution operator), `impl`, `some`, `` `approximate` `` block,
-`observe`.
+`observe`, `regime boundary`, `regime surface`, `crossing policy`,
+`relaxation`.
 
 ---
 
@@ -1433,7 +1434,88 @@ type-level counterpart (structural narrowing rather than
 numerical smoothing). The compiler does not auto-smooth; users
 write what they want.
 
-#### 8.10 Generated-Defaults and Obligation Keys
+#### 8.10 Regime Boundaries and Nonsmooth Crossings
+
+**Summary.** A regime boundary is any guard surface where the active
+equations, facts, topology, selected branch, or support pattern can
+change. Myco records these boundaries explicitly and classifies how
+information crosses them. Ordinary derivatives flow inside regimes;
+at a boundary the compiler exposes the mathematically valid crossing
+information and never invents a smooth gradient.
+
+Regime boundaries are a cross-cutting semantic object, not a special
+case of `event`. Sources include:
+
+- `if` / `else` and piecewise relations whose guard depends on a
+  continuous quantity.
+- `event when:` triggers whose guard crosses from false to true
+  (§10.0).
+- Dynamic-topology changes that create, delete, or re-key tensor axes
+  (§10, §21.4, §30).
+- Hard selections such as `min`, `max`, `argmin`, and `argmax`
+  (§12.2).
+- Geometry junctions and one-sided locus limits (§11.1, §11.8).
+- Compact-support kernels and kernel truncation surfaces (§28.3,
+  Appendix C K).
+- Contact, active-set, complementarity, saturation, and threshold
+  laws expressed in ordinary relations.
+
+A regime boundary record contains:
+
+- **Surface.** The Boolean guard or equality locus, e.g.
+  `turgor = 0`, `distance(x, y) = radius`, or
+  `pressure_drop = split_threshold`.
+- **Active forms.** The relation bodies, topology versions,
+  selected branches, fact sets, or support patterns on each side.
+- **Continuity class.** One of `smooth`, `value_continuous_kink`,
+  `value_jump`, `structural_discontinuity`, `stochastic_discrete`,
+  or `unknown`.
+- **Derivative class.** One of `ordinary`, `one_sided`,
+  `subgradient`, `saltation`, `estimator`, `none`, or `unknown`.
+- **Crossing policy.** The authorized way information crosses the
+  boundary: strict rejection, within-regime only, one-sided,
+  subgradient, saltation / reset sensitivity, stochastic estimator,
+  or workflow-authorized relaxation (§24.6).
+
+The default crossing policy is strict. Simulation may evaluate hard
+piecewise relations and events according to their source semantics,
+but gradient-demanding contexts cannot silently treat a boundary as
+smooth. If ordinary differentiation reaches a boundary whose
+derivative class is not `ordinary`, the compiler reports the boundary
+and the available crossing policies.
+
+Examples:
+
+```text
+psi =
+  if turgor > 0:
+    elastic_curve(turgor)
+  else:
+    flaccid_curve(turgor)
+
+regime_surface = (turgor = 0)
+active_forms = {positive: elastic_curve, nonpositive: flaccid_curve}
+continuity_class = value_continuous_kink | value_jump | unknown
+derivative_class = one_sided | none | unknown
+```
+
+```text
+k(x, y) = 0 when distance(x, y) > radius
+
+regime_surface = (distance(x, y) = radius)
+active_forms = {inside: kernel_body, outside: zero}
+continuity_class = smooth | value_continuous_kink | value_jump
+```
+
+Smoothing remains a model claim when written in `.myco` (§8.9). A
+workflow may authorize a relaxed plan (§24.6), but that plan is a
+surrogate extraction with ledger entries, not a rewrite of the source
+model's truth. The compiler's responsibility is to detect regime
+boundaries, classify them conservatively, preserve one-sided or
+within-regime information where valid, and refuse fake ordinary
+gradients.
+
+#### 8.11 Generated-Defaults and Obligation Keys
 
 **Summary.** Compiler-generated relations (junction balance, boundary
 condition stubs, conservation synthesis) carry named obligation keys
@@ -1660,7 +1742,10 @@ crossing per eligible participant group. Probabilistic conditions
 (`when: canopy_openness ~ Bernoulli(p)`) are handled under the
 aleatoric scope rules of §13.1 and still obey edge-triggered
 semantics: the sampled outcome is resolved each tick and an edge is
-detected on the resolved Boolean sequence.
+detected on the resolved Boolean sequence. A `when` guard whose truth
+depends on model values is also a regime boundary (§8.10); gradients
+inside a pre-event or post-event regime do not automatically cross
+the event surface.
 
 #### 10.1 Firing-Order Policy
 
@@ -1777,7 +1862,7 @@ fact. The e-graph never contains both the default and the override
 simultaneously, preserving monotonicity. User-written retraction of
 prior user claims remains open (tracked in §35).
 
-A `replaces <obligation_key>` declaration (§8.10) overrides a
+A `replaces <obligation_key>` declaration (§8.11) overrides a
 compiler-generated default relation by suppressing its emission,
 not by retracting a fact after the fact. The e-graph never
 contains both the default and the override simultaneously. This
@@ -2142,7 +2227,7 @@ recognized default-generation vocabulary (`balance` for flux-sum-zero).
 Using a stable obligation key ensures `replaces` targets are
 unambiguous across refactoring: renaming the user relation does not
 affect which default it suppresses. Obligation-key semantics are defined
-in §8.10; the `replaces` monotonicity rule (suppression, not retraction)
+in §8.11; the `replaces` monotonicity rule (suppression, not retraction)
 is in §10.5.
 
 **Stdlib junction helpers.** `continuous(field)` and
@@ -2284,8 +2369,10 @@ earliest index in the canonical index order of the collection
 **Differentiability class.** `argmin` and `argmax` are subgradient-
 differentiable. Gradient flows through the currently-selected
 element and is undefined at tie points (discontinuous switchover).
-This class drives A-group rewrite routing (§17); callers requiring
-smooth selection should use a soft alternative (tracked §35).
+This class drives A-group rewrite routing (§17) and is represented
+as a regime boundary at tie / switchover surfaces (§8.10). Callers
+requiring smooth selection should use a soft alternative (tracked
+§35).
 
 #### 12.3 Empty-Collection Defaults
 
@@ -3260,7 +3347,7 @@ the substrate-level version of referential truth (§0 principle
 
 Consequences:
 
-- `replaces` (§8.10, §10.5) suppresses default generation; it
+- `replaces` (§8.11, §10.5) suppresses default generation; it
   does not retract an already-emitted fact. Broader retraction
   semantics (whether `replaces` should admit full fact-level
   retraction) are tracked as open item O4.1 in §35.
@@ -3509,7 +3596,7 @@ structural shape, type identity, name coincidence, or any signal
 outside the enumerated authorizations. Every merge is traceable
 to a source tag.
 
-`replaces` (§8.10, §10.5) suppresses the default-generation merge
+`replaces` (§8.11, §10.5) suppresses the default-generation merge
 at the declaration site; it does not retract merges already emitted
 before the declaration was processed. Broader retraction semantics
 are tracked as §35 O4.1.
@@ -5186,7 +5273,9 @@ Three kernel-adjacent concerns are deferred:
   The kernel advertises compact support via `CompactSupport(radius)`;
   the backend representation for sparse kernel matrices (`CSR`,
   `block-sparse`, `k-nearest`) is a matrix-layer concern that belongs
-  in chunk 05's sparse-pattern / representation work.
+  in chunk 05's sparse-pattern / representation work. The support
+  boundary is a regime boundary (§8.10); exact compact support and
+  tolerance truncation carry different continuity / lossiness facts.
 - **Low-rank kernel rewrites.** Nyström / inducing-point and related
   low-rank approximations are deferred. Appendix C K3 is explicitly
   post-current-scope rather than an open Tier-1 rewrite.
@@ -5556,7 +5645,7 @@ controller-interface affordances, and Tier 2/Tier 3 distribution
 machinery.
 
 `replaces` obligation retraction (monotonicity tension with the
-e-graph; cross-refs §8.10 declaration, §10.5 semantics, §15
+e-graph; cross-refs §8.11 declaration, §10.5 semantics, §15
 equational-core monotonicity, §16 adjacent-keyed-state monotonicity).
 Tier 0 Phase 2 Q3 (residual ↔ e-graph relationship) and Q4 (envelope
 ownership). Literal-constants diagnostic surface (CC1 enforcement
@@ -6145,7 +6234,7 @@ LOCKED.
   constraints.
 
 **W. Obligation retraction.** Deletion, not rewrite. OPEN (chunk 04
-O4.1, cross-ref §8.10, §10.5, §15, §16, §35).
+O4.1, cross-ref §8.11, §10.5, §15, §16, §35).
 
 - W1. `relation X on locus replaces balance(axial_flux): ...` retracts
   the compiler-generated `balance(axial_flux)` at the named locus and

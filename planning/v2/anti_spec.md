@@ -92,6 +92,7 @@ gap-review stale list, subsequent design locks.
 | tensor `convert` as precision/layout/device tuning | `approximate` for value-changing precision; backend/provider facts for layout and device placement | `convert` is meaning-preserving type-layer machinery, not execution tuning |
 | reshape by element count alone | reshape with a named index bijection that preserves axes, entry-unit laws, patterns, and provenance | same cardinality does not prove the same tensor meaning |
 | dense-to-sparse `convert` by threshold or over-approximate pattern | dense-to-sparse only with proven/provider-validated `zero_pattern`; thresholding routes through `approximate` | sparsification can change values and must carry an envelope |
+| ordinary-gradient-through-discontinuity semantics | regime-boundary records with explicit crossing policy | gradients flow inside regimes; crossings require one-sided, subgradient, saltation, estimator, relaxation, or strict rejection |
 
 ## Retired open questions (closed or structurally void)
 
