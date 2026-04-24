@@ -5907,8 +5907,10 @@ in favor of the trait-based approach.
 
 **Summary.** Open items in the backend design: exact PPL message
 schema, inference-kind enumeration, opaque-callable fallback choices,
-future mixed-backend execution, and the first concrete backend
-choice. AD ownership is no longer open: §31 locks the hybrid boundary.
+future mixed-backend execution, and implementation-facing trait
+method signatures. AD ownership, capability-profile shape, PPL
+handoff, opaque-callable gradient semantics, versioning, and the
+first concrete backend target are no longer open.
 
 The backend trait shape is intentionally lean: `CoreBackend` is the
 mandatory substrate, and richer execution surfaces are advertised via
@@ -5933,15 +5935,27 @@ backend item, not a current guarantee.
 
 #### 32.2 First Concrete Backend
 
-**Summary.** Which backend ships first (Rust tensor stack, NumPy
-reference, JAX-alike) is open. Affects ergonomics of the first
-end-to-end demos but does not change the trait-surface design.
+**Summary.** The first implementation target is a semantics-complete
+CPU reference backend, likely NumPy-backed in the Python workflow
+layer. This is a debugging and conformance target, not a primary
+language backend. Capability-rich JAX-, PyTorch-, Burn-, GPU-, and
+PPL-oriented backends remain peer implementations of the same trait.
 
-Which backend is implemented first, a burn-style Rust tensor stack,
-a NumPy reference implementation, or a JAX-alike. Open. Affects
-ergonomics of the first end-to-end demos but does not change the
-trait-surface design, since the trait is backend-agnostic by
-construction.
+The first concrete backend target is a semantics-complete CPU
+reference implementation. It should prioritize correctness,
+inspectability, deterministic diagnostics, dynamic-keyed execution,
+provider validation, and broad coverage of source semantics over
+accelerator performance. In the Python workflow layer it may be
+NumPy-backed for ordinary dense numerical execution, with host-side
+reference routines for features outside NumPy's shape.
+
+This decision does not privilege CPU / NumPy as the language's
+primary backend (§31.6). It is the conformance target: the backend
+that helps implementers and users see whether Myco semantics are
+right before optimizing execution. JAX-, PyTorch-, Burn-, GPU-, and
+specialized PPL-oriented backends remain first-class trait
+implementations selected by workflow configuration and advertised
+capabilities.
 
 ---
 

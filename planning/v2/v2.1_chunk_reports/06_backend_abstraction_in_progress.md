@@ -425,6 +425,8 @@ With this chunk locked:
 - Enzyme-via-LLVM direction (from `v2.1_in_progress.md:1789`) can
   be framed as "one possible backend implementation," not a
   committed architecture.
+- The first conformance implementation target is clear: a
+  semantics-complete CPU reference backend.
 
 ---
 
@@ -443,7 +445,9 @@ With this chunk locked:
    silent gradient stops.
 6. Single-backend-per-run is resolved in the canonical spec (§32.1).
 7. Backend versioning is resolved in the canonical spec (§31.4).
-8. Write the v2.1 commitment text into the spec.
+8. First concrete backend target is resolved in the canonical spec
+   (§32.2): semantics-complete CPU reference first.
+9. Write the v2.1 commitment text into the spec.
 
 Chunk 05 (matrices) is closed on source semantics; its primitive
 list (§4) now supplies concrete lowering requirements for this
@@ -477,6 +481,7 @@ chunk's backend trait surface.
 - **Q7.** Versioning strategy. RESOLVED in canonical spec §31.4:
   Myco versions the trait surface; backend implementations advertise
   compatible trait versions; plan cache keys include backend identity.
-- **Q8.** First concrete backend to implement against (burn?
-  NumPy-on-CPU reference? JAX?) — not a design question strictly,
-  but affects trait shape.
+- **Q8.** First concrete backend to implement against. RESOLVED
+  2026-04-24: semantics-complete CPU reference backend first, likely
+  NumPy-backed in the Python workflow layer. This is a conformance /
+  debugging target, not a primary backend commitment.
