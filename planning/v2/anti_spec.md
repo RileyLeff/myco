@@ -29,7 +29,7 @@ gap-review stale list, subsequent design locks.
 | `laplace` spelling | `laplacian` | one canonical spelling across stdlib and docs |
 | `trace(f, junction, edge)` overload for directional limit at graph junctions | `limit_from(f, junction, edge)` | `trace` kept for manifold restriction (standard PDE trace operator); overloading two mathematically distinct operations on one name invites confusion |
 | user `fn` declarations | parameterized relations with explicit output slots | user-authored reusable model structure adds graph obligations; expression-position functions are stdlib/compiler-owned atoms |
-| `kernel` keyword or kernel kind | parameterized relation accepting two point arguments and an explicit scalar output slot | kernels are not a distinct construct; §6 and §28 state the design positively |
+| `kernel` keyword or kernel kind | parameterized relation accepting two input domains and an explicit scalar output slot; point-point same-locus kernels are one specialization | kernels are not a distinct construct; §6 and §28 state the design positively |
 | `approximate A <-> B: under: ...` expr-infix form | `approximate { body: ... under: ... }` block form | chunk 04 earlier draft used an infix-over-equation syntax; block form scopes cleanly to a named body and is what §15.1 locks |
 | `loss_of(residual)` intrinsic | `objective_terms(residual)` | "loss" overloaded planner cost, training objective, and likelihood; `objective_terms` is explicitly workflow-facing training decomposition |
 | `basis` declaration for matrix axes | plain contracts / field-set shapes plus compiler-facing matrix facts | axis signatures do not need a new source construct; contracts already name fields and units |

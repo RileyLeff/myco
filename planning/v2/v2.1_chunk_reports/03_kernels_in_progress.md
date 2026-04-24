@@ -3,8 +3,9 @@
 **Date:** 2026-04-19 (draft started; discussion ongoing)
 **Authors:** Riley Leff, Claude (Opus 4.7)
 **Reviewers:** None yet — discussion still open
-**Status:** IN PROGRESS. This note exists so the thread survives context
-compaction. Do not treat as settled. Resume the discussion from Section 7.
+**Status:** IN PROGRESS. Kernel identity is locked; facts, Gram
+obligations, sparse / low-rank rewrites, integration operators, and
+GP/HSGP process machinery remain under discussion.
 
 ---
 
@@ -32,43 +33,97 @@ This report is the scratchpad for that design discussion.
 
 ## 2. What "kernel" means here
 
-A kernel is just a function `K: A × B → V` — typically from two points in some
-domain (or a point and a subdomain) to a scalar weight or value. Nothing about
-the name `kernel` is mechanically load-bearing in Myco; the word is informal
-vocabulary for "function the compiler may want to treat specially for spatial
-optimization."
+A kernel is a parameterized relation with two input domains and one explicit
+scalar output:
 
-**Decided:** kernels are not a new kind. Not a new keyword. Not a new block.
-They are ordinary `.myco` functions. If the compiler needs to know something
-special about them (monotonicity, compact support, separability, stationarity,
-etc.), that information lives as properties on the function — in the same
-surface that already exists for `invertibility` / `differentiability` /
-`domain`.
+```myco
+relation k<A, B, U>(
+    x: A,
+    y: B,
+    out: Scalar<U>,
+) {
+    out = ...
+}
+```
 
-Riley Note: check what the deal is with properties
+The common spatial covariance / interaction specialization is point-point over
+one locus:
+
+```myco
+relation spatial_k<L: Locus, U: Unit>(
+    x: Point<L>,
+    y: Point<L>,
+    out: Scalar<U>,
+) {
+    out = ...
+}
+```
+
+Point-point same-locus kernels are not the definition. The same kernel
+identity covers continuous/continuous, discrete/discrete, and cross-domain
+relations:
+
+```myco
+relation root_uptake_weight(
+    root: RootSegment,
+    z: Point<SoilDepth>,
+    out: Scalar<dimensionless>,
+) { ... }
+
+relation neighbor_competition(
+    a: Tree,
+    b: Tree,
+    out: Scalar<dimensionless>,
+) { ... }
+```
+
+Nothing about the name `kernel` is mechanically load-bearing in Myco. There is
+no `kernel` keyword, no kernel block, and no kernel type kind. Kernel identity
+is a relation role plus downstream consumers (`gram`, GP priors, integration /
+convolution operators, sparse assembly).
+
+The useful phrase is:
+
+- **Kernel relation:** the user or stdlib parameterized relation of shape
+  `A, B, out`.
+- **Kernel facts:** compiler-facing facts/capability contracts such as
+  `PositiveDefinite<A>`, `Stationary<L>`, `Isotropic<L>`, and
+  `CompactSupport<A, B>(radius)`.
+- **Kernel consumers:** operators that need those facts, such as
+  `gram(k, points)`, GP/HSGP priors, convolution/integration operators, and
+  sparse matrix assembly.
 
 **Decided:** universality is required. The standard library will provide the
-common kernels (Matérn family, Gaussian, compact-support splines, etc.), but
-users must be able to write arbitrary ones. Myco is not in the business of
-enumerating a closed taxonomy of kernel shapes.
+common covariance kernels (Matérn family, squared-exponential/RBF,
+rational-quadratic, Wendland compact-support, etc.), but users must be able to
+write arbitrary kernel relations. Myco is not in the business of enumerating a
+closed taxonomy of kernel shapes.
+
+**Decided:** kernel facts are evidence, not trust annotations. Stdlib kernels
+carry audited facts; user-authored visible relations may receive facts the
+compiler can derive from body composition and stdlib atom contracts. If a
+consumer requires a fact the compiler cannot establish, the use reports an
+unmet obligation rather than silently treating the relation as a valid
+covariance or sparse kernel.
 
 ---
 
 ## 3. What was rejected
 
 - **A new `kernel` keyword or kernel kind.** Rejected in favor of "kernels are
-  just functions." Nothing about the user-facing surface should imply kernels
-  are a distinguished category.
+  parameterized relations." Nothing about the user-facing surface should imply
+  kernels are a distinguished construct.
 
 - **A stdlib-only hierarchy like `SpatialKernel<Reduction, Profile>`.** Rejected
-  because it isn't universal — users couldn't express arbitrary kernels in it.
+  because it is not universal — users could not express arbitrary cross-domain
+  or domain-specific kernel relations in it.
 
-- **Implicit compiler inference of all kernel properties.** Discussed but
-  partially rejected. The compiler *may* infer where possible (e.g., detecting
-  separability from the function body), but declarations are needed when the
-  user knows something the compiler can't prove — and the surface must reject
-  declarations that are provably false (property verification, not property
-  trust).
+- **User property declarations for kernel facts.** Retired with the broader
+  property-annotation surface. The compiler may infer facts where possible
+  (e.g., closure-preserving composition of stdlib kernels), and stdlib kernels
+  may carry audited facts, but user-authored kernels do not get
+  `PositiveDefinite` / `Stationary` / compact-support facts merely by
+  assertion.
 
 ---
 
@@ -91,7 +146,7 @@ a parameter on the relation declaration in `.myco`, and its concrete value gets
 bound from the workflow layer like any other parameter. Not yet fully locked.
 Revisit after the e-graph / cost / unified-machinery layer is drawn up, because
 the right answer depends on whether the compiler can derive effective support
-from the function body vs. needs a declaration.
+from the relation body / stdlib facts vs. needs a separate evidence path.
 
 ---
 
@@ -161,10 +216,10 @@ the e-graph (internal equality substrate).
    other chunk reports) for anywhere that needs updating given the e-graph
    substrate is explicit.
 3. Return to this kernel discussion. Design the unified machinery:
-   - cost model (per-op table vs. per-function declaration vs. relation
-     annotation)
-   - rewrite-rule declaration surface (extend `property` block? new
-     construct? just more relations?)
+   - cost model (per-op table vs. relation facts vs. backend/provider
+     capability evidence)
+   - rewrite-rule surface (ordinary relations plus compiler/stdlib rewrite
+     facts; no resurrected `property` annotation surface)
    - tolerance plumbing (how workflow-level tolerance reaches the compiler's
      extraction decisions)
 4. With the machinery drawn up, revisit Sections 5 (sparsity) and 6

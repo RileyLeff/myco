@@ -5773,13 +5773,15 @@ depending on the transformation applied to it.
 
 ### 28. Kernels
 
-**Summary.** Kernels are parameterized relations over locus point
-pairs with one scalar output slot. Kernel-ness is expressed via
-capability contracts (`PositiveDefinite`, `Stationary`, `Isotropic`,
-`CompactSupport(radius)`) rather than a separate keyword or type kind.
-Stdlib ships Matérn, RBF, rational-quadratic, and Wendland;
-composition rules preserve contracts. Sparsity and integration
-operators remain open implementation work.
+**Summary.** Kernels are parameterized relations over two input
+domains and one scalar output slot. Point-point same-locus kernels are
+the common spatial covariance / interaction specialization, not the
+definition. Kernel-ness is expressed via compiler-facing facts and
+capability contracts (`PositiveDefinite<A>`, `Stationary<L>`,
+`Isotropic<L>`, `CompactSupport<A, B>(radius)`) rather than a separate
+keyword or type kind. Stdlib ships Matérn, RBF, rational-quadratic,
+and Wendland; composition rules preserve contracts. Sparsity and
+integration operators remain open implementation work.
 
 Chunk 03 can now resume on the settled e-graph substrate; the kernel
 surface below is committed, while sparse assembly, low-rank rewrites,
@@ -5787,12 +5789,26 @@ and integration operators remain tracked work.
 
 #### 28.1 Kernels as Parameterized Relations with Capability Contracts
 
-**Summary.** A kernel is a parameterized relation whose first two
-slots are `Point<L>` values and whose explicit output slot is
-`Scalar<U>`. No separate `kernel` keyword exists. Kernel-ness comes
-from capability contracts on stdlib atoms and derived relation bodies.
+**Summary.** A kernel is a parameterized relation with two explicit
+input domains and one explicit scalar output slot. The inputs may be
+continuous points, discrete entities, mesh cells, intervals,
+subdomains, or cross-domain pairs. No separate `kernel` keyword
+exists. Kernel-ness comes from compiler-facing facts and capability
+contracts on stdlib atoms and derived relation bodies.
 
-A kernel relation has the shape:
+A kernel relation has the general shape:
+
+```myco
+relation k<A, B, U>(
+    x: A,
+    y: B,
+    out: Scalar<U>,
+) {
+    out = ...
+}
+```
+
+The familiar spatial covariance / interaction specialization is:
 
 ```myco
 relation k<L: Locus, U: Unit>(
@@ -5805,59 +5821,86 @@ relation k<L: Locus, U: Unit>(
 ```
 
 No separate `kernel` keyword, no separate type kind. Kernel-ness is a
-property the compiler verifies from body composition plus capability
+fact role the compiler derives from body composition plus capability
 contracts on atoms, mirroring how relation differentiability is
-derived from stdlib expression atoms (§6). The relevant capability
-contracts:
+derived from stdlib expression atoms (§6). The relation shape supports
+continuous/continuous, discrete/discrete, and cross-domain kernels:
 
-- `PositiveDefinite`. Guarantees the Gram matrix
-  `K_{ij} = k(x_i, x_j)` is PSD for any finite point set. Required
-  for use as a Gaussian Process covariance kernel.
-- `Stationary`. Guarantees `k(x, y) = k̃(x − y)` for some `k̃`.
-  Implies translation invariance on the ambient locus.
-- `Isotropic`. Guarantees `k(x, y) = k̂(‖x − y‖)` for some `k̂`.
-  Supertrait `Stationary` plus rotation invariance.
-- `CompactSupport(radius)`. Guarantees `k(x, y) = 0` whenever the
-  locus distance between x and y exceeds the given radius. The radius
-  is a `val` generic or workflow-bound scalar accepted by the kernel
-  family; it is not a workflow annotation.
+```myco
+relation root_uptake_weight(
+    root: RootSegment,
+    z: Point<SoilDepth>,
+    out: Scalar<dimensionless>,
+) { ... }
 
-Stdlib kernels, Matérn (ν = 1/2, 3/2, 5/2, ∞), squared-exponential
-(RBF), rational-quadratic, Wendland compact-support, satisfy all
-three. Non-stationary kernels (e.g. polynomial `k(x, y) = (x · y + c)^d`,
-Brownian `k(x, y) = min(x, y)`) satisfy `PositiveDefinite` but not
-`Stationary`. The usual operations on kernels preserve the contracts:
-sum preserves `PositiveDefinite` and `Stationary`, product preserves
-`PositiveDefinite`, scaling by a positive scalar preserves both, and
-radial wrapping (`k̂(‖·‖)`) elevates `Stationary` to `Isotropic`.
-These closure rules are how the compiler derives kernel contracts
-from composition without user property-declaration surface.
+relation neighbor_competition(
+    a: Tree,
+    b: Tree,
+    out: Scalar<dimensionless>,
+) { ... }
+```
+
+Kernel facts are typed by the domain shape that makes them meaningful:
+
+- `PositiveDefinite<A>`. Applies to same-domain kernels
+  `A, A -> Scalar<U>` and guarantees the Gram matrix
+  `K_{ij} = k(x_i, x_j)` is PSD for any finite set of A-values.
+  Required for use as a Gaussian Process covariance kernel.
+- `Stationary<L>`. Applies to point kernels over a locus where
+  translation has meaning; guarantees `k(x, y) = ktilde(x - y)`.
+- `Isotropic<L>`. Applies to point kernels over a normed/metric locus;
+  guarantees `k(x, y) = khat(distance(x, y))`.
+- `CompactSupport<A, B>(radius)`. Applies when a distance or
+  adjacency predicate between A and B is defined; guarantees
+  `k(x, y) = 0` outside the support radius.
+
+For brevity, examples may omit the domain parameter when it is
+obvious from the relation signature. Stdlib covariance kernels such
+as Matérn (nu = 1/2, 3/2, 5/2, infinity), squared-exponential (RBF),
+rational-quadratic, and Wendland carry audited facts. Non-stationary
+kernels (e.g. polynomial `k(x, y) = (x * y + c)^d`, Brownian
+`k(x, y) = min(x, y)`) can satisfy `PositiveDefinite` without
+satisfying `Stationary`. Cross-domain kernels can carry facts such
+as `CompactSupport<A, B>` or later operator facts without pretending
+to be same-domain GP covariance kernels.
+
+The usual operations on same-domain covariance kernels preserve the
+contracts: sum preserves `PositiveDefinite` and `Stationary`, product
+preserves `PositiveDefinite`, scaling by a positive scalar preserves
+both, and radial wrapping (`khat(distance(...))`) elevates a
+stationary point kernel to `Isotropic` when the locus supplies the
+needed metric facts. These closure rules are how the compiler derives
+kernel contracts from composition without user property-declaration
+surface.
 
 #### 28.2 Ambient-Locus via Composition
 
-**Summary.** Kernels take `Point<L>` arguments where `L` is ambient at
-the call site, not declared per-kernel. Kernel families that require
-specific locus structure express it via a locus contract, not a
-specialized kernel type. Product loci compose via `(x1,y1), (x2,y2)`
-arguments with the PositiveDefiniteness closure rule applied.
+**Summary.** Kernel input domains are fixed by the call site, not by a
+special kernel kind. Point kernels take `Point<L>` arguments where `L`
+is ambient at the call site; cross-domain kernels name their two input
+types directly. Kernel families that require specific locus or domain
+structure express it via ordinary contracts, not specialized kernel
+types.
 
-Kernels take `Point<L>` arguments, where the locus `L` is ambient and
-fixed by where the kernel relation is invoked, not by a per-kernel
-declaration.
-This avoids kernel families that only work on one space; e.g.
-squared-exponential is usable on any `L` that admits a norm, and the
-compiler picks up the norm from the locus definition (§11.1). A
-kernel that requires a specific structure (e.g. spherical kernels
-requiring `L = Sphere`) expresses that via a contract on the locus,
-not via a specialized kernel type.
+Point kernels take `Point<L>` arguments, where the locus `L` is
+ambient and fixed by where the kernel relation is invoked, not by a
+per-kernel declaration. This avoids kernel families that only work on
+one space; e.g. squared-exponential is usable on any `L` that admits a
+norm, and the compiler picks up the norm from the locus definition
+(§11.1). A kernel that requires a specific structure (e.g. spherical
+kernels requiring `L = Sphere`) expresses that via a contract on the
+locus, not via a specialized kernel type. Cross-domain kernels name
+the participating source domains directly, such as `RootSegment` to
+`Point<SoilDepth>` or `Tree` to `Tree`.
 
 Composite kernels compose ambient-locus the same way any other
 parameterized relation composes: the composed relation invokes the
 component relations into explicit temporary output slots, then relates
 the final output to their sum, product, or scaling. The compiler
-checks that the component kernels share an ambient locus. Product
-kernels on product loci (`L = L_x × L_y`) use paired point arguments;
-the PositiveDefiniteness closure rule covers them.
+checks that the component kernels' input domains and facts line up.
+Product kernels on product loci (`L = L_x x L_y`) use paired point
+arguments; the PositiveDefiniteness closure rule covers the
+same-domain covariance case.
 
 #### 28.3 Kernel Sparsity and Integration, Deferred to Chunk 03
 
@@ -6419,9 +6462,13 @@ references.
   relations, not a separate keyword; reusable user-authored model
   structure adds graph obligations via relations, not expression-
   position functions.
-- **Chunk 03.** Kernels, resumed after substrate lock; sparse
-  assembly, low-rank rewrites, integration operators, and cost
-  machinery remain open.
+- **Chunk 03.** Kernels, resumed after substrate lock. Kernel identity
+  is locked: kernels are parameterized relations over two input
+  domains and one scalar output, with point-point same-locus kernels
+  as a specialization rather than the definition. Kernel facts /
+  contracts, Gram obligations, sparse assembly, low-rank rewrites,
+  integration operators, GP/HSGP machinery, and cost machinery remain
+  open.
 - **Chunk 11.** Sum types / enums. Core surface locked (§3.10):
   `enum`, flat exhaustive `match`, unit / positional / struct-like
   variants, no wildcard/default arm, explicit narrowing before field
