@@ -5648,16 +5648,16 @@ outputs, emitted facts, and unmet obligations remain inspectable.
 
 ---
 
-## Part V — Backend Abstraction (STUB)
+## Part V — Backend Abstraction
 
 **Summary.** Part V specifies the abstraction by which Myco compiles
-plans against a trait surface (numerical execution, AD, PPL handoff,
-opaque-callable runtime, capability advertising) rather than a
-specific runtime. Specific trait signatures and open forks land in
-chunk 06; this part is normative in scope only.
-
-Pending chunk 06 design completion. Specific trait shape and open forks
-tracked separately; this part is normative in scope only.
+plans against a trait surface rather than a specific runtime. The
+locked design is a small `CoreBackend` plus advertised capability
+profiles; hybrid Myco-owned / backend-owned AD; explicit capability
+mismatch policy; whole-SCC Tier C PPL handoff; opaque-callable runtime
+semantics; backend trait versioning; no primary backend; and a
+semantics-complete CPU reference backend as the first conformance
+target.
 
 ### 31. Backend Trait Surface
 
@@ -5903,14 +5903,16 @@ one a given run uses. Earlier design drafts privileged a specific
 Python ecosystem backend; the current design retires that framing
 in favor of the trait-based approach.
 
-### 32. Open Backend Items
+### 32. Backend Follow-On Items
 
-**Summary.** Open items in the backend design: exact PPL message
-schema, inference-kind enumeration, opaque-callable fallback choices,
-future mixed-backend execution, and implementation-facing trait
-method signatures. AD ownership, capability-profile shape, PPL
-handoff, opaque-callable gradient semantics, versioning, and the
-first concrete backend target are no longer open.
+**Summary.** Backend semantics are locked. Follow-on implementation
+items remain: exact PPL message schema, inference-kind enumeration,
+workflow spelling for explicit gradient stops and capability-scoped
+fallback, future mixed-backend execution, and implementation-facing
+trait method signatures. AD ownership, capability-profile shape,
+PPL handoff, opaque-callable gradient semantics, versioning, no
+primary-backend policy, and the first conformance backend target are
+no longer open.
 
 The backend trait shape is intentionally lean: `CoreBackend` is the
 mandatory substrate, and richer execution surfaces are advertised via
@@ -5936,24 +5938,30 @@ backend item, not a current guarantee.
 #### 32.2 First Concrete Backend
 
 **Summary.** The first implementation target is a semantics-complete
-CPU reference backend, likely NumPy-backed in the Python workflow
-layer. This is a debugging and conformance target, not a primary
-language backend. Capability-rich JAX-, PyTorch-, Burn-, GPU-, and
+CPU reference backend: Python-hosted in the workflow layer,
+CPU-executed, vectorized through NumPy / SciPy where that preserves
+semantics, and explicit about slower reference paths where it cannot.
+This is a debugging and conformance target, not a primary language
+backend. Capability-rich JAX-, PyTorch-, Burn-, GPU-, Rust CPU-, and
 PPL-oriented backends remain peer implementations of the same trait.
 
 The first concrete backend target is a semantics-complete CPU
 reference implementation. It should prioritize correctness,
 inspectability, deterministic diagnostics, dynamic-keyed execution,
 provider validation, and broad coverage of source semantics over
-accelerator performance. In the Python workflow layer it may be
-NumPy-backed for ordinary dense numerical execution, with host-side
-reference routines for features outside NumPy's shape.
+accelerator performance. In the Python workflow layer it should use
+NumPy / SciPy for ordinary dense numerical execution when those
+kernels preserve Myco semantics, with explicit host-side reference
+routines for features outside NumPy / SciPy's shape. "Reference"
+means conformance-first, not intentionally slow scalar Python.
 
 This decision does not privilege CPU / NumPy as the language's
 primary backend (§31.6). It is the conformance target: the backend
 that helps implementers and users see whether Myco semantics are
-right before optimizing execution. JAX-, PyTorch-, Burn-, GPU-, and
-specialized PPL-oriented backends remain first-class trait
+right before optimizing execution. A Rust CPU backend may be added
+later as a performance-oriented implementation of the same trait, not
+as a replacement for the reference target. JAX-, PyTorch-, Burn-, GPU-,
+and specialized PPL-oriented backends remain first-class trait
 implementations selected by workflow configuration and advertised
 capabilities.
 
@@ -5964,19 +5972,20 @@ capabilities.
 **Summary.** Part VI enumerates open design items (B-tagged blockers,
 chunk-slotted work, and a catalog of smaller opens) carried forward
 explicitly so they are not silently committed during consolidation.
-Covers matrix heterogeneous-unit resolution, backend trait details,
-joint distribution syntax, residual-graph mechanics, and more.
+Covers joint distribution syntax, residual-graph mechanics, and more.
+Matrix heterogeneous-unit resolution and backend abstraction are
+closed design blockers.
 
 Carried forward explicitly so they are not silently committed during
 consolidation.
 
 ### 33. Design Blockers
 
-**Summary.** Four named B-blockers remain open: B1 opaque log_pdf
-policy, B2 joint declaration syntax, B4 coupling machinery, and B6
-backend abstraction. B5 matrix heterogeneous-unit resolution is
-closed by the matrix-facts model (§3.9) and the committed primitive
-surface (§30).
+**Summary.** Three named B-blockers remain open: B1 opaque log_pdf
+policy, B2 joint declaration syntax, and B4 coupling machinery. B5
+matrix heterogeneous-unit resolution is closed by the matrix-facts
+model (§3.9) and the committed primitive surface (§30). B6 backend
+abstraction is closed by Part V.
 
 - **B1.** Opaque log_pdf stdlib policy.
 - **B2.** Joint declaration syntax.
@@ -5986,16 +5995,20 @@ surface (§30).
   `entry_unit_law`, construction provenance, provider validation)
   over ordinary tensors; no `basis` syntax or user-marked matrix
   role types.
-- **B6.** Backend abstraction details beyond the locked hybrid AD
-  boundary (see Part V).
+- **B6.** RESOLVED: backend abstraction uses a small `CoreBackend`
+  plus advertised capabilities and profiles; hybrid AD; explicit
+  capability mismatch policies; whole-SCC Tier C PPL handoff;
+  opaque-callable runtime semantics; trait versioning; no primary
+  backend; and a semantics-complete CPU reference conformance target
+  (see Part V).
 
 ### 34. Chunk-Slotted Work
 
-**Summary.** Outstanding design chunks: chunk 06 backend abstraction,
-chunk 07 type-graph to e-graph bridge, chunk 08 joint syntax and
-coupling, chunk 03 kernels (resumes after substrate lock), chunk 11
-sum types / enums. Chunks 05 and 12 are resolved and kept here as
-completed references.
+**Summary.** Outstanding design chunks: chunk 07 type-graph to
+e-graph bridge, chunk 08 joint syntax and coupling, chunk 03 kernels
+(resumes after substrate lock), and chunk 11 sum types / enums.
+Chunks 05, 06, and 12 are resolved and kept here as completed
+references.
 
 - **Chunk 05.** RESOLVED: matrix details. Heterogeneous-unit type
   mechanics are resolved by matrix facts (§3.9); shape expressions,
@@ -6003,9 +6016,16 @@ completed references.
   scope, dynamic topology shape handling, scalar reconciliation, and
   the primitive catalog are locked. Finite matrix assembly is the
   source syntax for assembling matrices from graph values; concrete
-  numeric matrix data remains workflow-bound. Execution concerns move
-  to chunk 06.
-- **Chunk 06.** Backend abstraction.
+  numeric matrix data remains workflow-bound. Execution concerns are
+  handled by the resolved Part V backend abstraction.
+- **Chunk 06.** RESOLVED: backend abstraction. Myco targets a
+  versioned trait surface with `CoreBackend` plus capability profiles;
+  workflows select one backend per run; capability mismatches error by
+  default unless explicit `host` / `emulate` policy is configured;
+  Tier C hands whole unresolved stochastic SCCs to backend PPL
+  handlers; opaque callables require explicit runtime and AD
+  capabilities; no backend is primary; the first conformance target is
+  a semantics-complete CPU reference backend.
 - **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04
   (expression e-graph substrate), 05 (refinement-lattice examples
   from matrix types), and 06 (backend-dependent conversion-edge

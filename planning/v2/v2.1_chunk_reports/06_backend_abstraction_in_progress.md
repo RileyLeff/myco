@@ -1,12 +1,14 @@
-# Myco v2.1 — Backend Abstraction Design Report (IN PROGRESS — STUB)
+# Myco v2.1 — Backend Abstraction Design Report (LOCKED)
 
-**Date:** 2026-04-20 (stub created)
+**Date:** 2026-04-20 (stub created); locked 2026-04-24
 **Authors:** Riley Leff, Claude (Opus 4.7)
 **Reviewers:** None yet
-**Status:** STUB. Captures the scope and initial framing of backend
-abstraction. Several chunks converged on "this is really one backend-
-routing problem, not several." Factored here so those chunks don't all
-try to solve it in-place.
+**Status:** LOCKED. Backend abstraction is committed into the
+canonical spec as Part V: small `CoreBackend` plus capability
+profiles; hybrid AD; explicit capability mismatch policies; whole-SCC
+Tier C PPL handoff; opaque-callable runtime semantics; trait
+versioning; no primary backend; and a semantics-complete CPU reference
+backend as the first conformance target.
 
 ---
 
@@ -46,11 +48,10 @@ distinct design threads. Designing it in-place in chunk 05 would
 have scope-crept chunk 05 badly and left the PPL backend problem
 unsolved anyway.
 
-**Pattern to commit (direction, not detail):** burn-style
-`trait Backend { type Tensor; type Distribution; fn matmul(...); fn
-sample(...); ... }`. Every backend-dependent op routes through the
-trait. Workflow selects a backend at run-time configuration. `.myco`
-stays backend-agnostic.
+**Pattern committed:** a burn-style backend trait surface with a
+small mandatory core and advertised capabilities. Every
+backend-dependent op routes through the trait. Workflow selects a
+backend at run-time configuration. `.myco` stays backend-agnostic.
 
 Riley's confirmation: *"we'll be able to handle this backend-
 agnostic, sort of like how burn in rust is impl backend for
@@ -60,7 +61,8 @@ different gpu apis? i like your proposals overall."* (2026-04-20)
 
 ## 2. Current state in v2.1
 
-Nothing is formalized. Ad-hoc mentions scattered across:
+The audit found the backend concern scattered across several earlier
+design threads:
 
 - **PPL backend** — chunk 04 §11 CC4 resolution commits Tier C
   distributions to "route to a PPL backend" but leaves the protocol
@@ -80,7 +82,8 @@ Nothing is formalized. Ad-hoc mentions scattered across:
   to runtime `condest` on assembled matrices; `condest` is a
   backend primitive.
 
-No single surface ties these together; this chunk is that surface.
+Part V of `spec_new.md` is now the canonical surface that ties these
+together.
 
 ---
 
@@ -430,32 +433,48 @@ With this chunk locked:
 
 ---
 
-## 7. Return path
+## 7. Final v2.1 commitment
 
-1. AD ownership is resolved in the canonical spec (§31): hybrid
-   boundary. This report should mirror it.
-2. Minimum backend trait API vs. advertised capabilities is resolved
-   (§4.1): small `CoreBackend` plus capability profiles.
-3. Default fallback policy is resolved in the canonical spec (§31.1):
-   `error`, with `host` / `emulate` as explicit workflow choices.
-4. PPL backend protocol is resolved (§4.4): whole stochastic SCC
-   `InferenceTask` handoff.
-5. Opaque callable protocol is resolved (§4.5): same-backend runtime
-   by default, explicit AD capabilities for trainable callables, no
-   silent gradient stops.
-6. Single-backend-per-run is resolved in the canonical spec (§32.1).
-7. Backend versioning is resolved in the canonical spec (§31.4).
-8. First concrete backend target is resolved in the canonical spec
-   (§32.2): semantics-complete CPU reference first.
-9. Write the v2.1 commitment text into the spec.
+1. Myco targets a backend trait surface, not a privileged runtime.
+   The mandatory surface is `CoreBackend`; richer functionality is
+   advertised through capabilities and capability profiles.
+2. Capability mismatch defaults to `error`. `host` and `emulate` are
+   explicit workflow policies, never silent fallbacks.
+3. AD has a hybrid boundary: Myco owns visible symbolic /
+   algorithmic derivative structure; backends own runtime AD over
+   emitted kernels and opaque callables.
+4. Tier C hands each unresolved stochastic SCC to the backend as an
+   `InferenceTask`, after Tier A exact rewrites and authorized Tier B
+   approximations have run.
+5. Opaque callables run in the selected backend context by default.
+   Fixed callables require runtime support; trainable callables
+   additionally require explicit opaque-callable AD support. Gradient
+   stops are workflow declarations, not inferred repairs.
+6. A run selects one backend. Future SCC-level mixed-backend
+   execution is a follow-on item, not v2.1 semantics.
+7. Myco versions the trait surface; backend implementations advertise
+   compatible trait versions; plan cache keys include backend
+   identity.
+8. No backend is primary. JAX-, PyTorch-, Burn-, GPU-, PPL-oriented,
+   Rust CPU, and reference CPU implementations are peer backends
+   against the same trait.
+9. The first conformance target is a semantics-complete CPU reference
+   backend: Python-hosted in the workflow layer, CPU-executed,
+   vectorized through NumPy / SciPy where semantics allow, and
+   explicit about slower reference paths where they are required.
+10. Remaining backend work is implementation-facing spelling: exact
+   PPL message schema, inference-kind enumeration, workflow syntax
+   for explicit gradient stops and capability-scoped fallback, future
+   mixed-backend execution, and concrete trait method signatures.
 
-Chunk 05 (matrices) is closed on source semantics; its primitive
-list (§4) now supplies concrete lowering requirements for this
-chunk's backend trait surface.
+Chunk 05 (matrices) is closed on source semantics; its primitive list
+now supplies concrete lowering requirements for this chunk's backend
+trait surface. Chunk 06 is closed on semantics; implementation detail
+continues under backend follow-on items.
 
 ---
 
-## 8. Open questions (consolidated)
+## 8. Closed questions (consolidated)
 
 - **Q1.** AD ownership. RESOLVED in canonical spec §31: hybrid
   boundary. Myco owns visible symbolic / algorithmic derivative
@@ -482,6 +501,9 @@ chunk's backend trait surface.
   Myco versions the trait surface; backend implementations advertise
   compatible trait versions; plan cache keys include backend identity.
 - **Q8.** First concrete backend to implement against. RESOLVED
-  2026-04-24: semantics-complete CPU reference backend first, likely
-  NumPy-backed in the Python workflow layer. This is a conformance /
-  debugging target, not a primary backend commitment.
+  2026-04-24: semantics-complete CPU reference backend first:
+  Python-hosted in the workflow layer, CPU-executed, vectorized
+  through NumPy / SciPy where semantics allow, and explicit about
+  slower reference paths where required. This is a conformance /
+  debugging target, not a primary backend commitment; a Rust CPU
+  backend remains a later performance-oriented peer implementation.
