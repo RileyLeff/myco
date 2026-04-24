@@ -3045,7 +3045,9 @@ cannot expand symbolically).
   unexpanded closure policies, `deriv` lowers to the backend's
   autodiff facility. Runtime AD is the fallback for large SCCs under
   the hybrid AD boundary (§31); it does not participate in the
-  equational core.
+  equational core and does not grant symbolic derivative facts unless
+  the compiler separately derives the same structure or an audited
+  backend capability explicitly certifies it.
 
 The chosen mode is inspectable via `.mode` on the `deriv`
 return, matching `condition_of`'s accessor pattern. `deriv`
@@ -5701,6 +5703,13 @@ Backends own runtime AD over emitted kernels and opaque callables,
 advertised through capability flags. This hybrid boundary is
 normative: runtime AD is delegated, but the compiler remains
 responsible for the mathematical derivative structure it can see.
+Runtime AD results are execution values and provenance, not new
+symbolic facts. They may satisfy training or inference execution
+needs, but they do not certify derivative identities, envelope
+propagation, conditioning facts, or rewrite eligibility unless the
+compiler can derive the same structure from visible terms or the
+backend advertises an audited capability that explicitly certifies
+the relevant derivative fact.
 
 #### 31.1 Capability Advertising and Fallback Modes
 

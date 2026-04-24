@@ -61,6 +61,7 @@ gap-review stale list, subsequent design locks.
 | universals carrying values (`universal R: Scalar<U> = 8.314`) | `universal R: Scalar<U>` declaration only; value from workflow | CC1 scope |
 | contract composition alias (`contract C := A + B`) | nothing | multi-contract satisfaction (`: A + B + C`) + supertraits already cover the bundle case; alias adds a second spelling with no new expressive power |
 | user-facing `Dual` numeric representation | hybrid AD boundary (§31) | symbolic/algorithmic derivatives are compiler-owned and runtime AD is backend-owned; user-facing `Dual` would duplicate machinery and risk conflicting with backend AD representation |
+| backend runtime AD results as symbolic derivative facts | runtime AD values/provenance unless compiler-derived or certified by an audited backend capability | keeps opaque gradients from silently authorizing rewrites, envelopes, or conditioning facts |
 | general SMT / theorem-prover guarantee for all shape arithmetic | represented shape-expression AST with staged solver support | hard shape cases must be expressible, but v2.1 only guarantees a conservative automatic solver subset |
 
 ## Retired architectural framing

@@ -94,9 +94,9 @@ No single surface ties these together; this chunk is that surface.
    what it supports (SVD? sparse solves? Cholesky-specialized solve
    for PosDef?). How the compiler reacts when a requested op isn't
    advertised.
-3. **AD ownership.** Fork: Myco-owned AD through the graph vs.
-   delegated-to-backend AD vs. hybrid. Has downstream consequences
-   for every backend-aware op.
+3. **AD ownership.** Resolved hybrid boundary: Myco-owned symbolic /
+   algorithmic derivative structure plus backend-owned runtime AD.
+   Has downstream consequences for every backend-aware op.
 4. **PPL backend protocol.** Concrete handoff for Tier C
    distributional inference: what the compiler emits (envelope
    metadata, structural declarations, coupling annotations,
@@ -204,7 +204,17 @@ keeps capability mismatch from becoming a silent semantic or
 performance fallback. `host` and `emulate` are explicit workflow
 authorizations.
 
-### 4.3 AD ownership — the central fork
+### 4.3 AD ownership — RESOLVED: hybrid boundary
+
+Decision (2026-04-24): Myco uses a hybrid AD boundary. Myco owns
+visible symbolic / algorithmic derivative structure; backends own
+runtime AD over emitted kernels and opaque callables. Runtime AD may
+satisfy execution needs for training and inference, but it does not
+grant symbolic derivative facts unless the compiler independently
+derives the same structure or an audited backend capability
+explicitly certifies the relevant derivative fact.
+
+The fork considered:
 
 **Option A — Myco owns AD.** Symbolic `deriv` extended to every
 tensor operation; Myco emits forward + backward pass against the
@@ -260,9 +270,13 @@ Cons:
   gradients?" — they won't differ in math, but implementation paths
   diverge).
 
-Lean: Option C. Matches Myco's broader
-symbolic-analysis-plus-concrete-execution pattern. But this is a
-real fork that deserves explicit decision.
+Selected: Option C. This matches Myco's broader
+symbolic-analysis-plus-concrete-execution pattern. The compiler keeps
+the derivative structure it can inspect for conditioning, envelopes,
+rewrite eligibility, diagnostics, and provenance. The backend handles
+runtime gradient values where mature AD systems are the right
+execution machinery. Opaque runtime gradients stay opaque to the
+symbolic layers unless separately certified.
 
 ### 4.4 PPL backend protocol (was B3)
 
