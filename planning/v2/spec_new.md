@@ -798,11 +798,11 @@ preserves the same semantics. If no required fact is established,
 planning reports the unmet obligation instead of choosing a
 different mathematical operation.
 
-Remaining chunk-05 matrix work:
-
-- **Final commitment text.** Matrix type, fact, dynamic-shape,
-  scalar, primitive, and finite-assembly decisions are locked; the
-  remaining chunk-05 work is editorial consolidation.
+Chunk-05 closure: v2.1 commits this matrix / tensor layer as source
+semantics. Backend execution, AD ownership, accelerator support,
+layout / device selection, and runtime estimators are chunk-06
+concerns; they do not reopen the type, fact, assembly, or obligation
+model above.
 
 #### 3.10 Sum Types / Enums (STUB)
 
@@ -5533,11 +5533,10 @@ report unmet obligations when a required fact is unknown. Backend
 kernels are implementation choices that preserve the same semantics,
 not semantic fallbacks.
 
-Chunk 05 is the design venue for the remaining matrix type layer.
-This section commits the stdlib function surface, finite matrix
-assembly syntax, provider-slot distinction, and primitive fact
-contracts; type content lives in §3.9 per the chunk 05 scope
-decision.
+Chunk 05 is closed for the source-level matrix / tensor layer. This
+section commits the stdlib function surface, finite matrix assembly
+syntax, provider-slot distinction, and primitive fact contracts; type
+content lives in §3.9 per the chunk 05 scope decision.
 
 The matrix / tensor stdlib ships the linear-algebra primitives that
 the rest of the spec depends on by name, in particular the Cholesky
@@ -5615,8 +5614,9 @@ A: Matrix<dimensionless, 2, 2>
 
 The declaration above says that the graph contains a matrix-valued
 node with fixed unit and shape; the workflow must bind, infer,
-observe, train, or otherwise provide it according to context. Numeric
-matrix values enter through workflow providers, not `.myco` source.
+observe, train, or otherwise provide it according to context.
+Concrete numeric matrix data enters through workflow providers, not
+`.myco` source.
 
 Each primitive carries a capability contract that records what facts
 it requires and what facts its result satisfies (see §3.9). The
@@ -5848,8 +5848,8 @@ consolidation.
 **Summary.** Four named B-blockers remain open: B1 opaque log_pdf
 policy, B2 joint declaration syntax, B4 coupling machinery, and B6
 backend abstraction. B5 matrix heterogeneous-unit resolution is
-closed at the type-mechanics level by the matrix-facts model (§3.9);
-remaining matrix work is chunk-slotted propagation / primitive detail.
+closed by the matrix-facts model (§3.9) and the committed primitive
+surface (§30).
 
 - **B1.** Opaque log_pdf stdlib policy.
 - **B2.** Joint declaration syntax.
@@ -5864,19 +5864,20 @@ remaining matrix work is chunk-slotted propagation / primitive detail.
 
 ### 34. Chunk-Slotted Work
 
-**Summary.** Outstanding design chunks: chunk 05 matrix details,
-chunk 06 backend abstraction, chunk 07 type-graph to e-graph bridge,
-chunk 08 joint syntax and coupling, chunk 03 kernels (resumes after
-substrate lock), chunk 11 sum types / enums. Chunk 12 cost/objective
-vocabulary is resolved and kept here only as a completed reference.
+**Summary.** Outstanding design chunks: chunk 06 backend abstraction,
+chunk 07 type-graph to e-graph bridge, chunk 08 joint syntax and
+coupling, chunk 03 kernels (resumes after substrate lock), chunk 11
+sum types / enums. Chunks 05 and 12 are resolved and kept here as
+completed references.
 
-- **Chunk 05.** Matrix details. Heterogeneous-unit type mechanics are
-  resolved by matrix facts (§3.9); shape expressions, envelope
-  views, the structural fact lattice, tensor `convert` scope, dynamic
-  topology shape handling, scalar reconciliation, and the primitive
-  catalog are locked. Finite matrix assembly is the source syntax for
-  assembling matrices from graph values; numeric matrix values remain
-  workflow-bound. Remaining work covers final commitment text.
+- **Chunk 05.** RESOLVED: matrix details. Heterogeneous-unit type
+  mechanics are resolved by matrix facts (§3.9); shape expressions,
+  envelope views, the structural fact lattice, tensor `convert`
+  scope, dynamic topology shape handling, scalar reconciliation, and
+  the primitive catalog are locked. Finite matrix assembly is the
+  source syntax for assembling matrices from graph values; concrete
+  numeric matrix data remains workflow-bound. Execution concerns move
+  to chunk 06.
 - **Chunk 06.** Backend abstraction.
 - **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04
   (expression e-graph substrate), 05 (refinement-lattice examples

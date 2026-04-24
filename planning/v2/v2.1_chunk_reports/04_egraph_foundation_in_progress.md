@@ -944,15 +944,14 @@ structural subtypes.
 - Audit confirms (2026-04-20) no matrix machinery in v2.1 today.
   MVN, Wishart, and linear-algebra primitives explicitly deferred in
   `open_questions.md:853-859`.
-- **Status:** chunk report in progress at
-  `planning/v2/v2.1_chunk_reports/05_matrices_in_progress.md`. Shape
-  polymorphism locked (Option C — `Tensor<U, shape>` primitive with
-  `Vector<U, n>` / `Matrix<U, m, n>` shape-refined aliases).
-  Remaining open questions: heterogeneous-unit story
-  (`LinearMap<From, To>` second-track type for Jacobians), envelope
-  flavors (entry-wise / operator-norm / spectral / structural),
-  structural subtype lattice, shape-refinement type-system extension,
-  `convert` scope on tensors.
+- **Status:** chunk report locked at
+  `planning/v2/v2.1_chunk_reports/05_matrices_in_progress.md`.
+  Matrix / tensor source semantics are now committed: `Tensor<U,
+  shape>` primitive; `Scalar`, `Vector`, and `Matrix` rank-refined
+  spellings / aliases; compiler-facing matrix facts; envelope views;
+  structural fact lattice; tensor `convert`; dynamic shape phases;
+  finite matrix assembly; and primitive fact contracts. Backend
+  execution remains chunk 06.
 
 **B6 — Backend abstraction.** Unified backend-routing surface for
 PPL inference (absorbs former B3), numerical linear-algebra
@@ -1879,32 +1878,34 @@ following docs need update passes:
 ## 15. Return path after this report closes
 
 **Immediate (design blockers from §11 B1-B6)** — the Z-group scope
-resolution promoted families under the completeness preference but
-six items need design, not just implementation volume, before they
-can ship. Three parallelizable, one serial:
+resolution promoted families under the completeness preference, but
+the remaining blockers still need design rather than just
+implementation volume. B5 is now closed; B6 is the main follow-on
+because it supplies execution protocols for the committed matrix
+surface.
 
-1. **B5 — Matrix / tensor types.** Chunk 05 in progress
+1. **B5 — Matrix / tensor types. RESOLVED.** Chunk 05 locked
    (`planning/v2/v2.1_chunk_reports/05_matrices_in_progress.md`).
-   Shape polymorphism locked (Option C). Remaining questions:
-   heterogeneous units, envelope flavors, structural subtypes,
-   shape refinements, `convert` scope. Unblocks MVN log_pdf + Z10,
-   Wishart / InverseWishart, Level III `condition_of` type surface,
-   Gram matrices, first-class linear-system solves.
-2. **B6 — Backend abstraction (in parallel with B5).** Chunk 06 stub
+   Matrix / tensor source semantics, fact contracts, and finite
+   matrix assembly are committed. Unblocks MVN log_pdf + Z10 type
+   surface, Gram matrices, first-class linear-system solves, and the
+   matrix-facing side of Wishart / InverseWishart; actual execution
+   still depends on B6.
+2. **B6 — Backend abstraction.** Chunk 06 stub
    (`planning/v2/v2.1_chunk_reports/06_backend_abstraction_in_progress.md`).
    Absorbs former B3. Burn-style Backend trait; AD ownership fork
    (lean hybrid); capability advertising; fallback policy; PPL
    backend protocol; opaque callable gradient flow; mixed-backend
    policy (lean single-backend-per-run); versioning. Concretizes
    lowering targets for chunk 05 primitives.
-3. **B1 — Opaque `log_pdf` stdlib policy (in parallel with B5 and
-   B6).** Whether stdlib ships families with structurally-opaque
+3. **B1 — Opaque `log_pdf` stdlib policy (in parallel with B6).**
+   Whether stdlib ships families with structurally-opaque
    numerical `log_pdf` evaluators (general α-stable, table-lookup,
    etc.); autodiff requirements; interaction with Tier C routing.
-4. **B2 + B4 — joint syntax + coupling machinery (future chunk 07,
-   after B5 and B6).** Depends on B5 for the MVN/matrix-coupling
-   sub-case and B6 for the Tier C handoff protocol. Unblocks
-   copulas.
+4. **B2 + B4 — joint syntax + coupling machinery (future chunk 08,
+   after B6).** The MVN/matrix-coupling sub-case now has a stable
+   matrix surface; Tier C handoff protocol still depends on B6.
+   Unblocks copulas.
 
 **Phase continuation (chunk 04 scope):**
 
@@ -2274,4 +2275,4 @@ convo was getting compacted, here's the rewrite rule discussion that hasn't been
   interaction of the x distribution, b symbolically, and 5 numerically. does that make sense? so i want to be able to add multiple distributions to the graph and ahve them combine. and i know some      
   distributions play more nicely with this than others, in terms of how they behave on multiplication, addition, etc. so it's good to think about this up front in terms of what we *can* propagate, of   
   what we can support -- what straight up doesn't have a solution, what's partial, what can we build to support, etc? i think this might be good to consider with the probabilistic programming angle we  
-  wrote about previously, if you're unfamiliar with the decisions made there you might want ot dispatch a subagent to look into it and give you a report. 
+  wrote about previously, if you're unfamiliar with the decisions made there you might want ot dispatch a subagent to look into it and give you a report.

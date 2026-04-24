@@ -1,14 +1,16 @@
-# Myco v2.1 — Matrix / Tensor Types Design Report (IN PROGRESS)
+# Myco v2.1 — Matrix / Tensor Types Design Report (LOCKED)
 
 **Date:** 2026-04-20
 **Authors:** Riley Leff, Claude (Opus 4.7)
 **Reviewers:** None yet
-**Status:** IN PROGRESS. Shape polymorphism direction locked (Option
-C — `Tensor<U, shape>` primitive with `Vector<U, n>` / `Matrix<U, m, n>`
-as shape-refined aliases). Heterogeneous-unit facts, matrix-envelope
-views, structural fact lattice, tensor `convert`, collections
-boundary, and dynamic-topology shape handling are locked. Backend /
-AD / GPU lowering concerns factored out into chunk 06.
+**Status:** LOCKED 2026-04-24. v2.1 commits `Tensor<U, shape>` as the
+primitive, with `Scalar<U>`, `Vector<U, n>`, and `Matrix<U, m, n>` as
+rank-refined source spellings / aliases. Heterogeneous-unit facts,
+matrix-envelope views, structural fact lattice, tensor `convert`,
+collections boundary, dynamic-topology shape handling, finite matrix
+assembly, scalar reconciliation, and the primitive catalog are
+locked. Backend / AD / GPU lowering concerns are factored out into
+chunk 06.
 
 ---
 
@@ -277,8 +279,7 @@ matrix roles. A constraint such as `positive_definite(A)` creates an
 obligation to prove or validate the fact, not a grant of the fact.
 
 This closes the type-signature branch of the heterogeneous-unit
-question. Remaining chunk-05 work after the resolved sections below:
-final commitment text.
+question. The final v2.1 commitment is summarized in §7.
 
 ### 3.3 Envelope flavors for matrix-valued quantities — RESOLVED: parallel views
 
@@ -735,33 +736,66 @@ With this chunk shipped:
 
 ---
 
-## 7. Return path
+## 7. Final v2.1 commitment
 
-Items in priority order (later items depend on earlier items
-closing):
+Chunk 05 is closed for v2.1. The canonical spec now commits:
 
-Completed: §3.6 shape-expression model, §3.3 envelope views, §3.4
-structural fact lattice, §3.5 tensor `convert` scope, §3.7
-collections boundary, §3.8 dynamic topology shape handling, and §4
-primitive catalog. Scalar reconciliation is also closed: `Scalar<U>`
-is rank-0 `Tensor<U, ()>` with scalar source spelling. Finite matrix
-assembly is closed as source construction from graph values only.
+- `Tensor<U, shape>` as the primitive shaped numerical value.
+  `Scalar<U>` is the normative source spelling for rank-0
+  `Tensor<U, ()>`; `Vector<U, n>` and `Matrix<U, m, n>` are
+  rank-refined tensor aliases.
+- Matrix meaning lives in compiler-facing facts: shape, axes,
+  entry-unit laws, construction provenance, structural properties,
+  definiteness, rank, sparsity, conservation, approximation, and
+  backend / representation facts. Myco does not add user-marked
+  matrix roles, `basis` syntax, or a finite taxonomy of matrix
+  kinds.
+- The matrix fact model is an implication lattice with evidence
+  statuses (`proven`, `refuted`, `conditional`, `obligation`,
+  `provider_validated`, `backend_reported`, `unknown`). Unknown facts
+  stay unknown; required unknown facts become unmet obligations.
+- Matrix envelopes are parallel entry-wise, norm, spectral, and
+  structural views. No view is canonical, and coercion between views
+  requires a named rule.
+- Tensor `convert` covers reshape with an index bijection, sparse /
+  dense materialization with proven pattern facts, and
+  structural-refinement widening. Precision changes, layout changes,
+  device residency, and role relabeling are not `convert`.
+- Collections and tensors are orthogonal. Bridges are explicit
+  collection-axis extraction relations that name ordering, axis
+  identity, field path, unit law, and missing / inactive-entry
+  policy.
+- Dynamic tensor shapes are represented with `ShapePhase` and
+  regime-boundary handlers (`CapacityMask`, `EventReplan`,
+  `DynamicKeyed`). An SCC may not silently mutate tensor shape inside
+  one solve step.
+- v2.1 ships finite matrix assembly from graph values:
+  `matrix[[a, b]; [c, d]]`. Concrete numeric matrix data remains
+  workflow-bound. Provider slots such as
+  `A: Matrix<dimensionless, 2, 2>` remain declarations whose values
+  are supplied, inferred, observed, or trained through workflow
+  binding.
+- The stdlib primitive catalog and fact contracts in §4 are
+  committed. Linear-algebra primitives consume established facts,
+  emit facts with provenance, and report unmet obligations rather
+  than choosing semantic fallbacks.
 
-1. **Write the final v2.1 commitment text into the spec.**
+Chunk 06 owns execution concerns: backend capability advertisement,
+kernel availability, layout / device decisions, AD ownership for
+matrix primitives, accelerator support for dynamic shapes, and
+runtime estimators such as `condition_of`. Those execution questions
+do not reopen the chunk-05 source semantics.
 
-Parallelizable with chunk 06 (backend abstraction) — chunk 06
-needs this chunk's primitive list to have lowering targets; this
-chunk doesn't need chunk 06's decisions to specify the type system.
-
-This chunk and chunk 06 both must close before the remaining
-matrix-dependent Z-group promotions (Wishart / InverseWishart and
-Level III `condition_of` runtime) can actually ship. MVN consumes
-the matrix fact model directly and depends on the relevant primitive
-fact contracts being established for `Σ`.
+Downstream matrix-dependent work may now consume the type / fact
+surface directly. MVN can rely on Cholesky fact contracts for
+reparameterization, Wishart / InverseWishart can be promoted once
+chunk 06 supplies execution, kernels can use `gram(k, points)` and
+sparsity facts, and implicit SCC / Jacobian machinery has a stable
+matrix vocabulary.
 
 ---
 
-## 8. Open questions (consolidated)
+## 8. Closed questions (consolidated)
 
 - **Q1.** Heterogeneous-unit question. RESOLVED 2026-04-23:
   compiler-facing matrix facts over ordinary tensors; no `LinearMap`

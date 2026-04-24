@@ -137,10 +137,13 @@ also the most ambitious.
   where Symmetric ∧ PosDef`, does the refinement affect which
   implementation of `inverse` is selected? That's a type-graph query
   that drives e-graph rewrite selection.
-- **Conversion graph cost.** Chunk 05 open question Q7 asks whether
-  `convert` returns structural views (cheap) or copies (expensive).
-  That's an edge-cost question in the conversion graph. Belongs here
-  once this chunk gets real.
+- **Conversion graph cost.** Chunk 05 resolved the source semantics
+  of tensor `convert`: reshape with an index bijection, sparse /
+  dense materialization with proven pattern facts, and
+  structural-refinement widening. Whether a legal conversion lowers
+  as a structural view, copy, backend materialization, or cached
+  representation is an edge-cost question in the conversion graph.
+  That belongs here once this chunk gets real.
 - **Dyn witness caching.** `dyn` objects carry type-graph information
   at runtime. Whether two `dyn` values are interchangeable is a
   type-graph query. Interacts with Tier C distributional machinery
@@ -162,7 +165,8 @@ also the most ambitious.
 
 ## 6. Dependencies / ordering
 
-This chunk is best tackled **after** chunks 04 / 05 / 06 land:
+This chunk is best tackled **after** chunk 06 lands; chunks 04 and 05
+now supply the expression substrate and matrix refinement examples:
 
 - Chunk 04 locks the expression e-graph substrate that the type graph
   has to bridge to.

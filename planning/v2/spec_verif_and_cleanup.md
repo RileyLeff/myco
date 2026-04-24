@@ -262,12 +262,12 @@ These are suggestions only; Riley decides.
 
 ### Chunk-report treatment
 
-- Reports `01_geometry_design_report.md` and
-  `02_collections_iteration_report.md` are closed. Treat absent
+- Reports `01_geometry_design_report.md`,
+  `02_collections_iteration_report.md`, and
+  `05_matrices_in_progress.md` are closed. Treat absent
   content from these as candidate homeless or superseded.
 - Reports `03_kernels_in_progress.md`,
   `04_egraph_foundation_in_progress.md`,
-  `05_matrices_in_progress.md`,
   `06_backend_abstraction_in_progress.md`,
   `07_type_graph_in_progress.md` are still open design venues.
   Content in these that is legitimately open and absent from
