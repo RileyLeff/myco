@@ -1675,7 +1675,7 @@ case of `event`. Sources include:
 - Hard selections such as `min`, `max`, `argmin`, and `argmax`
   (§12.2).
 - Geometry junctions and one-sided locus limits (§11.1, §11.8).
-- Compact-support kernels and kernel truncation surfaces (§28.3,
+- Compact-support kernels and kernel truncation surfaces (§28.4,
   Appendix C K).
 - Contact, active-set, complementarity, saturation, and threshold
   laws expressed in ordinary relations.
@@ -5902,7 +5902,78 @@ Product kernels on product loci (`L = L_x x L_y`) use paired point
 arguments; the PositiveDefiniteness closure rule covers the
 same-domain covariance case.
 
-#### 28.3 Kernel Sparsity and Integration, Deferred to Chunk 03
+#### 28.3 Kernel Matrix and Gram Assembly
+
+**Summary.** `kernel_matrix(k, xs, ys)` is the general finite assembly
+surface for two-domain kernel relations. `gram(k, points)` is the
+same-domain covariance specialization, sugar for
+`kernel_matrix(k, points, points)` plus same-domain fact rules. Gram
+emits symmetry / PSD / PD facts only from established kernel and
+point-set evidence; it never silently adds jitter or routes to an
+opaque backend.
+
+For a general two-domain kernel relation:
+
+```myco
+relation k<A, B, U>(x: A, y: B, out: Scalar<U>)
+```
+
+finite assembly is:
+
+```myco
+W = kernel_matrix(k, xs, ys)
+```
+
+with semantics:
+
+```text
+W[i, j] = k(xs[i], ys[j])
+row_axes(W) = xs
+col_axes(W) = ys
+entry_unit_law(W[i,j]) = output_unit(k)
+construction_provenance(W) = evaluated_pairwise(k, xs, ys)
+kernel_matrix_of(W, k, xs, ys)
+```
+
+This covers continuous/discrete and discrete/continuous operator
+matrices such as root uptake over soil depth or shade from leaves
+onto canopy points. It does not emit symmetry, PSD, or covariance
+facts merely because it is kernel-shaped.
+
+For a same-domain kernel:
+
+```myco
+relation k<A, U>(x: A, y: A, out: Scalar<U>)
+```
+
+`gram(k, points)` is sugar for `kernel_matrix(k, points, points)` with
+additional same-domain facts when evidence supports them:
+
+```text
+gram_of(K, k, points)
+row_axes(K) = points
+col_axes(K) = points
+construction_provenance(K) = evaluated_pairwise(k, points, points)
+```
+
+Fact emission:
+
+- `SymmetricKernel<A>` emits `symmetric(K)`.
+- `PositiveDefinite<A>` emits `positive_semidefinite(K)`.
+- `StrictPositiveDefinite<A>` plus `distinct(points)` emits
+  `positive_definite(K)`.
+- `CompactSupport<A, A>(radius)` emits a `zero_pattern` when the
+  A-domain distance / adjacency evidence proves pairs outside support.
+
+The PSD/PD split is intentional. Many covariance kernels prove only
+`positive_semidefinite(K)`. Ordinary `cholesky(K)` requires
+`positive_definite(K)` (§30); PSD alone is an unmet obligation. The
+compiler must not silently add jitter, select a pivoted factorization,
+or hand off to an opaque backend. Valid routes include proving
+distinctness plus strict positive definiteness, explicitly modeling
+jitter, or choosing a primitive / workflow policy that accepts PSD.
+
+#### 28.4 Kernel Sparsity and Integration, Deferred to Chunk 03
 
 **Summary.** Three kernel-adjacent concerns remain tracked:
 compact-support sparse matrix assembly, low-rank kernel rewrites, and
@@ -6001,7 +6072,8 @@ rank is `matrix_rank(A)` to avoid collision with shape rank
 | `norm(expr, kind)` | supported kind (`"1"`, `"2"`, `"fro"`, `"inf"`), unit / scaling policy where needed | norm envelope facts used by `condition_of` and approximation accounting | Heterogeneous units without scaling policy block interpretation. |
 | `condition_of(expr)` | expression shape, unit / axis comparability, and norm / scaling policy for matrix-valued expressions | `condition_estimate(expr)`, `condition_mode`, `condition_bound` when available | Heterogeneous units without a scaling policy make condition number interpretation unknown; the diagnostic asks for scaling evidence. |
 | `matrix_rank(A)` | `rank(A)=2`, numeric entries, tolerance / scaling policy | `rank_value(A)`, full-rank / nullspace facts when classifiable | Missing tolerance / scaling policy reports an obligation. |
-| `gram(k, points)` | kernel-domain compatibility and facts proving the Gram construction's symmetry / PSD when consumed as covariance | `gram_of(K,k,points)`, symmetry / PSD facts when provable, `zero_pattern` for compact-support kernels | If PSD is required by a downstream primitive and unknown, the downstream use reports `positive_semidefinite(K)` as unmet. No opaque handoff is automatic. |
+| `kernel_matrix(k, xs, ys)` | kernel-domain compatibility for `k: A,B -> Scalar<U>`, finite axes for `xs: A` and `ys: B`, output-unit law | `kernel_matrix_of(W,k,xs,ys)`, row/col axes, entry-unit law, pairwise-evaluation provenance, zero-pattern facts when compact support is proven | Does not emit symmetry, PSD, or covariance facts merely because it is kernel-shaped. Missing domain/axis/unit facts are obligations. |
+| `gram(k, points)` | same-domain kernel compatibility for `k: A,A -> Scalar<U>` and finite point axis; downstream covariance use requires the relevant kernel facts (`SymmetricKernel<A>`, `PositiveDefinite<A>`, `StrictPositiveDefinite<A>` plus `distinct(points)` for PD) | `gram_of(K,k,points)`, row/col axes, entry-unit law, pairwise-evaluation provenance, `symmetric(K)`, `positive_semidefinite(K)`, `positive_definite(K)`, and zero-pattern facts only when proven | PSD alone does not authorize ordinary Cholesky. If PD is required and unknown, report `positive_definite(K)` as unmet; the compiler does not silently add jitter, pivot, or opaque-handoff. |
 | `zeros<U>(shape)` | structural shape expression and unit parameter | zero tensor, zero-pattern facts | Shape expressions outside the solved subset become obligations. |
 | `ones(shape)` | structural shape expression | dimensionless all-ones tensor | Shape expressions outside the solved subset become obligations. |
 | `identity(n)` | structural square dimension | dimensionless identity matrix; diagonal, orthogonal, positive-definite facts | Unknown dimension phase follows §3.8 shape-phase rules. |

@@ -3,9 +3,10 @@
 **Date:** 2026-04-19 (draft started; discussion ongoing)
 **Authors:** Riley Leff, Claude (Opus 4.7)
 **Reviewers:** None yet — discussion still open
-**Status:** IN PROGRESS. Kernel identity is locked; facts, Gram
-obligations, sparse / low-rank rewrites, integration operators, and
-GP/HSGP process machinery remain under discussion.
+**Status:** IN PROGRESS. Kernel identity and finite assembly
+(`kernel_matrix` / `gram`) are locked; sparse / low-rank rewrites,
+integration operators, and GP/HSGP process machinery remain under
+discussion.
 
 ---
 
@@ -105,6 +106,68 @@ compiler can derive from body composition and stdlib atom contracts. If a
 consumer requires a fact the compiler cannot establish, the use reports an
 unmet obligation rather than silently treating the relation as a valid
 covariance or sparse kernel.
+
+## 2.1 Finite assembly: `kernel_matrix` and `gram`
+
+`kernel_matrix(k, xs, ys)` is the general finite assembly surface for
+two-domain kernel relations:
+
+```myco
+relation k<A, B, U>(x: A, y: B, out: Scalar<U>)
+
+W = kernel_matrix(k, xs, ys)
+```
+
+Semantics:
+
+```text
+W[i, j] = k(xs[i], ys[j])
+row_axes(W) = xs
+col_axes(W) = ys
+entry_unit_law(W[i,j]) = output_unit(k)
+construction_provenance(W) = evaluated_pairwise(k, xs, ys)
+kernel_matrix_of(W, k, xs, ys)
+```
+
+This is the right assembly for cross-domain operators such as root uptake
+from root segments to soil-depth points, shade from leaves to canopy points,
+or any discrete/continuous pairing. `kernel_matrix` does not emit symmetry,
+PSD, or covariance facts merely because it is kernel-shaped.
+
+`gram(k, points)` is the same-domain covariance specialization:
+
+```myco
+relation k<A, U>(x: A, y: A, out: Scalar<U>)
+
+K = gram(k, points)
+```
+
+It is sugar for `kernel_matrix(k, points, points)` plus same-domain fact
+rules:
+
+```text
+gram_of(K, k, points)
+row_axes(K) = points
+col_axes(K) = points
+construction_provenance(K) = evaluated_pairwise(k, points, points)
+```
+
+Fact emission:
+
+- `SymmetricKernel<A>` emits `symmetric(K)`.
+- `PositiveDefinite<A>` emits `positive_semidefinite(K)`.
+- `StrictPositiveDefinite<A>` plus `distinct(points)` emits
+  `positive_definite(K)`.
+- `CompactSupport<A, A>(radius)` emits a `zero_pattern` when the A-domain
+  distance / adjacency evidence proves pairs outside support.
+
+PSD and PD are intentionally separate. Ordinary Cholesky consumes
+`positive_definite(K)`, not merely `positive_semidefinite(K)`. If a downstream
+primitive requires PD and the compiler knows only PSD, the compiler reports an
+unmet `positive_definite(K)` obligation. It does not silently add jitter,
+select a pivoted factorization, or route to an opaque backend. Valid routes are
+explicit: prove strict PD plus distinct points, model jitter, or choose a
+primitive / workflow policy that accepts PSD.
 
 ---
 
