@@ -1203,18 +1203,19 @@ declaration (see §9).
 
 #### 7.1 Parameterized Contracts
 
-**Summary.** Contracts take type parameters (`Invertible<T>`,
-`Convert<From, To>`, `Distribution<U>`). Parameters thread through
+**Summary.** Contracts take type/sample parameters (`Invertible<T>`,
+`Convert<From, To>`, `Distribution<S>`). Parameters thread through
 supertrait chains and satisfaction checks. Principal users are
 capability contracts on stdlib atoms (§6) and distribution families
 (§27).
 
 Contracts take type parameters: `Invertible<T>` (invertible stdlib
 atom with inverse type T), `Convert<From, To>` (conversion capability),
-`Distribution<U>` (distribution over units U). Parameters thread
-through supertrait chains and satisfaction checks. Capability
-contracts on stdlib atoms (§6) and distribution families (§27) are
-the principal users.
+`Distribution<S>` (distribution over sample type S; scalar families
+use `Scalar<U>` as their sample type). Parameters thread through
+supertrait chains and satisfaction checks. Capability contracts on
+stdlib atoms (§6) and distribution families (§27) are the principal
+users.
 
 #### 7.2 Capability Contracts
 
@@ -1226,7 +1227,7 @@ the stdlib-atom chain (`Invertible<_>`, `Differentiable`,
 supertrait chains.
 
 Capability contracts carry compiler-actionable facts. Distribution-
-side chain (root `Distribution<U>`, supertraits `AffineSelfClosed`,
+side chain (root `Distribution<S>`, supertraits `AffineSelfClosed`,
 `SumSelfClosed`, `ProductSelfClosed`, `ScaleSelfClosed`,
 `SmoothTransformable`, `ReparameterizedSampleable`) drives Tier A
 closed-form routing (§13). Stdlib-atom side (`Invertible<_>`,
@@ -2660,10 +2661,11 @@ rewrites (Delta, Fenton-Wilkinson, CLT, GEV). Tier C hands the SCC
 to the backend's opaque PPL.
 
 Three tiers of `~` resolution, tried in order per stochastic
-SCC at compile time. The `Distribution<U>` contract surface
-(required `log_pdf`, `sample`, `pdf`; optional capability
-sub-contracts) that makes Tier A dispatch possible is specified
-in §27.
+SCC at compile time. The `Distribution<S>` contract surface
+(visible `log_density` relation over sample type S, default-derived
+density / `pdf` convenience, backend sampling capabilities, and
+optional closure sub-contracts) that makes Tier A dispatch possible
+is specified in §27.
 
 1. **Tier A — Exact closed-form.** Capability contracts on
    distribution families (§7.2, §27) advertise algebraic
@@ -2689,10 +2691,11 @@ in §27.
    task to the backend's PPL handler (§31). The backend sees the
    whole remaining stochastic SCC, not one factor at a time. Samples
    and diagnostics come back with provenance; no envelope facts about
-   the parametric form are granted. Opaque distribution families
-   (log_pdf not available from stdlib atoms) route to Tier C by
-   default; the stdlib policy for what qualifies as opaque is tracked
-   in §33 as open item B1.
+   the parametric form are granted. Curated stdlib / backend opaque
+   stochastic families route to Tier C by default and grant no
+   symbolic density, derivative, closure, condition, or independence
+   facts unless a visible rewrite or audited backend capability
+   supplies that specific fact.
 
 The compiler records its chosen tier per SCC; inspection
 surfaces (§22) show which tier each stochastic SCC landed on.
@@ -2742,27 +2745,33 @@ SCC are a compile error; the compiler does not auto-convert.
 Cross-scope consistency is the user's call; one `.myco` file
 may contain both conventions at different loci.
 
-#### 13.5 Independence via Structural Identity
+#### 13.5 Independence via Structural Roots
 
-**Summary.** Two stochastic draws are independent iff their
-e-classes are distinct. No naked correlation surface: correlated
-structures are built by sharing upstream distributions or declaring
-a joint family (MVN, Mixture). E-class identity is the only
-language-level handle on independence.
+**Summary.** Separate stochastic roots are independent by structural
+default conditional on their visible parents; same e-class means the
+same draw; fields from one structured joint root inherit the joint
+envelope's dependence facts. No naked correlation surface: correlated
+structures are built by sharing upstream stochastic structure or
+declaring a joint family (MVN, Mixture).
 
-Two stochastic draws are independent iff their e-classes are
-distinct. `x ~ Normal(μ, σ)` and `y ~ Normal(μ, σ)` on separate
-lines produce two e-classes and are independent. A shared
-intermediate (`let z ~ Normal(μ, σ); x = z; y = z`) produces
-one e-class: x and y are the same draw, fully correlated.
+Separate stochastic roots are independent by structural default
+conditional on their visible parent e-classes. `x ~ Normal(μ, σ)` and
+`y ~ Normal(μ, σ)` on separate lines produce two roots and are
+conditionally independent given `μ` and `σ`; if those parents are
+themselves stochastic, any induced marginal dependence flows through
+the ordinary graph. A shared intermediate that binds both `x` and `y`
+to one draw `z` produces one e-class: x and y are the same draw, fully
+correlated. Field projections from one structured joint root are not
+separate roots; their dependence is determined by the joint envelope
+metadata (§13.7, §13.10).
 
 There is no naked correlation surface. No `Cov(x, y) = ρ`, no
 `correlate(x, y)`. Correlated structures are built by sharing
-upstream distributions or by declaring a joint family (MVN,
-Mixture, `JointDistribution` in chunk 08) that bakes the
-correlation in. The mechanism matches the three-layer
-principle: equational identity of e-classes is the only
-language-level handle on independence.
+upstream stochastic structure or by declaring a joint family (MVN,
+Mixture, structured joint families) that bakes the correlation in.
+The mechanism matches the three-layer principle: equality lives in
+e-classes, while probabilistic dependence facts live in the
+distributional envelope.
 
 #### 13.6 Cholesky Reparameterization (Z10)
 
@@ -2791,37 +2800,60 @@ derived from a specified Σ at compile time. Non-MVN joints
 that structurally factor as affine-in-noise trigger the same
 pattern via `ReparameterizedSampleable` (§7.2).
 
-#### 13.7 Field Sampling with `.at()`
+#### 13.7 Structured Joint Samples, `.at()`, and Record-`~` Sugar
 
-**Summary.** `.at("field_name")` extracts named fields from joint
-/ named-field samples. Same `.at(...)` on the same sample collapses
-to one e-class for consistency. `.at()` on a missing field is a
-compile error. No tuple destructuring or positional indexing.
+**Summary.** Structured joint draws produce one stochastic root with
+named field projections. `.at("field_name")` is the canonical field
+access. Record-`~` sugar destructures named fields ergonomically and
+desugars to the same hidden joint root plus `.at()` projections. No
+tuple destructuring or positional indexing.
 
 For distributions returning structured samples (joints, named-
-field-valued), `.at("field_name")` extracts a named field:
+field-valued), `.at("field_name")` extracts a named field from a
+single joint root:
 
 ```
-joint_sample ~ JointDistribution(...)
+joint_sample ~ PlantSizeJoint(mu, Sigma)
 height = joint_sample.at("height")
+diameter = joint_sample.at("diameter")
 ```
 
 `.at()` accesses participate in e-graph identity: the same
 `.at("height")` on the same sample collapses to one e-class
 (so the field value is consistent everywhere it is read).
 `.at()` on a missing field is a compile error — the family
-declares its named fields statically. This is the only joint-
-sample field-access surface; no tuple destructuring, no
-positional index access.
+declares its named fields statically.
+
+The source language also admits record-`~` sugar for the common
+case where the modeler wants the named fields directly:
+
+```myco
+{ height, diameter } ~ PlantSizeJoint(mu, Sigma)
+{ height: h, diameter: d } ~ PlantSizeJoint(mu, Sigma)
+```
+
+Both forms desugar to a hidden synthetic joint root plus deterministic
+field projections:
+
+```myco
+let __joint ~ PlantSizeJoint(mu, Sigma)
+height = __joint.at("height")
+diameter = __joint.at("diameter")
+```
+
+One coupled record-`~` site creates one stochastic root. Field
+projections are deterministic reads from that root; the joint family
+owns dependence. Record syntax is the only destructuring sugar:
+there is no tuple destructuring and no positional index access.
 
 #### 13.8 Observation Injection and Likelihood Back-Propagation
 
 **Summary.** Workflow `observe(path, data)` attaches observed data
 as a layer-2 envelope fact on the observed e-class (no equational
 merge with the data). Downstream samples condition on it; the
-relevant `D.log_pdf(data)` term adds to the SCC's training objective.
-Distinct from `identify`: observation narrows the distribution, not
-the value.
+relevant `D.log_density(data, logp)` term adds to the SCC's training
+objective. Distinct from `identify`: observation narrows the
+distribution, not the value.
 
 `observe` is a workflow verb, not `.myco` source syntax. When a
 workflow observes a path whose e-class carries `x ~ D`, the compiler
@@ -2832,8 +2864,8 @@ uses the following mechanism:
    itself is not merged with a constant.
 2. Downstream relations that read x's sampled value see the
    observation; downstream samples are conditioned on it.
-3. Likelihood `D.log_pdf(data)` contributes to the SCC's objective
-   during training emission (§25); back-propagation through
+3. Likelihood `D.log_density(data, logp)` contributes to the SCC's
+   objective during training emission (§25); back-propagation through
    the model graph reaches learnable upstream parameters.
 
 The critical distinction from `identify` (§17 merge source 4)
@@ -2874,32 +2906,40 @@ by layer, not by spelling.
 
 #### 13.10 Tier 2 PPL Lock
 
-**Summary.** Core `~` extends to cover remaining PPL surfaces
-(coupling machinery B4, joint declaration syntax B2, higher-order
-distributions) without freezing every keyword. Tier 1 primitives
-(§27) are the ship surface; Tier 2 primitives land in chunk 08 and
-§28.
+**Summary.** The core Tier 2 PPL blockers are locked: B1 distribution
+contract and opaque-family policy, B2 structured joint syntax, and
+B4 coupling metadata. Higher-order distributions continue to route
+through kernel machinery (§28) and remaining work is family-catalog
+polish, not unresolved core semantics.
 
-The Tier 2 PPL design lock extended the core `~`
-mechanism to cover the remaining probabilistic-programming
-surfaces without committing surface syntax for all of them:
+The Tier 2 PPL design lock extends the core `~` mechanism to cover
+structured stochastic values without adding user annotations or
+imperative correlation surfaces:
 
-- **Coupling machinery (B4).** Joint distributions whose
-  components share structural dependencies. Declared via the
-  joint family definition, not via imperative conditioning
-  calls. Syntax deferred to chunk 08.
-- **Joint declaration syntax (B2).** Surface for user-defined
-  joint families with multiple named fields. Deferred to
-  chunk 08. `.at()` (§13.7) is the access pattern once the
-  syntax lands.
-- **Higher-order distributions.** Distributions over
-  functions (Gaussian processes, etc.) route through kernel
-  machinery (§28) rather than the parametric Tier 1 list.
+- **Distribution contract shape / B1.** `Distribution<S>` is over a
+  sample type, not only a scalar unit. Visible user-authored
+  distributions expose a relation-shaped `log_density(self, sample,
+  out)` obligation; `density` / `pdf` is a default-derived
+  convenience, and sampling is a backend/runtime capability rather
+  than an ordinary user relation. Curated opaque stdlib/backend
+  families are Tier-C-first and fact-poor unless a visible rewrite
+  or audited backend capability supplies a fact.
+- **Joint declaration syntax / B2.** The canonical semantic form is
+  one structured joint root plus named `.at()` projections. Record-`~`
+  sugar (§13.7) is allowed and desugars to that root; tuple and
+  positional destructuring are not part of the language.
+- **Coupling machinery / B4.** Coupling lives as joint-envelope
+  metadata on the structured stochastic root. Fields from the same
+  root are dependent by default unless the joint envelope proves an
+  independent partition or dependency graph. Distinct field names do
+  not prove independence.
+- **Higher-order distributions.** Distributions over functions
+  (Gaussian processes, etc.) route through kernel machinery (§28)
+  rather than the parametric Tier 1 list.
 
-The lock closes "does this primitive have a home?" without
-freezing every keyword. Tier 1 primitives (§27) remain the
-current ship surface; Tier 2 primitives land in chunk 08 and
-§28.
+Tier 1 primitives (§27) remain the current ship surface. Tier 2
+family-catalog details such as copula and Wishart-family capability
+tables can now build on the locked mechanics above.
 
 ### 14. Compiler Intrinsics
 
@@ -4533,7 +4573,7 @@ catalog, and output-query formats remain open (§35).
 Python value providers (`Constant`, `Series`, `Prior`, `Trainable`,
 `Controller`, `GPPrior`, CSV readers, array adapters, distribution
 builders) are workflow-side data constructors. They are not `.myco`
-`Distribution<U>` implementations and do not satisfy contracts by
+`Distribution<S>` implementations and do not satisfy contracts by
 being Python classes. They merely package values or providers for
 binding against paths in the node catalog.
 
@@ -5236,28 +5276,56 @@ MultivariateNormal, Dirichlet, Multinomial. Meta-families: `Truncated<D>`,
 Tier B approximate rewrites: Delta method, Fenton-Wilkinson, CLT,
 block-maxima → GEV.
 
-**The `Distribution<U>` contract.** Every Tier 1 and Tier 2
-distribution family implements the `Distribution<U>` capability
-contract. The contract has three required methods and a set of
-optional capability sub-contracts that advertise algebraic
-closures used by Tier A dispatch (§13.2).
+**The `Distribution<S>` contract.** Every Tier 1 and Tier 2
+distribution family implements the `Distribution<S>` capability
+contract, where S is the sample type. Scalar distributions use
+`Scalar<U>` as S; multivariate and structured joint families use
+tensor, vector, simplex, or record-shaped sample types. The contract
+has one visible density obligation, default-derived density
+conveniences, backend/runtime sampling capabilities, and optional
+capability sub-contracts that advertise algebraic closures used by
+Tier A dispatch (§13.2).
 
-Required methods:
+Visible density obligation:
 
-- `sample(params) -> Scalar<U>` — draw one realization.
-  Required for Tier C opaque handoff and for Tier B rewrites
-  that reduce to sampling at specific call sites. Backend-
-  owned; the `.myco` signature is the contract surface only.
-- `log_pdf(params, x: Scalar<U>) -> Scalar<dimensionless>` — log
-  density at `x`. Required for likelihood contributions (§13.8
-  `observe`), training emission (§25), and Tier A closed-form
-  posterior construction. Stdlib atoms for Tier 1 families
-  supply closed forms; user-defined distributions compose
-  `log_pdf` from stdlib atoms.
-- `pdf(params, x: Scalar<U>) -> Scalar<dimensionless>` — density at
-  `x`, provided as a convenience. May be derived from `log_pdf`
-  (default) or given directly when closed-form density avoids
-  a log/exp round-trip.
+- `relation log_density(self: Self, sample: S, out: Scalar<dimensionless>)`
+  — log density / log mass at `sample`. Required for likelihood
+  contributions (§13.8 `observe`), training emission (§25), and
+  Tier A closed-form posterior construction. Stdlib atoms for Tier 1
+  families supply closed forms; user-defined distributions compose
+  `log_density` from visible `.myco` relations and stdlib atoms.
+
+Convenience density surface:
+
+- `density` / `pdf` is default-derived from `log_density` when
+  available. A stdlib family may provide a direct closed-form density
+  when that avoids a numerical round-trip, but `pdf` is not an
+  additional core obligation.
+
+Sampling and reparameterization:
+
+- Sampling is a backend/runtime capability, not an ordinary `.myco`
+  relation method. Families advertise sampleability for workflows
+  and Tier C handoff through backend capability metadata.
+- Visible reparameterization, when available, is relation-shaped:
+  `relation reparameterize(self: Self, base_noise: B, out: S)`.
+  It grants differentiable sample construction facts only when the
+  relation body is visible or the backend capability is explicitly
+  audited.
+
+Opaque stochastic families:
+
+- Curated stdlib/backend families may be `OpaqueStochasticFamily<S>`
+  when their density evaluator is structurally opaque (for example,
+  general alpha-stable outside the Normal / Cauchy / Levy-visible
+  subcases). They are Tier-C-first and fact-poor by default: no
+  symbolic `log_density`, no automatic closure facts, no symbolic
+  derivative facts, and no condition facts through the opaque density.
+  HMC / NUTS / VI require backend-certified differentiable
+  opaque-log-density support. Finite-difference or emulation routes
+  require explicit workflow `emulate` policy. User-authored `.myco`
+  distributions do not have an opaque-density escape hatch; they
+  expose visible `log_density` relations.
 
 Optional capability sub-contracts (advertised on the family
 declaration; see §7.2 and §27.1 table):
@@ -5277,13 +5345,13 @@ declaration; see §7.2 and §27.1 table):
 - `Conj(X)` — conjugate prior to family X. Fires the
   conjugate-posterior rewrite catalog (§27.3).
 
-User-defined distributions implement `Distribution<U>` by
-supplying the three required methods (composed over stdlib
-atoms; chunk 08 bans user-declared capability annotations).
-The compiler derives which optional sub-contracts hold when
-possible; when it cannot, the user-defined family routes to
-Tier C. This is the only extensibility path — no annotation
-surface for advertising closures.
+User-defined distributions implement `Distribution<S>` by supplying
+visible `log_density` relations composed over stdlib atoms and
+ordinary `.myco` relations. The compiler derives which optional
+sub-contracts hold when possible; when it cannot, the user-defined
+family routes to Tier C for inference rather than receiving symbolic
+facts. This is the only extensibility path — no annotation surface
+for advertising closures or opaque densities.
 
 #### 27.1 Tier 1 Distribution Families, Table
 
@@ -5297,7 +5365,7 @@ machinery.
 
 Tier 1 families ship as capability-tagged stdlib declarations
 (§7.2). Capability columns use shorthand: **D** =
-`Distribution<U>`, **A** = `AffineSelfClosed`, **S** =
+`Distribution<S>`, **A** = `AffineSelfClosed`, **S** =
 `SumSelfClosed`, **P** = `ProductSelfClosed`, **Sc** =
 `ScaleSelfClosed`, **ST** = `SmoothTransformable`, **R** =
 `ReparameterizedSampleable`, **Conj(X)** = conjugate to family X.
@@ -5370,8 +5438,8 @@ produce new compositional distributions.
 **`Truncated<D>`, interval truncation.** `Truncated<Normal>(μ,
 σ, lo, hi)` restricts `Normal(μ, σ)` to the interval `[lo,
 hi]` and renormalizes. Applies to any univariate D that
-satisfies `Distribution<U>`. Capabilities: inherits D's
-capabilities minus closures broken by truncation
+satisfies `Distribution<S>` with scalar sample type. Capabilities:
+inherits D's capabilities minus closures broken by truncation
 (`AffineSelfClosed` is generally lost; `ReparameterizedSampleable`
 survives via inverse-CDF sampling). Refinement types
 (§3.2) interact cleanly: `x ~ Truncated<Normal>(0, 1, 0, 1)`
@@ -5425,7 +5493,7 @@ structure; no user directive is required.
 #### 27.4 Extended Capability Table
 
 **Summary.** Tier A dispatch needs extra capability columns beyond the
-core tags: support, log_pdf, moments, reparam, sampling, entropy,
+core tags: support, log_density, moments, reparam, sampling, entropy,
 kl_div. The full table lives in the stdlib reference; this spec is
 normative only about which columns exist. Missing entries are "not
 closed-form" and fall through to Tier B or Tier C.
@@ -5437,7 +5505,7 @@ table records:
 | Column | Meaning |
 |---|---|
 | `support` | the domain on which density is non-zero |
-| `log_pdf` | closed-form log density availability |
+| `log_density` | closed-form log density availability |
 | `moments` | closed-form mean, variance, higher moments |
 | `reparam` | reparameterization trick form, if any |
 | `sampling` | direct / inverse-CDF / rejection / backend-only |
@@ -5453,12 +5521,12 @@ to Tier B or Tier C for the missing capability.
 #### 27.5 Tier Ordering
 
 **Summary.** Tier 1 ships: 28 families plus two meta-families with
-capability contracts and conjugate-rewrite wiring. Tier 2 is partial:
-the factorized or closed-form-reparameterizable subset ships in Tier
-1; the genuinely joint subset (B2 coupling syntax, copulas, Wishart
-variants) is open pending chunk 08. Tier 3 (non-parametric) is open.
-Tier 1/2/3 orders the family catalog; Tier A/B/C orders dispatch and
-is orthogonal.
+capability contracts and conjugate-rewrite wiring. Tier 2 mechanics
+for structured joint roots, named field projections, and coupling
+metadata are locked; remaining Tier 2 work is family-catalog and
+capability-table polish for copulas, Wishart variants, and related
+joint families. Tier 3 (non-parametric) is open. Tier 1/2/3 orders
+the family catalog; Tier A/B/C orders dispatch and is orthogonal.
 
 Tiers are the PPL scoping axis distinct from the distribution-
 family catalog:
@@ -5468,18 +5536,18 @@ family catalog:
   and closed-form rewrites (§27.3) wired in. Includes three
   multivariate members (MVN, Dirichlet, Multinomial), with
   MVN using the Cholesky reparameterization locked in §13.6.
-- **Tier 2.** Partial. The multivariate subset that admits a
-  factorized representation or a closed-form reparameterization
-  ships in Tier 1 (MVN via Cholesky, Dirichlet/Multinomial via
-  conjugacy). The genuinely joint subset: declarations that
-  introduce coupling structure directly (B2 syntax), correlated-
-  sample coupling machinery (B4), copulas, Wishart / InverseWishart
-  / LKJ (gated on matrix fact propagation for SPD matrices,
-  determinant, trace, and factorable unit laws), and
-  higher-order distributions routing through kernel machinery
-  (§28), remains **open** pending chunk 08 design. Framing is
-  "in scope for this design envelope, machinery not yet locked,"
-  not "deferred to a future version." Tracked in §35 Other Opens.
+- **Tier 2.** Partial but no longer blocked on core mechanics. The
+  multivariate subset that admits a factorized representation or a
+  closed-form reparameterization ships in Tier 1 (MVN via Cholesky,
+  Dirichlet/Multinomial via conjugacy). The structured-joint surface
+  is locked by §13.7 / §13.10: one joint root, named `.at()`
+  projections, record-`~` sugar, and joint-envelope coupling facts.
+  Remaining work is the family catalog and per-family capability
+  tables for copulas, Wishart / InverseWishart / LKJ (gated on matrix
+  fact propagation for SPD matrices, determinant, trace, and
+  factorable unit laws), and related joint families. Higher-order
+  distributions route through kernel machinery (§28). Tracked in
+  §35 Other Opens as catalog polish, not unresolved core semantics.
 - **Tier 3.** Open. Non-parametric and process-valued families
   (Gaussian Process, Dirichlet Process, Chinese Restaurant
   Process, Pitman-Yor, Indian Buffet Process, Beta Process). No
@@ -6067,27 +6135,40 @@ capabilities.
 
 ## Part VI — Known Open Items
 
-**Summary.** Part VI enumerates open design items (B-tagged blockers,
-chunk-slotted work, and a catalog of smaller opens) carried forward
-explicitly so they are not silently committed during consolidation.
-Covers joint distribution syntax, residual-graph mechanics, and more.
-Matrix heterogeneous-unit resolution, backend abstraction, and the
-type-graph / e-graph bridge are closed.
+**Summary.** Part VI enumerates remaining open design items and the
+resolved blocker ledger carried forward explicitly so they are not
+silently recommitted during consolidation. Covers kernel work, sum
+types / enums, residual-graph mechanics, Tier 2 family-catalog polish,
+and smaller opens. The B-tagged blockers, matrix heterogeneous-unit
+resolution, backend abstraction, and the type-graph / e-graph bridge
+are closed.
 
 Carried forward explicitly so they are not silently committed during
 consolidation.
 
 ### 33. Design Blockers
 
-**Summary.** Three named B-blockers remain open: B1 opaque log_pdf
-policy, B2 joint declaration syntax, and B4 coupling machinery. B5
-matrix heterogeneous-unit resolution is closed by the matrix-facts
-model (§3.9) and the committed primitive surface (§30). B6 backend
-abstraction is closed by Part V.
+**Summary.** The named B-blockers are now resolved. B1 distribution
+contract and opaque stochastic family policy, B2 joint declaration
+syntax, B4 coupling machinery, B5 matrix heterogeneous-unit
+resolution, and B6 backend abstraction all have locked homes in the
+canonical spec.
 
-- **B1.** Opaque log_pdf stdlib policy.
-- **B2.** Joint declaration syntax.
-- **B4.** Coupling machinery.
+- **B1.** RESOLVED: `Distribution<S>` is sample-type based; visible
+  distributions expose relation-shaped `log_density`; `density` /
+  `pdf` is default-derived; sampling is backend/runtime capability;
+  curated opaque stdlib/backend stochastic families are Tier-C-first
+  and fact-poor unless a visible rewrite or audited backend
+  capability supplies a specific fact.
+- **B2.** RESOLVED: joint declarations use one structured stochastic
+  root with named `.at()` projections; record-`~` sugar is allowed
+  and desugars to that root. Tuple and positional joint
+  destructuring are banned.
+- **B4.** RESOLVED: coupling lives as joint-envelope metadata on the
+  structured stochastic root. Same-root fields are dependent by
+  default unless the joint envelope proves independent partitions or
+  a dependency graph; distinct field names alone do not prove
+  independence.
 - **B5.** RESOLVED: heterogeneous-unit matrix accounting uses
   compiler-facing matrix facts (`row_axes`, `col_axes`,
   `entry_unit_law`, construction provenance, provider validation)
@@ -6102,10 +6183,10 @@ abstraction is closed by Part V.
 
 ### 34. Chunk-Slotted Work
 
-**Summary.** Outstanding design chunks: chunk 08 joint syntax and
-coupling, chunk 03 kernels (resumes after substrate lock), and chunk
-11 sum types / enums. Chunks 05, 06, 07, and 12 are resolved and kept
-here as completed references.
+**Summary.** Outstanding design chunks: chunk 03 kernels (resumes
+after substrate lock) and chunk 11 sum types / enums. Chunks 05, 06,
+07, 08, 12, and 13 are resolved and kept here as completed
+references.
 
 - **Chunk 05.** RESOLVED: matrix details. Heterogeneous-unit type
   mechanics are resolved by matrix facts (§3.9); shape expressions,
@@ -6131,9 +6212,11 @@ here as completed references.
   generic parameters are invariant by default, conversion legality is
   separate from realization cost, and monotone facts discovered during
   saturation may unlock later guarded rewrites.
-- **Chunk 08.** User-`fn` ban and parameterized-relation lock
-  (applied in §6 / §7 / §8 / §28). Distribution contract shape and
-  B2/B4 joint syntax remain tied to later PPL work.
+- **Chunk 08.** RESOLVED: user-`fn` ban and parameterized-relation
+  lock (applied in §6 / §7 / §8 / §28). Kernels are parameterized
+  relations, not a separate keyword; reusable user-authored model
+  structure adds graph obligations via relations, not expression-
+  position functions.
 - **Chunk 03.** Kernels, resumed after substrate lock; sparse
   assembly, low-rank rewrites, integration operators, and cost
   machinery remain open.
@@ -6147,6 +6230,11 @@ here as completed references.
   `objective_terms(residual)` owns training-objective decomposition
   (§14.2, §25). The former open is recorded in
   `planning/v2/v2.1_chunk_reports/12_cost_field_unification.md`.
+- **Chunk 13.** RESOLVED: PPL blocker cluster B1/B2/B4. Distribution
+  contract shape, opaque stochastic family policy, record-`~` joint
+  sugar, and joint-envelope coupling metadata are locked in §13 and
+  §27; detailed rationale lives in
+  `planning/v2/v2.1_chunk_reports/13_ppl_blockers.md`.
 
 ### 35. Other Opens
 
@@ -6155,8 +6243,8 @@ retraction under monotonicity, residual-to-e-graph mechanics, CC1
 diagnostics, GPU-incompatibility of exact numeric types, chunk 04
 carryovers (per-residual objective exposure, heterogeneous `argmax`,
 event-driven topology, spatial operator lowering), Complex contracts,
-controller-interface affordances, and Tier 2/Tier 3 distribution
-machinery.
+controller-interface affordances, Tier 2 family-catalog polish, and
+Tier 3 distribution machinery.
 
 `replaces` obligation retraction (monotonicity tension with the
 e-graph; cross-refs §8.11 declaration, §10.5 semantics, §15
@@ -6204,15 +6292,17 @@ project-specific patterns into the language while still exposing
 enough machinery that workflow authors can implement them cleanly
 against `Controller` sources (§24.2).
 
-**Tier 2 distribution machinery.** Joint-declaration syntax (B2),
-coupling / correlated-sample machinery (B4), copulas, Wishart /
-InverseWishart / LKJ (gated on matrix fact propagation for SPD matrix
-families), higher-order distribution routing through kernels. In
-scope for the current design envelope but not yet locked; chunk 08 is
-the intended design venue. The
-multivariate subset that admits factorization or closed-form
-reparameterization (MVN, Dirichlet, Multinomial) already ships in
-Tier 1 so this open does not block the common cases.
+**Tier 2 family-catalog polish.** The core mechanics are locked:
+`Distribution<S>` over sample types, visible `log_density`, curated
+opaque family policy, structured joint roots, record-`~` sugar,
+named field projections, and joint-envelope coupling facts. Remaining
+Tier 2 work is catalog-level: which copula, Wishart / InverseWishart
+/ LKJ, and related joint families ship immediately; their capability
+tables; and their exact matrix-fact obligations for SPD matrices,
+determinants, traces, and factorable unit laws. The multivariate
+subset that admits factorization or closed-form reparameterization
+(MVN, Dirichlet, Multinomial) already ships in Tier 1 so this open
+does not block the common cases.
 
 **Tier 3 distribution machinery.** Non-parametric and process-valued
 families (Gaussian Process, Dirichlet Process, Chinese Restaurant
@@ -6290,7 +6380,8 @@ that locks: the full list of axiomatic primitives (`exp`, `log`,
 `sin`, `cos`, `sqrt`, arithmetic, `smooth_max`, etc.), the
 classification of each surface (expression atom vs parameterized relation), the
 capability contracts and abstract cost tags for each, and the
-classification of distributions (`log_pdf` / `sample`) and kernels.
+classification of distributions (`log_density` / backend sampling
+capability) and kernels.
 Cross-refs §6, §7, §13.8, §14, §28, §30.
 
 **Mode B: per-instance heterogeneous contract binding.** Chunk 08
@@ -6744,11 +6835,11 @@ checking; directional because names cannot be re-inferred. LOCKED.
 LOCKED.
 
 - V1. `observe(path, data)` attaches observed data as a layer-2
-  envelope fact on `path`'s e-class (§13.8, §13.9); `log_pdf(data)`
-  contributes to the training objective (§25). Not an equational merge:
-  `path` is not rewritten to `data` in layer 1, and the same `path`
-  elsewhere remains stochastic. Data is never rewritten by inferred
-  constraints.
+  envelope fact on `path`'s e-class (§13.8, §13.9);
+  `log_density(data, logp)` contributes to the training objective
+  (§25). Not an equational merge: `path` is not rewritten to `data`
+  in layer 1, and the same `path` elsewhere remains stochastic. Data
+  is never rewritten by inferred constraints.
 
 **W. Obligation retraction.** Deletion, not rewrite. OPEN (chunk 04
 O4.1, cross-ref §8.11, §10.5, §15, §16, §35).
@@ -6829,8 +6920,8 @@ this group.
   (both advertised via stdlib capability contracts; §7.2, §17.3)
   and `X ~ D_X`, the image `Y = f(X)` carries a distributional
   envelope fact computed by change-of-variables:
-  `log_pdf_Y(y) = log_pdf_X(f⁻¹(y)) - log |det J_f(f⁻¹(y))|`.
-  Produces a `Distribution<U_Y>` envelope fact on `Y`'s e-class
+  `log_density_Y(y) = log_density_X(f⁻¹(y)) - log |det J_f(f⁻¹(y))|`.
+  Produces a `Distribution<Scalar<U_Y>>` envelope fact on `Y`'s e-class
   without routing to Tier B/C when the Jacobian determinant
   simplifies symbolically. Falls through to Tier B (delta method
   via `SmoothTransformable`) when the Jacobian does not simplify,
