@@ -6,8 +6,9 @@
 **Status:** IN PROGRESS. Shape polymorphism direction locked (Option
 C — `Tensor<U, shape>` primitive with `Vector<U, n>` / `Matrix<U, m, n>`
 as shape-refined aliases). Heterogeneous-unit facts, matrix-envelope
-views, and the structural fact lattice are locked. Backend / AD / GPU
-lowering concerns factored out into chunk 06.
+views, structural fact lattice, tensor `convert`, collections
+boundary, and dynamic-topology shape handling are locked. Backend /
+AD / GPU lowering concerns factored out into chunk 06.
 
 ---
 
@@ -264,8 +265,8 @@ obligation to prove or validate the fact, not a grant of the fact.
 
 This closes the type-signature branch of the heterogeneous-unit
 question. Remaining chunk-05 work after the resolved sections below:
-collections boundary text, dynamic-topology deferral text,
-sparse-pattern detail, and primitive naming / error polish.
+sparse-pattern detail, scalar reconciliation, primitive naming /
+error polish, and final commitment text.
 
 ### 3.3 Envelope flavors for matrix-valued quantities — RESOLVED: parallel views
 
@@ -463,7 +464,7 @@ refinement predicates, stdlib primitive contracts, and diagnostics;
 they are not runtime model values and relations cannot observe them
 as ordinary numeric quantities.
 
-### 3.7 Collections boundary — CLARIFICATION
+### 3.7 Collections boundary — RESOLVED: explicit collection-axis extraction
 
 `Matrix<U, m, n>` is a **distinct primitive** from
 `[Scalar<U>; m, n]` (2D collection). Rationale:
@@ -479,30 +480,69 @@ as ordinary numeric quantities.
 - Validity masks on dynamic collections are unnecessary overhead
   for fixed-shape matrices.
 
-**Explicit statement for the spec:** collections and tensors are
-orthogonal. A collection of tensors is meaningful
-(`[Matrix<U, m, n>; k]` — a stack of matrices); a "matrix of
-collections" is not a sensible construct.
+**Spec commitment:** collections and tensors are orthogonal. A
+collection of tensors is meaningful (`[Matrix<U, m, n>; k]` — a
+stack of matrices); a "matrix of collections" is not a primitive
+construct.
 
 Collections remain the right type for entity state in ecosystem
 simulations (heterogeneous nodes, dynamic add/remove); tensors are
 for numerical arrays with linear-algebra semantics.
 
-### 3.8 Dynamic topology × matrix shapes — DEFERRED
+The bridge is explicit collection-axis extraction. A stdlib relation
+may gather a field from a collection into a tensor only by naming the
+entity ordering, axis identity, field path, unit law, and missing /
+inactive-entry policy. The extracted tensor carries facts such as:
 
-Growing adjacency matrices as entities join/leave the ecosystem
-(via events) is a real v2.2+ problem. Interactions:
+```
+axis(temp_vec, 0) = leaves ordered by leaf_id
+entry_unit(temp_vec[i]) = kelvin
+provenance(temp_vec) = collected_from(leaves.temperature)
+```
 
-- Matrix shape parameters become runtime quantities under dynamic
-  topology.
-- Reshape events need to preserve existing entries, pad new ones.
-- SCC decomposition of a matrix whose shape changes mid-run is
-  nontrivial.
+There is no implicit `[Scalar<U>; n] -> Vector<U, n>` conversion and
+no implicit "tensor axis is a collection" semantics.
 
-**For v2.1:** tensor shapes are compile-time known. Document this
-limitation explicitly; defer dynamic-shape matrices to future
-work. Ecosystem adjacency / topology is expressed via collections
-and node-level state, not via growing matrices.
+### 3.8 Dynamic topology × matrix shapes — RESOLVED: ShapePhase plus regime-boundary handlers
+
+Dynamic topology is not simply deferred. The Myco layer represents
+it with `ShapePhase` facts (§3.6) and regime-boundary crossing
+policies (§8.10 / §24.6 in spec). A shape-changing event does not
+mutate a matrix in place; it crosses a boundary between topology
+versions or executes in a runtime representation whose axis set is
+explicitly dynamic.
+
+Committed semantic modes:
+
+- **`static`.** Shape known from source / generics.
+- **`provider_validated`.** Shape known after workflow materializes a
+  topology before planning.
+- **`runtime_bounded` / `CapacityMask`.** Fixed maximum shape with
+  alive masks and capacity records. Shape is stable; active set
+  changes.
+- **`event_replan`.** A topology-changing event creates a new
+  topology version and a new member of an SCC family. The executor
+  stops at the event boundary, applies the topology diff, recomputes
+  axes / facts / sparsity / obligations, and re-lowers or dispatches
+  a cached plan for the new version.
+- **`dynamic_keyed`.** Axis sets are runtime maps keyed by entity IDs.
+  This is a valid Myco semantic mode for CPU / host execution and
+  dynamic sparse runtimes; compiled accelerator backends may reject
+  or route through host / replan according to capability facts.
+- **`dynamic_unknown`.** Shape is not sufficiently bounded or keyed
+  for a selected backend / handler. Planning reports an unmet
+  obligation or asks the workflow to choose a crossing policy.
+
+This means v2.1 can model dynamic topology honestly without making
+JAX-style static-shape execution the language semantics. Backends
+advertise which modes they can lower efficiently. CPU reference
+execution is the semantics-complete path for `dynamic_keyed`; GPU /
+JIT backends may prefer capacity masks or event-boundary replanning.
+
+An SCC may not silently change tensor shape in the middle of one
+solve step. Shape-changing events must use an explicit handler:
+`CapacityMask`, `EventReplan`, `DynamicKeyed`, or a future
+backend-specific handler with equivalent semantics.
 
 ---
 
@@ -607,8 +647,9 @@ math-vocabulary).
 - **Neural controllers (`Controller` sources).** Data contracts with
   matrix-valued fields — mechanical extension once tensor types
   exist. Cross-backend interop belongs to chunk 06.
-- **Events / topology.** §3.8 — dynamic matrix shapes deferred
-  to v2.2.
+- **Events / topology.** §3.8 — dynamic matrix shapes use
+  `ShapePhase` plus explicit regime-boundary handlers; backend
+  execution support is capability-advertised.
 
 ---
 
@@ -636,14 +677,12 @@ Items in priority order (later items depend on earlier items
 closing):
 
 Completed: §3.6 shape-expression model, §3.3 envelope views, §3.4
-structural fact lattice, and §3.5 tensor `convert` scope.
+structural fact lattice, §3.5 tensor `convert` scope, §3.7
+collections boundary, and §3.8 dynamic topology shape handling.
 
-1. **Close §3.7 (collections boundary).** Written above as
-   clarification; needs one-paragraph commitment in spec.
-2. **Close §3.8 (dynamic topology deferral).** Documentation call.
-3. **Draft primitive list §4 concretely.** Names, signatures,
+1. **Draft primitive list §4 concretely.** Names, signatures,
    errors. Well-trodden; low design risk.
-4. **Write the v2.1 commitment text into the spec.**
+2. **Write the v2.1 commitment text into the spec.**
 
 Parallelizable with chunk 06 (backend abstraction) — chunk 06
 needs this chunk's primitive list to have lowering targets; this
@@ -679,5 +718,12 @@ fact contracts being established for `Σ`.
 - **Q7.** Sparse pattern facts. RESOLVED 2026-04-23:
   `zero_pattern` / `banded` / `block_sparse` are facts with evidence
   phase; storage representation remains backend-level (§3.4).
-- **Q8.** Matrix literal syntax — `[[1, 2]; [3, 4]]` or alternative.
+- **Q8.** Collections boundary. RESOLVED 2026-04-24:
+  collections and tensors are orthogonal; bridges are explicit
+  collection-axis extraction relations (§3.7).
+- **Q9.** Dynamic topology × matrix shapes. RESOLVED 2026-04-24:
+  `ShapePhase` plus regime-boundary handlers (`CapacityMask`,
+  `EventReplan`, `DynamicKeyed`); no silent in-solve shape mutation
+  (§3.8).
+- **Q10.** Matrix literal syntax — `[[1, 2]; [3, 4]]` or alternative.
   (§4)

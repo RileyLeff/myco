@@ -95,6 +95,8 @@ gap-review stale list, subsequent design locks.
 | ordinary-gradient-through-discontinuity semantics | regime-boundary records with explicit crossing policy | gradients flow inside regimes; crossings require one-sided, subgradient, saltation, estimator, relaxation, or strict rejection |
 | default auto-smoothing of nonsmooth source models | strict default plus workflow-selected relaxation handlers | smoothing is either a `.myco` model claim or an explicit workflow surrogate, never compiler housekeeping |
 | untracked relaxed training plans | relaxation ledger in `hypha explain` / plan IR | relaxed execution must be auditable against the hard source model |
+| backend-dependent dynamic-topology semantics | one Myco shape-boundary model with backend capability-advertised lowerings | JAX-style masks, PyTorch-style symbolic dims, CPU dynamic maps, and replanning are execution strategies, not different languages |
+| silent in-solve tensor shape mutation | `CapacityMask`, `EventReplan`, or `DynamicKeyed` crossing handlers | changing the vector space is a regime-boundary crossing, not an ordinary value update |
 
 ## Retired open questions (closed or structurally void)
 

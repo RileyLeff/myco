@@ -487,13 +487,61 @@ Collections (§12) and tensors are orthogonal primitives. A
 `Collection<T>` is a homogeneous, unordered-or-keyed aggregation of
 entities — membership, iteration, aggregation (§12.1). A `Tensor<U, S>`
 is a shaped numerical object — multi-axis indexing, linear-algebra
-primitives, structural facts / refinements (§3.9). The two do not nest into
-each other by default: a collection of scalars is not automatically
-a vector, and a tensor axis is not automatically a collection. User-
-defined conversions exist (e.g. `to_tensor` aggregating a collection
-of refined scalars into a dense vector), but they are explicit.
-This orthogonality keeps the semantics of `for` / aggregation
-(§12) decoupled from the semantics of matrix / tensor operations.
+primitives, structural facts / refinements (§3.9). The two do not
+nest into each other by default: a collection of scalars is not
+automatically a vector, and a tensor axis is not automatically a
+collection.
+
+Bridging is explicit through collection-axis extraction. A stdlib
+extraction relation may gather a field from a collection into a
+vector or matrix only when it names the entity ordering, axis
+identity, field path, unit law, and missing / inactive-entry policy.
+For example:
+
+```text
+collect_to_vector(leaves, key: leaf_id, field: temperature, out: temp_vec)
+
+axis(temp_vec, 0) = leaves ordered by leaf_id
+entry_unit(temp_vec[i]) = kelvin
+provenance(temp_vec) = collected_from(leaves.temperature)
+```
+
+The extracted tensor is a numerical object with an axis identity
+derived from the collection. The source collection remains an entity
+aggregation with membership and iteration semantics. This
+orthogonality keeps `for` / aggregation (§12) decoupled from matrix /
+tensor operations while still letting models intentionally assemble
+linear-algebra objects from entity state.
+
+Dynamic topology and tensor shapes use regime-boundary semantics
+(§8.10) plus `ShapePhase` evidence:
+
+- **`static`.** Shape known from source / generics.
+- **`provider_validated`.** Shape known after workflow materializes a
+  topology or dataset before planning.
+- **`runtime_bounded`.** Fixed maximum shape with alive masks,
+  zero-pattern facts, or capacity records. Shape is stable; active
+  set changes.
+- **`event_replan`.** A topology-changing event creates a new
+  topology version and a new member of an SCC family. The executor
+  stops at the event boundary, applies the topology diff, recomputes
+  axes / facts / sparsity / obligations, and re-lowers or dispatches
+  a cached plan for the new version.
+- **`dynamic_keyed`.** Axis sets are runtime maps keyed by entity IDs.
+  This is a valid Myco semantic mode for CPU / host execution and
+  dynamic sparse runtimes; compiled accelerator backends may reject
+  or route through host / replan according to capability facts.
+- **`dynamic_unknown`.** Shape is not sufficiently bounded or keyed
+  for a selected backend / handler. Planning reports an unmet
+  obligation or asks the workflow to choose a crossing policy (§24.6).
+
+An SCC may not silently change tensor shape in the middle of one
+solve step. Shape-changing events cross a regime boundary and must
+use one of the explicit handlers above (`CapacityMask`,
+`EventReplan`, `DynamicKeyed`, or a later backend-specific handler).
+CPU reference execution is semantics-complete for `dynamic_keyed`;
+JIT / GPU backends advertise which modes they lower without host
+fallback.
 
 The `convert` facility (§5.1) extends to tensors only for
 meaning-preserving isomorphisms, materializations, and widenings:
@@ -4011,13 +4059,16 @@ canonical SCC class is the four-way execution role above.
 
 **Summary.** Lowering compiles the residual graph into a backend
 artifact. Static and dynamic modules take distinct paths; each SCC
-lowers per its class; dynamic topology uses N-max slots plus an alive
-mask; temporal indexing produces distinct ground terms rather than a
-template. Subsections detail each mechanism.
+lowers per its class; dynamic topology uses explicit shape handlers
+(`CapacityMask`, `EventReplan`, `DynamicKeyed`); temporal indexing
+produces distinct ground terms rather than a template. Subsections
+detail each mechanism.
 
-N-max / alive-mask lowering for dynamic topology. `y[t]` and `y[t+1]`
-as distinct ground terms (no per-timestep or template e-graph).
-Handoff to the backend.
+N-max / alive-mask lowering is the `CapacityMask` path for dynamic
+topology. `EventReplan` and `DynamicKeyed` are selected through
+regime-boundary crossing policy (§24.6) and backend capability
+advertising (§31.1). `y[t]` and `y[t+1]` remain distinct ground terms
+(no per-timestep or template e-graph). Handoff to the backend.
 
 #### 21.1 Static vs Dynamic Module Classification
 
@@ -4153,11 +4204,16 @@ Long-rollout gradients are workflow-configurable. `full_BPTT`,
 names exposed through run-config (§24.5); backends choose the concrete
 checkpointing primitive or scan representation.
 
-Event-time topology mutation does not currently trigger incremental
-e-graph resaturation in the middle of a run. The design target is
-tracked as O4.7 in §35. Mesh discretization lowering likewise remains
-an architectural open item (Appendix C P1): whether spatial operators
-become e-graph rewrites or pre-e-graph codegen is not yet locked.
+Event-time topology mutation crosses a regime boundary (§8.10) rather
+than mutating an SCC's tensor shape in place. The committed semantic
+modes are `runtime_bounded`, `event_replan`, and `dynamic_keyed`
+(§3.8). Incremental e-graph resaturation during a run is an
+implementation target, not required for semantic correctness:
+`event_replan` may rebuild / re-lower at the event boundary and
+`dynamic_keyed` may execute through a host runtime. Mesh
+discretization lowering likewise remains an architectural open item
+(Appendix C P1): whether spatial operators become e-graph rewrites or
+pre-e-graph codegen is not yet locked.
 
 #### 21.4 N-max Slots and Alive Masks
 
@@ -4168,7 +4224,9 @@ retirement flips the bit but leaves equational history intact;
 overflow is a runtime error, not silent growth.
 
 Event-time collections (§12.4) lower to a fixed-capacity
-array plus an alive mask.
+array plus an alive mask. This is the concrete lowering for the
+`runtime_bounded` / `CapacityMask` dynamic-topology mode (§3.8,
+§24.6).
 
 - **N-max selection.** The collection declares an N-max
   capacity at its declaration site. Workflow override via
@@ -5534,9 +5592,11 @@ layer). Fallback is per-run via `run.config.backend`.
 
 Backends advertise capabilities (e.g. `supports_complex`,
 `supports_forward_ad`, `supports_hamiltonian_monte_carlo`,
-`supports_sparse_matmul`) and the compiler verifies required
-capabilities at plan-binding time. When a required capability is
-missing, the compiler consults the workflow's fallback policy:
+`supports_sparse_matmul`, `supports_runtime_bounded_shapes`,
+`supports_event_replan`, `supports_dynamic_keyed_axes`) and the
+compiler verifies required capabilities at plan-binding time. When a
+required capability is missing, the compiler consults the workflow's
+fallback policy:
 
 - **`error`.** Fail at plan-binding time with a capability-mismatch
   diagnostic (workflow-composition error tier, §19.4). Conservative
