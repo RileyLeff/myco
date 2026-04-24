@@ -23,7 +23,8 @@ linear-algebra primitives that **do not currently exist** in v2.1:
   variables, need `cholesky` sampling, `det` / `trace` in log_pdf.
 - **Level III `condition_of`** (locked in chunk 04 §11 O2.4) — problem
   conditioning of linear-solve SCC blocks requires matrix operator
-  norm (`condest` / σ_max / σ_min).
+  norm / singular-value estimates (e.g. condest-style backend
+  estimators, σ_max / σ_min).
 - **MVN internal reparameterization (Z10 rewrite, locked in CC4)** —
   `cholesky(Σ)` to reparameterize to independent bases.
 - **Gram matrices in kernel methods** (chunk 03) — low-rank kernel
@@ -265,8 +266,8 @@ obligation to prove or validate the fact, not a grant of the fact.
 
 This closes the type-signature branch of the heterogeneous-unit
 question. Remaining chunk-05 work after the resolved sections below:
-sparse-pattern detail, scalar reconciliation, primitive naming /
-error polish, and final commitment text.
+scalar reconciliation, matrix literal syntax, and final commitment
+text.
 
 ### 3.3 Envelope flavors for matrix-valued quantities — RESOLVED: parallel views
 
@@ -546,59 +547,58 @@ backend-specific handler with equivalent semantics.
 
 ---
 
-## 4. Primitives to commit (tentative)
+## 4. Primitive catalog — RESOLVED: names, signatures, and obligations
 
-These should ship in v2.1 stdlib once type-system questions §3.2 /
-§3.3 / §3.4 / §3.6 close. Actual execution lives in chunk 06
-(backend abstraction).
+These primitives ship in the v2.1 stdlib as compiler-owned expression
+atoms. Actual execution lives in chunk 06 (backend abstraction), but
+the language-level surface and fact contracts are committed here.
 
-**Decompositions (on `Matrix<U, n, n>` or appropriate refinement):**
-- `cholesky(PosDef<U, n>) -> LowerTriangular<U, n>`
-- `lu(Matrix<U, n, n>) -> (LowerTriangular<U, n>,
-  UpperTriangular<U, n>, Permutation<n>)`
-- `qr(Matrix<U, m, n>) -> (Orthogonal<U, m, m>, UpperTriangular<U, m, n>)`
-- `svd(Matrix<U, m, n>) -> (Orthogonal<U, m, m>, Diagonal<U, r>,
-  Orthogonal<U, n, n>)` where `r = min(m, n)`
-- `eigen(Symmetric<U, n>) -> (Vector<U, n>, Orthogonal<U, n, n>)`
+Naming policy:
 
-**Solves:**
-- `solve(Matrix<U, n, n>, Vector<U, n>) -> Vector<U, n>` — dispatches
-  on structural facts (Cholesky for positive-definite systems,
-  triangular solve for triangular systems, LU otherwise).
-- `solve_triangular(Triangular<U, n>, Vector<U, n>) -> Vector<U, n>`
-- `least_squares(Matrix<U, m, n>, Vector<U, m>) -> Vector<U, n>`
+- Prefer standard math vocabulary in lowercase: `det`, `trace`,
+  `transpose`, `adjoint`, `solve`, `norm`.
+- Use `inverse(A)` as the canonical spelling; `inv(A)` is not the
+  canonical surface.
+- Matrix product uses ordinary `*` with shape / axis facts governing
+  contraction. Elementwise multiplication, if needed, is a named
+  primitive such as `hadamard(A, B)`, not `@`.
+- Numeric matrix rank is `matrix_rank(A)` to avoid collision with
+  shape rank (`rank(shape)`).
+- Primitives consume facts and emit facts. A required unknown fact is
+  an unmet obligation, not permission to pick a semantic fallback.
 
-**Norms and diagnostics:**
-- `norm(Tensor, kind: "1" | "2" | "fro" | "inf") -> Scalar<U>`
-- `condest(Matrix<U, n, n>) -> Scalar<dimensionless>` — 1-norm
-  condition estimator (Higham). Consumed by Level III
-  `condition_of` per chunk 04.
-- `rank(Matrix<U, m, n>) -> Scalar<dimensionless>`
+Committed primitive groups:
 
-**Basic ops:**
-- `det(Matrix<U, n, n>) -> Scalar<U^n>`
-- `trace(Matrix<U, n, n>) -> Scalar<U>`
-- `inv(Matrix<U, n, n>) -> Matrix<U^(-1), n, n>` — flagged in docs
-  as worse-conditioned than `solve` for most uses.
-- `transpose(Tensor<U, (m, n)>) -> Tensor<U, (n, m)>`
-- `adjoint` — conjugate-transpose for complex (v2.2+ if complex
-  numbers defer).
-- Matmul as `@` operator: `Matrix<U, m, k> @ Matrix<V, k, n> ->
-  Matrix<U·V, m, n>`.
-- Matrix-vector, matrix-scalar.
+| primitive | required facts / signature shape | emitted facts / notes |
+|---|---|---|
+| `cholesky(A)` | `rank(A)=2`, `square(A)`, `symmetric(A)` or `hermitian(A)`, `positive_definite(A)`, `factorable_unit_law(A)` | `lower_triangular(L)`, `positive_diagonal(L)`, `A = L * transpose(L)` or Hermitian transpose, output unit law. PSD alone is not enough. |
+| `lu(A)` | `rank(A)=2`, `square(A)`, `invertible(A)` or pivoting route | `(L, U, P)` with `P * A = L * U`, triangular facts, `permutation(P)`. |
+| `qr(A)` | `rank(A)=2`, numeric entries, and scaling policy for heterogeneous units | `orthogonal(Q)`, `upper_triangular(R)`, `A = Q * R`, rank facts when rank-revealing route is selected. |
+| `svd(A)` | `rank(A)=2`, numeric entries, and scaling policy for heterogeneous units | `(U, S, Vt)` with orthogonality facts, diagonal / nonnegative singular-value facts, and rank / spectral facts where classifiable. |
+| `eigen(A)` | `square(A)`; symmetric / Hermitian facts for the real-symmetric route; Complex / backend facts for the general route | Eigenvalue / eigenvector facts, spectral-radius / eigenvalue bounds where classifiable. |
+| `solve(A, b)` | `rank(A)=2`, `compatible_axes(A, b)`, `solvable(A, b)` | Solution axes / units, residual report, `condition_of(solve_block)` facts. Dispatch uses facts such as triangular, positive-definite, full-rank, or rank-deficient. |
+| `solve_triangular(A, b)` | `lower_triangular(A)` or `upper_triangular(A)`, compatible axes, nonzero diagonal / solvability facts | Explicit direct-solve primitive; `solve` may route here when facts establish eligibility. |
+| `least_squares(A, b)` | Rectangular or rank-deficient system facts, compatible axes, scaling policy | Solution / residual facts, rank / conditioning diagnostics. |
+| `inverse(A)` | `square(A)`, `invertible(A)`, and materialization authorization | Inverse identities, inverse entry-unit law, condition facts. `inverse(A) * b` may rewrite to `solve(A, b)`. |
+| `det(A)` | `square(A)` and determinant-capable unit / scalar facts | Determinant unit law and triangular-product simplifications. |
+| `trace(A)` | `square(A)` and diagonal-entry unit comparability | Trace unit law; diagonal / block-diagonal simplifications. |
+| `transpose(A)` | `rank(A)=2` | Swaps axes, transposes entry-unit law, flips upper / lower triangular facts, preserves applicable facts (§3.4). |
+| `adjoint(A)` | Complex numeric support or real route where adjoint reduces to transpose | Conjugate-transpose facts; required by Hermitian primitives. |
+| `norm(expr, kind)` | Supported kind (`"1"`, `"2"`, `"fro"`, `"inf"`), unit / scaling policy where needed | Norm envelope facts consumed by `condition_of` and approximation accounting. |
+| `condition_of(expr)` | Shape, axis comparability, unit comparability, norm / scaling policy | `condition_estimate`, `condition_mode`, `condition_bound` when available. |
+| `matrix_rank(A)` | `rank(A)=2`, numeric entries, tolerance / scaling policy | `rank_value(A)`, full-rank / nullspace facts when classifiable. |
+| `gram(k, points)` | Kernel-domain compatibility and Gram construction facts | `gram_of(K,k,points)`, symmetry / PSD facts when provable, compact-support zero-pattern facts. |
+| `zeros<U>(shape)` | Structural shape expression and unit parameter | Zero tensor with zero-pattern facts. |
+| `ones(shape)` | Structural shape expression | Dimensionless all-ones tensor. |
+| `identity(n)` | Structural square dimension | Dimensionless identity matrix; diagonal, orthogonal, positive-definite facts. |
+| `diag(v)` | Vector input | Diagonal matrix with diagonal entries from `v`. |
+| `diag_of(A)` | Matrix input | Vector of diagonal entries. |
+| `stack`, `hstack`, `vstack` | Shape constraints from §3.6 | Tensor with derived shape, axis, and unit facts. |
 
-**Constructors:**
-- `zeros(shape) -> Tensor<U, shape>`
-- `ones(shape) -> Tensor<dimensionless, shape>`
-- `identity(n) -> Diagonal<dimensionless, n>`
-- `diag(Vector<U, n>) -> Diagonal<U, n>`
-- `diag_of(Matrix<U, n, n>) -> Vector<U, n>`
-- `stack`, `hstack`, `vstack` — with shape-arithmetic on the output
-- Matrix literals — syntax TBD (`[[1, 2]; [3, 4]]` or similar).
-
-**Open question.** Exact naming, argument order, error modes all
-TBD. Naming convention should match scalar stdlib (short, lowercase,
-math-vocabulary).
+Matrix literals remain the one syntax question in this cluster. The
+primitive surface does not require a literal form; users can build
+matrices through constructors, collection-axis extraction, providers,
+or stdlib relations until literal syntax is locked.
 
 ---
 
@@ -625,9 +625,10 @@ math-vocabulary).
 - **Distributions (chunk 04 §11 Z-group).** Unblocks MVN (Z10
   Cholesky reparameterization), Wishart, InverseWishart. Their
   log_pdf expressions consume `det`, `trace`, `cholesky`, `solve`.
-- **Condition analysis Level III (chunk 04 §11 O2.4).** Matrix
-  `condest` is the primitive; `condition_of(solve_block)` lowers to
-  it. Chunk 04 locked the API shape (mode-tagged return);
+- **Condition analysis Level III (chunk 04 §11 O2.4).**
+  `condition_of(solve_block)` is the Myco primitive; backends may
+  lower it to `condest`-style runtime estimators. Chunk 04 locked the
+  API shape (mode-tagged return);
   concretizing the runtime path depends on this chunk's primitive
   set and chunk 06's backend execution.
 - **Kernels (chunk 03).** Gram matrices, low-rank approximations
@@ -678,11 +679,14 @@ closing):
 
 Completed: §3.6 shape-expression model, §3.3 envelope views, §3.4
 structural fact lattice, §3.5 tensor `convert` scope, §3.7
-collections boundary, and §3.8 dynamic topology shape handling.
+collections boundary, §3.8 dynamic topology shape handling, and §4
+primitive catalog.
 
-1. **Draft primitive list §4 concretely.** Names, signatures,
-   errors. Well-trodden; low design risk.
-2. **Write the v2.1 commitment text into the spec.**
+1. **Resolve scalar reconciliation (§3.1 Q6).** Decide
+   `Scalar<U> := Tensor<U, ()>` vs distinct scalar constructor.
+2. **Resolve matrix literal syntax (§4 Q11).** Does v2.1 ship a
+   literal form, or constructors/providers only?
+3. **Write the final v2.1 commitment text into the spec.**
 
 Parallelizable with chunk 06 (backend abstraction) — chunk 06
 needs this chunk's primitive list to have lowering targets; this
@@ -725,5 +729,7 @@ fact contracts being established for `Σ`.
   `ShapePhase` plus regime-boundary handlers (`CapacityMask`,
   `EventReplan`, `DynamicKeyed`); no silent in-solve shape mutation
   (§3.8).
-- **Q10.** Matrix literal syntax — `[[1, 2]; [3, 4]]` or alternative.
+- **Q10.** Primitive catalog. RESOLVED 2026-04-24: committed names,
+  signatures, fact contracts, and unmet-obligation behavior (§4).
+- **Q11.** Matrix literal syntax — `[[1, 2]; [3, 4]]` or alternative.
   (§4)

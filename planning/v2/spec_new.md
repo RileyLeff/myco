@@ -782,17 +782,10 @@ different mathematical operation.
 
 Remaining chunk-05 matrix work:
 
-- **Shape-phase propagation detail** (§3 generics). The
-  shape-expression model is locked; remaining primitive tables still
-  need to spell out how fixed-shape, provider-validated,
-  runtime-bounded, and dynamic-unknown `ShapePhase` facts propagate.
-- **Sparse pattern facts and representation choice.** `zero_pattern`,
-  `banded`, `block_sparse`, and related facts are mathematical /
-  pattern facts. `CSR`, `CSC`, `COO`, dense materialization, and
-  device layout remain backend-level representation choices tracked
-  by provider / backend facts.
 - **Scalar reconciliation.** `Scalar<U> := Tensor<U, ()>` vs a
   distinct scalar constructor remains a separate scope call.
+- **Matrix literal syntax.** Whether v2.1 ships a literal form or
+  relies on constructors / providers remains open.
 
 #### 3.10 Sum Types / Enums (STUB)
 
@@ -4040,8 +4033,9 @@ Per-entity SCCs over homogeneous populations are vectorization
 candidates: the backend may map independent entity-local SCCs with
 `vmap`/batching on GPU. Cross-entity coupled SCCs remain scalar or
 block-structured solves until the compiler can prove separability.
-Dynamic-shape matrix SCCs are out of v2.1 scope; shapes participating
-in SCC solving must be compile-time known (§30).
+Shape-changing matrix SCCs use the explicit `ShapePhase` /
+regime-boundary handlers of §3.8 (`CapacityMask`, `EventReplan`,
+`DynamicKeyed`) rather than silently resizing during a solve.
 
 SCC-role predicates may feed rewrite guards and diagnostics. For
 example, a rewrite may require "this e-class is inside a training SCC"
@@ -5490,7 +5484,7 @@ add domain-specific units, refinements, and conversion declarations
 on top. This keeps the core stdlib narrow and keeps domain expertise
 under the domain's own project maintenance.
 
-### 30. Matrix and Tensor Primitives (STUB)
+### 30. Matrix and Tensor Primitives
 
 **Summary.** Matrix / tensor primitives are fact consumers and fact
 emitters. They do not ask for a user-marked matrix role. They require
@@ -5500,16 +5494,22 @@ kernels are implementation choices that preserve the same semantics,
 not semantic fallbacks.
 
 Chunk 05 is the design venue for the remaining matrix type layer:
-sparse-pattern detail, scalar reconciliation, and primitive signature
-polish. This section commits only the stdlib function surface and the
-primitive fact contracts; type content lives in §3.9 per the chunk 05
-scope decision.
+scalar reconciliation and matrix literal syntax. This section commits
+the stdlib function surface and the primitive fact contracts; type
+content lives in §3.9 per the chunk 05 scope decision.
 
 The matrix / tensor stdlib ships the linear-algebra primitives that
 the rest of the spec depends on by name, in particular the Cholesky
 factorization used in MVN reparameterization (§13.6, Z10) and the
 kernel Gram-matrix machinery (§28). Committed primitives and their
 fact contracts:
+
+Naming policy: standard math names are lowercase (`det`, `trace`,
+`transpose`, `adjoint`, `solve`, `norm`); `inverse(A)` is the
+canonical spelling rather than `inv(A)`; matrix product uses ordinary
+`*` with shape / axis facts governing contraction; numeric matrix
+rank is `matrix_rank(A)` to avoid collision with shape rank
+(`rank(shape)`).
 
 | primitive | required facts | emitted facts | unmet-obligation behavior |
 |---|---|---|---|
@@ -5519,10 +5519,23 @@ fact contracts:
 | `svd(A)` | `rank(A)=2`, numeric entries, and a scaling policy when heterogeneous units make singular values unit-dependent | `orthogonal(U)`, `diagonal(S)`, `nonnegative_entries(diag(S))`, `orthogonal(V)`, singular-value / rank facts when classifiable | Missing scaling policy blocks interpretation rather than silently producing meaningless units. |
 | `eigen(A)` | `square(A)`; `symmetric(A)` / `hermitian(A)` for the real-symmetric route; Complex support for the general route | eigenvalue / eigenvector facts, `spectral_radius_bound(A)` or `eigenvalue_bounds(A)` when classifiable | General non-symmetric eigen requires the Complex/backend facts to be established. |
 | `solve(A, b)` | `rank(A)=2`, `compatible_axes(A, b)`, and `solvable(A, b)`; specialized routes consume `lower_triangular`, `upper_triangular`, `positive_definite`, `full_rank`, or rank facts | solution axes / units, residual report, `condition_of(solve_block)` facts | Under/overdetermined or ill-conditioned blocks become explicit obligations / diagnostics. Solver orientation is a lowering choice, not source semantics. |
+| `solve_triangular(A, b)` | `lower_triangular(A)` or `upper_triangular(A)`, compatible axes, nonzero diagonal / solvability facts | solution axes / units and direct triangular-solve provenance | Unknown triangularity or diagonal solvability reports an unmet obligation. `solve` may dispatch here only when facts prove eligibility. |
+| `least_squares(A, b)` | rectangular or rank-deficient system facts, compatible axes, scaling policy | solution / residual facts, rank / conditioning diagnostics | Missing scaling, rank, or compatibility facts are obligations. |
 | `inverse(A)` | `square(A)`, `invertible(A)`, and materialization authorization when the inverse is needed as a value | inverse identities, inverse `entry_unit_law`, condition facts | `inverse(A) * b` may rewrite to `solve(A,b)` because semantics are preserved. Materializing an inverse without required facts is an unmet obligation. |
 | `det(A)` | `square(A)` and determinant-capable scalar / unit facts | determinant unit law, triangular product simplification when `triangular(A)` is established | Missing square or unit facts are reported. |
+| `trace(A)` | `square(A)` and diagonal-entry unit comparability | trace unit law plus diagonal / block-diagonal simplifications | Missing square or unit-comparability facts are reported. |
+| `transpose(A)` | `rank(A)=2` | swapped axes, transposed `entry_unit_law`, flipped upper/lower triangular facts, preserved applicable facts (§3.9) | Rank mismatch is a compile error or obligation depending on shape phase. |
+| `adjoint(A)` | Complex numeric support, or real route where adjoint reduces to transpose | conjugate-transpose facts; Hermitian route facts when applicable | Missing Complex/backend support is a capability obligation. |
+| `norm(expr, kind)` | supported kind (`"1"`, `"2"`, `"fro"`, `"inf"`), unit / scaling policy where needed | norm envelope facts used by `condition_of` and approximation accounting | Heterogeneous units without scaling policy block interpretation. |
 | `condition_of(expr)` | expression shape, unit / axis comparability, and norm / scaling policy for matrix-valued expressions | `condition_estimate(expr)`, `condition_mode`, `condition_bound` when available | Heterogeneous units without a scaling policy make condition number interpretation unknown; the diagnostic asks for scaling evidence. |
+| `matrix_rank(A)` | `rank(A)=2`, numeric entries, tolerance / scaling policy | `rank_value(A)`, full-rank / nullspace facts when classifiable | Missing tolerance / scaling policy reports an obligation. |
 | `gram(k, points)` | kernel-domain compatibility and facts proving the Gram construction's symmetry / PSD when consumed as covariance | `gram_of(K,k,points)`, symmetry / PSD facts when provable, `zero_pattern` for compact-support kernels | If PSD is required by a downstream primitive and unknown, the downstream use reports `positive_semidefinite(K)` as unmet. No opaque handoff is automatic. |
+| `zeros<U>(shape)` | structural shape expression and unit parameter | zero tensor, zero-pattern facts | Shape expressions outside the solved subset become obligations. |
+| `ones(shape)` | structural shape expression | dimensionless all-ones tensor | Shape expressions outside the solved subset become obligations. |
+| `identity(n)` | structural square dimension | dimensionless identity matrix; diagonal, orthogonal, positive-definite facts | Unknown dimension phase follows §3.8 shape-phase rules. |
+| `diag(v)` | vector input | diagonal matrix with diagonal entries from `v` | Non-vector input is rejected. |
+| `diag_of(A)` | matrix input | vector of diagonal entries | Non-matrix input is rejected. |
+| `stack` / `hstack` / `vstack` | shape constraints from §3.8 | derived shape, axis, and unit facts | Shape incompatibility is an unmet obligation. |
 | spatial operator lowering | geometry/domain facts, discretization facts, boundary/locus facts | `stencil_pattern`, `local_coupling`, `discretization_order`, `mesh_dependent`, and conservation facts such as `row_sum_zero` or `graph_laplacian` when proven | Missing conservation / stability facts are visible in inspection; the compiler does not claim preserved physics it cannot establish. |
 
 `Matrix<U, m, n>` is the canonical base constructor. Full structural
@@ -5531,6 +5544,11 @@ property names such as `PositiveDefinite`, `Symmetric`,
 short aliases, if provided by the stdlib, desugar to those full
 refinement names. Forms such as `Matrix<_, PositiveDefinite>` are not
 canonical.
+
+Matrix literal syntax remains open in chunk 05. The primitive surface
+does not require a literal form; matrices can be built through
+constructors, collection-axis extraction, providers, or stdlib
+relations until literal syntax is locked.
 
 Each primitive carries a capability contract that records what facts
 it requires and what facts its result satisfies (see §3.9). The
@@ -5786,9 +5804,10 @@ vocabulary is resolved and kept here only as a completed reference.
 
 - **Chunk 05.** Matrix details. Heterogeneous-unit type mechanics are
   resolved by matrix facts (§3.9); shape expressions, envelope
-  views, the structural fact lattice, and tensor `convert` scope are
-  locked. Remaining work covers sparse-pattern detail, primitive
-  signature polish, and scalar reconciliation.
+  views, the structural fact lattice, tensor `convert` scope, dynamic
+  topology shape handling, and the primitive catalog are locked.
+  Remaining work covers scalar reconciliation and matrix literal
+  syntax.
 - **Chunk 06.** Backend abstraction.
 - **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04
   (expression e-graph substrate), 05 (refinement-lattice examples
@@ -6146,7 +6165,10 @@ pattern or pipe use).
 `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sqrt`,
 `abs`, `sign`, `floor`, `ceil`, `round`, `min`, `max`, `sum`,
 `prod`, `mean`, `std`, `var`, `argmin`, `argmax`, `solve`,
-`inverse`, `det`, `trace`, `condest`, `deriv`, `integrate`,
+`solve_triangular`, `least_squares`, `cholesky`, `lu`, `qr`, `svd`,
+`eigen`, `inverse`, `det`, `trace`, `transpose`, `adjoint`, `norm`,
+`matrix_rank`, `gram`, `zeros`, `ones`, `identity`, `diag`,
+`diag_of`, `stack`, `hstack`, `vstack`, `deriv`, `integrate`,
 `condition_of`, `objective_terms`, `cost_of`, `value_in`, `grad`, `diverg`,
 `laplacian`, `curl`, `normal_grad`, `limit_from`, `smooth_max`,
 `smooth_abs`, `smooth_step`, `soft_select`, `hard_select`,

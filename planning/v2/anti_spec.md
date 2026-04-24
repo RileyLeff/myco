@@ -97,6 +97,8 @@ gap-review stale list, subsequent design locks.
 | untracked relaxed training plans | relaxation ledger in `hypha explain` / plan IR | relaxed execution must be auditable against the hard source model |
 | backend-dependent dynamic-topology semantics | one Myco shape-boundary model with backend capability-advertised lowerings | JAX-style masks, PyTorch-style symbolic dims, CPU dynamic maps, and replanning are execution strategies, not different languages |
 | silent in-solve tensor shape mutation | `CapacityMask`, `EventReplan`, or `DynamicKeyed` crossing handlers | changing the vector space is a regime-boundary crossing, not an ordinary value update |
+| matrix `@` operator as canonical matmul | ordinary `*` with shape / axis facts governing contraction | Myco keeps math spelling; elementwise product, if needed, is named (`hadamard`) |
+| `inv(A)` as canonical primitive | `inverse(A)` | avoid terse alias as the normative spelling; `inverse(A) * b` may still rewrite to `solve(A, b)` |
 
 ## Retired open questions (closed or structurally void)
 
