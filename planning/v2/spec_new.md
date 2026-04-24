@@ -5780,12 +5780,15 @@ definition. Kernel-ness is expressed via compiler-facing facts and
 capability contracts (`PositiveDefinite<A>`, `Stationary<L>`,
 `Isotropic<L>`, `CompactSupport<A, B>(radius)`) rather than a separate
 keyword or type kind. Stdlib ships Matérn, RBF, rational-quadratic,
-and Wendland; composition rules preserve contracts. Sparsity and
-integration operators remain open implementation work.
+and Wendland; composition rules preserve contracts. Finite and
+integral kernel-operator semantics are ordinary Myco math; sparse
+representation, low-rank rewrites, and GP/HSGP process machinery
+remain tracked work.
 
 Chunk 03 can now resume on the settled e-graph substrate; the kernel
-surface below is committed, while sparse assembly, low-rank rewrites,
-and integration operators remain tracked work.
+surface below is committed through finite assembly and ordinary
+integral / sum kernel operators, while sparse representation,
+low-rank rewrites, and GP/HSGP process machinery remain tracked work.
 
 #### 28.1 Kernels as Parameterized Relations with Capability Contracts
 
@@ -5973,39 +5976,148 @@ or hand off to an opaque backend. Valid routes include proving
 distinctness plus strict positive definiteness, explicitly modeling
 jitter, or choosing a primitive / workflow policy that accepts PSD.
 
-#### 28.4 Kernel Sparsity and Integration, Deferred to Chunk 03
+#### 28.4 Kernel Operators, Measures, and Approximate Lowering
 
-**Summary.** Three kernel-adjacent concerns remain tracked:
-compact-support sparse matrix assembly, low-rank kernel rewrites, and
-kernel integration operators. Until those close, kernels support
-direct evaluation, relation composition, and use as GP covariances
-only when the required Gram-matrix facts are established.
+**Summary.** Kernel operators are ordinary `integrate` / `sum`
+expressions, not a separate source construct. Domains contribute only
+their canonical geometric or counting measure; model-specific
+densities and weights must appear as graph values. The compiler may
+recognize linear kernel-action patterns and emit operator facts, but
+continuous `integrate` expressions remain continuous semantics until
+closed exactly or explicitly lowered by workflow approximation policy.
 
-Three kernel-adjacent concerns are deferred:
+The canonical continuous form is ordinary integration:
 
-- **Sparse / compact-support kernel representation.** Wendland and
-  compactly-supported Matérn variants produce sparse Gram matrices.
-  The kernel advertises compact support via `CompactSupport(radius)`;
-  the backend representation for sparse kernel matrices (`CSR`,
-  `block-sparse`, `k-nearest`) is a matrix-layer concern that belongs
-  in chunk 05's sparse-pattern / representation work. The support
-  boundary is a regime boundary (§8.10); exact compact support and
-  tolerance truncation carry different continuity / lossiness facts.
-- **Low-rank kernel rewrites.** Nyström / inducing-point and related
-  low-rank approximations are deferred. Appendix C K3 is explicitly
-  post-current-scope rather than an open Tier-1 rewrite.
-- **Kernel integration operators.** Convolution, integration against
-  a measure, and the various ways kernels interact with stochastic
-  integrals (for e.g. GP posterior predictives, kernel density
-  estimates) are chunk 03 concerns. The stdlib ships the kernel
-  relations themselves; operators that combine kernels with
-  integration machinery wait for the resumed kernel work.
+```myco
+effect(x) =
+    integrate(k(x, y) * source(y), y, Domain)
+```
 
-Until those unlocks, kernels support direct evaluation, relation
-composition, and use as GP covariances only when the required
-Gram-matrix facts (`symmetric`, `positive_semidefinite`, axis and
-entry-unit facts) are established. Process-level GP inference
-machinery remains chunk 03 / Tier 3 work.
+The canonical finite form is ordinary aggregation:
+
+```myco
+effect(x) =
+    sum(k(x, sample.location) * sample.value * sample.weight
+        for sample in observations)
+```
+
+No `kernel_apply`, `kernel_operator`, or `convolve` source form is
+required for v2.1. A future stdlib convenience may desugar to these
+ordinary expressions, but the semantic surface is the expression
+itself.
+
+**Measures and weights.** `integrate(expr, y, Domain)` uses the
+domain's canonical measure from §14.3: length on intervals, area on
+surfaces, volume on volume loci, and counting measure for finite
+collections where integration is specialized to summation. If the
+domain has no canonical measure, measure choice is an unmet
+obligation.
+
+Biological, empirical, quadrature, mesh, or normalization weights are
+not hidden in the kernel operator. They must be ordinary factors with
+ordinary units and provenance:
+
+```myco
+light(z) =
+    integrate(canopy_k(z, h) * leaf_area_density(h) * transmission(h),
+              h,
+              CanopyHeight)
+
+effect(x) =
+    sum(k(x, node.pos) * field(node.pos) * node.volume
+        for node in mesh.nodes)
+```
+
+This keeps model claims in the graph: canonical geometry is implicit;
+noncanonical weighting is explicit.
+
+**Recognition.** The compiler recognizes kernel operators by
+normalizing ordinary expressions, not by user annotation. Recognition
+is permitted when an `integrate` or `sum` body can be expressed as a
+linear kernel action over the bound variable:
+
+```myco
+integrate(k(x, y) * source(y), y, Domain)
+integrate(source(y) * k(x, y) * density(y), y, Domain)
+sum(k(x, item.pos) * item.value * item.weight for item in items)
+```
+
+The recognized operator may emit compiler-facing facts such as:
+
+```text
+kernel_integral_of(effect, k, source_factor, x, y, Domain)
+kernel_sum_of(effect, k, source_factor, x, item, items)
+linear_in(effect, source_factor)
+operator_domain(effect) = Domain
+operator_target(effect) = x
+operator_measure(effect) = canonical_measure(Domain)
+```
+
+Additive combinations of recognized kernel actions remain
+recognizable as sums of actions. Nonlinear wrapping does not:
+
+```myco
+integrate(exp(k(x, y) * source(y)), y, Domain)
+```
+
+is valid Myco if otherwise well typed, but it is not a linear kernel
+operator and does not receive sparse / convolution / low-rank lowering
+facts.
+
+**Operator facts.** Kernel facts live on kernel relations; operator
+facts live on recognized operator expressions. The compiler derives
+operator facts from the combination of kernel facts, domain facts,
+measure facts, weights, boundaries, and the source expression. No
+operator property is inherited from a kernel relation alone unless
+the use-site context preserves it.
+
+For example, a compact-support kernel action may emit:
+
+```text
+local_coupling(effect)
+dependency_radius(effect) = radius(k)
+zero_pattern(effect) when finite axes / adjacency facts prove separation
+```
+
+A normalized nonnegative kernel over a compatible domain may emit
+`constant_preserving(effect)` or `positivity_preserving(effect)`.
+Multiplying by a mask, empirical weight, boundary cutoff, or
+non-normalized density removes those facts unless a separate rule
+proves them for the full operator expression.
+
+**Finite exactness vs. continuous approximation.** A `sum` over a
+finite collection is exact finite semantics. The compiler may lower it
+through `kernel_matrix(k, targets, sources)` and matrix-vector
+contraction when axes and unit laws match; no approximation ledger is
+needed because the source expression is already finite.
+
+An `integrate` over a continuous domain remains a continuous semantic
+object. Closed-form antiderivatives, exact symbolic rewrites, or exact
+finite-measure reductions are exact. Numerical quadrature, mesh
+sampling, inducing points, truncation, and low-rank forms are
+approximations unless their exactness is proven. Such lowerings
+require workflow-selected approximation policy or an explicit
+`.myco` `approximate` model claim, and must emit provenance such as:
+
+```text
+quadrature_lowering_of(discrete_effect, continuous_effect)
+approx_error(discrete_effect, continuous_effect, envelope)
+relaxation_ledger_entry(discrete_effect)
+```
+
+The compiler does not silently replace a continuous kernel integral
+with a finite computation to make a backend run.
+
+Remaining kernel-adjacent work:
+
+- **Sparse / compact-support representation.** Exact compact support
+  can emit zero-pattern facts; backend storage choices such as `CSR`,
+  block-sparse, or neighbor-list layouts remain lowering concerns.
+- **Low-rank kernel rewrites.** Nyström, inducing-point, random-feature,
+  and HSGP-style basis approximations remain approximation machinery,
+  not hidden kernel semantics.
+- **Process-level GP / HSGP machinery.** GP and HSGP are consumers of
+  the general kernel semantics above, not the definition of kernels.
 
 ### 29. Units Library
 
@@ -6538,9 +6650,10 @@ references.
   is locked: kernels are parameterized relations over two input
   domains and one scalar output, with point-point same-locus kernels
   as a specialization rather than the definition. Kernel facts /
-  contracts, Gram obligations, sparse assembly, low-rank rewrites,
-  integration operators, GP/HSGP machinery, and cost machinery remain
-  open.
+  contracts, finite assembly, Gram obligations, and ordinary
+  `integrate` / `sum` kernel operators are locked (§28). Sparse
+  representation, low-rank rewrites, GP/HSGP machinery, and cost /
+  approximation policy remain open.
 - **Chunk 11.** Sum types / enums. Core surface locked (§3.10):
   `enum`, flat exhaustive `match`, unit / positional / struct-like
   variants, no wildcard/default arm, explicit narrowing before field
@@ -7092,10 +7205,14 @@ truncation. LOCKED when authorized by an `approximate` block.
   below tolerance
 
 **N. Numerical quadrature substitution.** Every PDE passes through
-this. OPEN (§35, kernels chunk 03).
+this. Source semantics locked in §28.4: continuous `integrate` is not
+silently replaced by finite compute. Lowering policy remains OPEN
+(§35, kernels chunk 03).
 
-- N1. `integrate(f, var, lo, hi) → quadrature_n(...)` for user-tunable
-  `n` when symbolic integration fails
+- N1. `integrate(f, var, lo, hi) → quadrature_n(...)` only under
+  workflow-selected approximation policy or an explicit `.myco`
+  `approximate` claim, with `quadrature_lowering_of` provenance and
+  error / relaxation ledger facts unless exactness is proven.
 
 **O. Training-time consistency-objective substitution.** Mode-conditional.
 OPEN (§35, chunk 04 O4.3 per-residual training emission).

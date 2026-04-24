@@ -4,9 +4,9 @@
 **Authors:** Riley Leff, Claude (Opus 4.7)
 **Reviewers:** None yet — discussion still open
 **Status:** IN PROGRESS. Kernel identity and finite assembly
-(`kernel_matrix` / `gram`) are locked; sparse / low-rank rewrites,
-integration operators, and GP/HSGP process machinery remain under
-discussion.
+(`kernel_matrix` / `gram`) are locked; ordinary `integrate` / `sum`
+kernel-operator semantics are locked; sparse / low-rank rewrites and
+GP/HSGP process machinery remain under discussion.
 
 ---
 
@@ -169,6 +169,94 @@ select a pivoted factorization, or route to an opaque backend. Valid routes are
 explicit: prove strict PD plus distinct points, model jitter, or choose a
 primitive / workflow policy that accepts PSD.
 
+## 2.2 Kernel operators: ordinary expressions, recognized facts
+
+Kernel operators do not get a new source construct in v2.1. The canonical
+continuous form is ordinary `integrate`:
+
+```myco
+effect(x) =
+    integrate(k(x, y) * source(y), y, Domain)
+```
+
+The canonical finite form is ordinary `sum`:
+
+```myco
+effect(x) =
+    sum(k(x, sample.location) * sample.value * sample.weight
+        for sample in observations)
+```
+
+No `kernel_apply`, `kernel_operator`, or `convolve` source sugar is required up
+front. A future helper can exist only as transparent desugaring to ordinary
+Myco expressions.
+
+`integrate(expr, y, Domain)` uses only the domain's canonical measure: length,
+area, volume, or counting measure where the domain is finite. Model-specific
+weights stay visible in the graph:
+
+```myco
+light(z) =
+    integrate(canopy_k(z, h) * leaf_area_density(h) * transmission(h),
+              h,
+              CanopyHeight)
+
+effect(x) =
+    sum(k(x, node.pos) * field(node.pos) * node.volume
+        for node in mesh.nodes)
+```
+
+The compiler recognizes kernel operators by normalizing ordinary expressions,
+not by asking the user to mark them. Recognition is allowed when the body is a
+linear kernel action over the bound variable:
+
+```myco
+integrate(k(x, y) * source(y), y, Domain)
+integrate(source(y) * k(x, y) * density(y), y, Domain)
+sum(k(x, item.pos) * item.value * item.weight for item in items)
+```
+
+Recognized operators may emit compiler facts:
+
+```text
+kernel_integral_of(effect, k, source_factor, x, y, Domain)
+kernel_sum_of(effect, k, source_factor, x, item, items)
+linear_in(effect, source_factor)
+operator_domain(effect) = Domain
+operator_target(effect) = x
+operator_measure(effect) = canonical_measure(Domain)
+```
+
+Nonlinear wrapping, such as `integrate(exp(k(x, y) * source(y)), y, Domain)`,
+may be valid Myco but is not a recognized linear kernel operator and does not
+receive sparse / convolution / low-rank lowering facts.
+
+Kernel facts live on kernel relations; operator facts live on recognized
+operator expressions. Use-site domain, measure, weights, boundaries, and source
+factors decide which relation facts survive. For example, compact support can
+emit `local_coupling(effect)` and a finite `zero_pattern` when axes prove
+separation. A normalized nonnegative kernel can preserve constants only when
+the full operator context preserves normalization; masks or empirical weights
+remove that fact unless separately proven.
+
+Finite `sum` kernel operators are exact finite semantics. The compiler may
+assemble a `kernel_matrix` and perform a matrix-vector contraction without an
+approximation ledger. Continuous `integrate` kernel operators remain continuous
+semantic objects until closed exactly or explicitly lowered. Quadrature,
+truncation, mesh sampling, inducing points, and low-rank / HSGP-style bases are
+approximations unless exactness is proven; they require workflow approximation
+policy or an explicit `.myco` `approximate` model claim and must emit
+provenance such as:
+
+```text
+quadrature_lowering_of(discrete_effect, continuous_effect)
+approx_error(discrete_effect, continuous_effect, envelope)
+relaxation_ledger_entry(discrete_effect)
+```
+
+No continuous kernel integral is silently made finite just because a backend
+needs finite compute.
+
 ---
 
 ## 3. What was rejected
@@ -213,14 +301,18 @@ from the relation body / stdlib facts vs. needs a separate evidence path.
 
 ---
 
-## 6. Integration semantics — deferred
+## 6. Integration semantics — locked at the ordinary-expression layer
 
-Mixing continuous domains (e.g., canopy height as a real interval) and discrete
-collections (e.g., leaves at specific heights) in the same kernel integrand is
-needed. Proposal floated: `integrate(expr for p in D)` where `D` can be a
-continuous domain, a discrete collection, or a mix. Syntax not locked. Semantics
-not locked. Interaction with the residual graph not specified. Revisit after
-unified machinery.
+Mixing continuous domains and finite collections is handled by the existing
+Myco distinction between `integrate` and `sum`. Continuous `integrate` uses the
+domain's canonical measure and remains continuous semantics; finite `sum` over
+collections is exact finite semantics. Kernel structure is recognized from the
+ordinary expression when the compiler can normalize it into a linear kernel
+action.
+
+This closes the need for a special kernel integration syntax. The remaining
+work is lowering policy: sparse representations, quadrature choices, low-rank
+approximations, and GP/HSGP process consumers.
 
 ---
 
@@ -285,9 +377,9 @@ the e-graph (internal equality substrate).
      facts; no resurrected `property` annotation surface)
    - tolerance plumbing (how workflow-level tolerance reaches the compiler's
      extraction decisions)
-4. With the machinery drawn up, revisit Sections 5 (sparsity) and 6
-   (integration semantics) — the right answers should fall out of the
-   unified view.
+4. With the machinery drawn up, revisit Section 5 (sparsity) and the remaining
+   low-rank / process-consumer questions. Section 6's source semantics are now
+   locked at the ordinary-expression layer; lowering policy remains open.
 
 ---
 
