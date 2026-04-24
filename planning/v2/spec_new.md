@@ -5652,12 +5652,47 @@ trait (burn-style tensor stacks, JAX-alikes, CPU reference
 implementations). The compiler emits against the trait; the workflow
 selects a concrete backend at run time (§24 verbs).
 
-The minimum trait API covers four responsibilities, numerical
-execution, automatic differentiation, PPL handoff, and opaque-
-callable runtime, plus a capability-advertising mechanism that lets
-the compiler and workflow negotiate what a particular backend
-supports. The subsections below commit the shape; concrete signatures
-land in chunk 06.
+The backend surface is a small mandatory core plus advertised
+capabilities. A backend must satisfy `CoreBackend`: run identity /
+version reporting, capability inspection, diagnostic emission,
+deterministic seed handling, dense tensor allocation / handles,
+elementwise arithmetic, broadcast, reductions, reshape / view /
+transpose operations, dense matrix multiplication, and ordinary
+scalar math. This is enough to run a basic deterministic numerical
+plan and to report why a richer plan cannot bind.
+
+Scientific machinery beyond that core is capability-advertised, not
+mandatory. Cholesky, SVD, eigendecomposition, sparse kernels,
+iterative solvers, runtime AD modes, PPL inference modes,
+dynamic-keyed axes, complex numbers, host interop, and
+opaque-callable gradients are all backend capabilities. A backend may
+also advertise a named **capability profile**, a composable bundle of
+capabilities with `requires`, `provides`, and `implies` rules. This
+is an implementation-surface vocabulary, not a `.myco` source
+contract or supercontract.
+
+Example profiles:
+
+```text
+CapabilityProfile LinearAlgebraBasic
+  requires CoreBackend
+  provides solve, solve_triangular
+
+CapabilityProfile LinearAlgebraDecompositions
+  requires LinearAlgebraBasic
+  provides cholesky, qr, svd, eigen
+
+CapabilityProfile PPLHMC
+  requires CoreBackend, RuntimeADReverse
+  provides hamiltonian_monte_carlo, mcmc_diagnostics
+```
+
+The compiler lowers each plan or SCC to a set of required backend
+capabilities. The selected backend either satisfies those
+requirements directly, the workflow explicitly authorizes a
+capability-mismatch policy (§31.1), or plan binding fails with a
+capability diagnostic. Optionality is represented as advertised
+evidence, not as `Option` / `Result`-returning backend methods.
 
 **AD ownership boundary.** Myco owns symbolic and algorithmic
 differentiation: rewrite-based derivatives, structural chain-rule
@@ -5669,20 +5704,27 @@ responsible for the mathematical derivative structure it can see.
 
 #### 31.1 Capability Advertising and Fallback Modes
 
-**Summary.** Backends advertise capabilities (complex support,
-forward AD, HMC, sparse matmul) and the compiler verifies required
-ones at plan-binding time. Three fallback modes handle mismatches:
-`error` (fail), `host` (route to host-side reference), `emulate`
-(substitute approximate algorithm and enter approximation-error
-layer). Fallback is per-run via `run.config.backend`.
+**Summary.** Backends advertise capability facts and capability
+profiles (complex support, forward AD, HMC, sparse matmul, dynamic
+shape modes, etc.). The compiler verifies required capabilities at
+plan-binding time. Three capability-mismatch modes handle missing
+support: `error` (fail), `host` (route to host-side reference),
+`emulate` (substitute approximate algorithm and enter
+approximation-error layer). Fallback is per-run via
+`run.config.backend`.
 
 Backends advertise capabilities (e.g. `supports_complex`,
-`supports_forward_ad`, `supports_hamiltonian_monte_carlo`,
-`supports_sparse_matmul`, `supports_runtime_bounded_shapes`,
-`supports_event_replan`, `supports_dynamic_keyed_axes`) and the
-compiler verifies required capabilities at plan-binding time. When a
-required capability is missing, the compiler consults the workflow's
-fallback policy:
+`supports_forward_ad`, `supports_reverse_ad`,
+`supports_hamiltonian_monte_carlo`, `supports_sparse_matmul`,
+`supports_cholesky`, `supports_svd`,
+`supports_runtime_bounded_shapes`, `supports_event_replan`,
+`supports_dynamic_keyed_axes`) and capability profiles such as
+`LinearAlgebraBasic`, `LinearAlgebraDecompositions`,
+`RuntimeADReverse`, `DynamicTopology`, or `PPLHMC`. Profiles expand
+through their `requires` / `provides` / `implies` rules into concrete
+capability requirements. The compiler verifies the resulting
+requirement set at plan-binding time. When a required capability is
+missing, the compiler consults the workflow's fallback policy:
 
 - **`error`.** Fail at plan-binding time with a capability-mismatch
   diagnostic (workflow-composition error tier, §19.4). Conservative
@@ -5799,9 +5841,11 @@ schema, inference-kind enumeration, opaque-callable fallback choices,
 future mixed-backend execution, and the first concrete backend
 choice. AD ownership is no longer open: §31 locks the hybrid boundary.
 
-The backend trait shape is intentionally lean. Minimum required
-operations versus advertised optional capabilities remain to be
-spelled out in concrete trait signatures.
+The backend trait shape is intentionally lean: `CoreBackend` is the
+mandatory substrate, and richer execution surfaces are advertised via
+capabilities and capability profiles (§31). Exact method signatures
+remain to be spelled out in the implementation-facing trait
+definition.
 
 #### 32.1 Mixed-Backend Policy
 

@@ -130,27 +130,56 @@ executes as* lives here.
 
 ## 4. Design surface — what needs to be decided
 
-### 4.1 Backend trait minimum API
+### 4.1 Backend trait minimum API — RESOLVED
 
-Every backend must implement:
+Decision (2026-04-24): v2.1 uses a small mandatory `CoreBackend`
+trait plus advertised capabilities and capability profiles.
 
-- **Allocation / elementwise** — tensor allocation, elementwise
-  arithmetic, broadcast, reduction.
-- **Linear algebra primitive set** — matmul, transpose, reshape,
-  basic solves.
-- **Distribution primitive set** — `sample`, `log_pdf`, random seed
-  management.
-- **Autodiff primitive set** (if backend owns AD) — `grad`, `jvp`,
-  `vjp`, `hessian`, or their backend-specific equivalents.
+Every backend must satisfy `CoreBackend`:
 
-Open question: where's the minimum? Should every backend implement
-Cholesky? Or is Cholesky capability-advertised? The line determines
-how fat the trait is.
+- Run identity, trait version reporting, and backend version
+  reporting.
+- Capability inspection and plan-binding diagnostics.
+- Deterministic seed handling.
+- Dense tensor allocation / handles.
+- Elementwise arithmetic, broadcast, reductions, reshape / view /
+  transpose, dense matrix multiplication, and ordinary scalar math.
+
+This core is deliberately small. It is enough to run a basic
+deterministic numerical plan and to say precisely why a richer plan
+cannot bind. Cholesky, SVD, eigendecomposition, sparse kernels,
+iterative solvers, PPL inference modes, runtime AD modes, complex
+numbers, dynamic-keyed axes, host interop, and opaque-callable
+gradients are not mandatory methods; they are advertised
+capabilities.
+
+Capability profiles are named bundles with `requires`, `provides`,
+and `implies` rules. They are implementation-surface declarations,
+not `.myco` source contracts or supercontracts.
+
+```text
+CapabilityProfile LinearAlgebraBasic
+  requires CoreBackend
+  provides solve, solve_triangular
+
+CapabilityProfile LinearAlgebraDecompositions
+  requires LinearAlgebraBasic
+  provides cholesky, qr, svd, eigen
+
+CapabilityProfile PPLHMC
+  requires CoreBackend, RuntimeADReverse
+  provides hamiltonian_monte_carlo, mcmc_diagnostics
+```
+
+Optionality is represented as advertised evidence. The compiler
+constructs a required-capability set for a plan or SCC; the selected
+backend either satisfies it, the workflow explicitly authorizes a
+capability-mismatch policy, or binding fails.
 
 ### 4.2 Capability advertising
 
-Backends advertise optional capabilities. Compiler consults the
-advertised set at lowering time:
+Backends advertise optional capabilities and capability profiles.
+The compiler consults the advertised set at lowering time:
 
 - Structural-subtype-specialized solvers (Cholesky for PosDef,
   triangular solve for triangular, etc.)
@@ -170,8 +199,10 @@ Fallback policy options:
 Workflow knob: `run.config.backend.fallback = "error" | "host" |
 "emulate"`.
 
-Open question: default policy. `"error"` is safest (no silent
-performance catastrophes); `"host"` is most permissive.
+Default policy is `error`, matching the canonical spec (§31.1). That
+keeps capability mismatch from becoming a silent semantic or
+performance fallback. `host` and `emulate` are explicit workflow
+authorizations.
 
 ### 4.3 AD ownership — the central fork
 
@@ -353,32 +384,44 @@ With this chunk locked:
 
 ## 7. Return path
 
-1. Lock the AD-ownership fork (§4.3). Everything downstream keys
-   off this. Lean: option C (hybrid).
-2. Draft minimum backend trait API (§4.1).
-3. Draft capability advertising and fallback policy (§4.2).
+1. AD ownership is resolved in the canonical spec (§31): hybrid
+   boundary. This report should mirror it.
+2. Minimum backend trait API vs. advertised capabilities is resolved
+   (§4.1): small `CoreBackend` plus capability profiles.
+3. Default fallback policy is resolved in the canonical spec (§31.1):
+   `error`, with `host` / `emulate` as explicit workflow choices.
 4. Draft PPL backend protocol (§4.4) — absorbs chunk 04 blocker B3.
 5. Draft opaque callable protocol (§4.5).
-6. Commit single-backend-per-run for v2.1 (§4.6).
-7. Commit versioning policy (§4.7).
+6. Single-backend-per-run is resolved in the canonical spec (§32.1).
+7. Backend versioning is resolved in the canonical spec (§31.4).
 8. Write the v2.1 commitment text into the spec.
 
-Parallelizable with chunk 05 (matrices) — neither blocks the other
-on structural questions, but chunk 05's primitive list (§4) needs
-this chunk's trait surface to lower to.
+Chunk 05 (matrices) is closed on source semantics; its primitive
+list (§4) now supplies concrete lowering requirements for this
+chunk's backend trait surface.
 
 ---
 
 ## 8. Open questions (consolidated)
 
-- **Q1.** AD ownership: Myco / delegate / hybrid?
+- **Q1.** AD ownership. RESOLVED in canonical spec §31: hybrid
+  boundary. Myco owns visible symbolic / algorithmic derivative
+  structure; backend owns runtime AD over emitted kernels and opaque
+  callables.
 - **Q2.** Minimum backend trait API vs. capability-advertised
-  optional?
-- **Q3.** Default fallback policy: error / host / emulate?
+  optional. RESOLVED 2026-04-24: small mandatory `CoreBackend`;
+  richer operations are advertised capabilities / profiles (§4.1).
+- **Q3.** Default fallback policy. RESOLVED in canonical spec §31.1:
+  `error` by default; `host` and `emulate` require explicit workflow
+  authorization.
 - **Q4.** PPL backend protocol concrete form?
 - **Q5.** Opaque callable gradient-flow semantics?
-- **Q6.** Mixed-backend policy for v2.1 (lean: single-backend-per-run)?
-- **Q7.** Versioning strategy?
+- **Q6.** Mixed-backend policy for v2.1. RESOLVED in canonical spec
+  §32.1: single-backend-per-run; SCC-level cross-backend handoff is
+  future work.
+- **Q7.** Versioning strategy. RESOLVED in canonical spec §31.4:
+  Myco versions the trait surface; backend implementations advertise
+  compatible trait versions; plan cache keys include backend identity.
 - **Q8.** First concrete backend to implement against (burn?
   NumPy-on-CPU reference? JAX?) — not a design question strictly,
   but affects trait shape.

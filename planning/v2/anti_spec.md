@@ -69,6 +69,7 @@ gap-review stale list, subsequent design locks.
 |---|---|---|
 | JAX-as-primary emitter | backend trait (burn-style) with capability advertising | no primary backend; trait-based |
 | PyTorch-as-primary emitter | same | same |
+| fat backend trait requiring every scientific operation | `CoreBackend` plus advertised capabilities / capability profiles | keeps backend portability honest without making every backend implement Cholesky, SVD, PPL, sparse kernels, dynamic axes, and runtime AD modes |
 | residual graph as core semantic object | e-graph three-layer split (equational core / envelope metadata / adjacent keyed state); residual = user-facing projection | chunk 04 recommitment |
 | compiler auto-emitted admissibility projections | workflow picks projection flavor (`hard_clip` / `sigmoid` / `soft_clip`) | projection-free-compiler principle |
 | compiler auto-selected solver | workflow selects | same principle |
