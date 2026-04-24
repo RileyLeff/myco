@@ -278,39 +278,49 @@ runtime gradient values where mature AD systems are the right
 execution machinery. Opaque runtime gradients stay opaque to the
 symbolic layers unless separately certified.
 
-### 4.4 PPL backend protocol (was B3)
+### 4.4 PPL backend protocol (was B3) — RESOLVED
 
-Concrete handoff for Tier C distributional inference (chunk 04
-CC4 locked Tier C routes through a backend; protocol lives here):
+Decision (2026-04-24): Tier C uses whole-stochastic-SCC handoff after
+Tier A exact rewrites and authorized Tier B approximate rewrites have
+run to exhaustion. The compiler serializes each unresolved stochastic
+SCC as one `InferenceTask`; the backend runs inference and returns an
+`InferenceResult`. Per-factor handoff is not the v2.1 protocol.
+
+Concrete handoff for Tier C distributional inference:
 
 - **Compiler emits:**
-  - Envelope metadata (layer-2 facts: family, parameters, bounds)
-  - Structural declarations (joint syntax from chunk 06 B2/B4
-    absorption or its successor)
-  - Coupling annotations (independence claims, copula structure)
-  - Log-density assembly recipe (how to build `log_pdf` from parts
-    when parts span Tier A / B / C)
+  - Stochastic SCC identity and stochastic e-class identities
+  - Latent nodes, observed nodes / data, and visible deterministic
+    dependency terms
+  - Envelope metadata (layer-2 facts: family, parameters, shape,
+    bounds)
+  - Support / refinement constraints and capability requirements
+  - Structural declarations / coupling metadata when visible
+    (independence claims, copula structure, joint declarations)
+  - Log-density assembly recipe for the whole unresolved SCC
+  - Requested inference kind (`hmc`, `nuts`, `vi`, `importance`,
+    backend-specific extensions behind capability flags)
 - **Backend returns:**
-  - Sample values (with shape and provenance metadata)
-  - Gradient estimates (score function, reparameterized, or via
+  - Posterior draws / sample values with shape and provenance
+    metadata
+  - Optional log-density evaluations
+  - Gradient estimates where requested (score function,
+    reparameterized, or via
     backend AD per §4.3)
   - MCMC traces (chains, acceptance stats, convergence diagnostics)
   - Diagnostic metadata (effective sample size, R-hat, divergence
     warnings)
-- **Serialization:** how stochastic e-classes serialize to backend
-  primitives; how returned values flow back into the e-graph (as
-  new envelope facts? as observation-style equalities?).
+- **Returned-value semantics:** returned samples are opaque draws or
+  empirical summaries with provenance. They are not new parametric
+  envelope facts and do not create observation-style equalities.
 - **Framework-specific adapters:** NumPyro-style, Pyro-style,
   Turing.jl-style, Stan-style, custom. Each wraps the same protocol
   differently.
 
-Open questions:
-- Does the backend see the whole stochastic model at once, or
-  per-factor? (Affects what optimizations the backend can do —
-  JIT-compile the full model vs. build it incrementally.)
-- How do backend-returned samples participate in further graph
-  computation? (Clean answer: they enter as new envelope facts on
-  existing e-classes, not as new merges.)
+Whole-SCC handoff is what lets HMC / NUTS / VI see shared latents,
+posterior geometry, support constraints, and deterministic transforms.
+Per-factor handoff would hide the joint problem from the backend and
+is retired for v2.1.
 
 ### 4.5 Opaque callable protocol
 
@@ -404,7 +414,8 @@ With this chunk locked:
    (§4.1): small `CoreBackend` plus capability profiles.
 3. Default fallback policy is resolved in the canonical spec (§31.1):
    `error`, with `host` / `emulate` as explicit workflow choices.
-4. Draft PPL backend protocol (§4.4) — absorbs chunk 04 blocker B3.
+4. PPL backend protocol is resolved (§4.4): whole stochastic SCC
+   `InferenceTask` handoff.
 5. Draft opaque callable protocol (§4.5).
 6. Single-backend-per-run is resolved in the canonical spec (§32.1).
 7. Backend versioning is resolved in the canonical spec (§31.4).
@@ -428,7 +439,9 @@ chunk's backend trait surface.
 - **Q3.** Default fallback policy. RESOLVED in canonical spec §31.1:
   `error` by default; `host` and `emulate` require explicit workflow
   authorization.
-- **Q4.** PPL backend protocol concrete form?
+- **Q4.** PPL backend protocol concrete form. RESOLVED 2026-04-24:
+  whole unresolved stochastic SCC handoff after Tier A/B exhaustion;
+  backend returns opaque draws / diagnostics, not parametric facts.
 - **Q5.** Opaque callable gradient-flow semantics?
 - **Q6.** Mixed-backend policy for v2.1. RESOLVED in canonical spec
   §32.1: single-backend-per-run; SCC-level cross-backend handoff is

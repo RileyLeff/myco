@@ -2671,13 +2671,16 @@ in §27.
    Fenton-Wilkinson, CLT, block-maxima → GEV; §15) apply if
    the user's `approximate` block permits the relevant error
    class. Envelope metadata records the approximation used.
-3. **Tier C — Opaque PPL handoff.** No closed form, no
-   user-permitted approximation. The SCC ships to the
-   backend's PPL handler (§31). Samples come back; no envelope
-   facts about the parametric form. Opaque distribution
-   families (log_pdf not available from stdlib atoms) route to
-   Tier C by default; the stdlib policy for what qualifies as
-   opaque is tracked in §33 as open item B1.
+3. **Tier C — Whole-SCC opaque PPL handoff.** No closed form, no
+   user-permitted approximation. After Tier A and Tier B have run to
+   exhaustion, each unresolved stochastic SCC ships as one inference
+   task to the backend's PPL handler (§31). The backend sees the
+   whole remaining stochastic SCC, not one factor at a time. Samples
+   and diagnostics come back with provenance; no envelope facts about
+   the parametric form are granted. Opaque distribution families
+   (log_pdf not available from stdlib atoms) route to Tier C by
+   default; the stdlib policy for what qualifies as opaque is tracked
+   in §33 as open item B1.
 
 The compiler records its chosen tier per SCC; inspection
 surfaces (§22) show which tier each stochastic SCC landed on.
@@ -5754,22 +5757,36 @@ fallback policy is specified, the mode is `error`.
 
 #### 31.2 PPL Handoff Protocol
 
-**Summary.** Tier C stochastic SCCs ship to the backend's PPL as
-opaque log-density problems via a protocol (not a library call).
-Serialized form: log-density callable, parameter shape and bounds,
-observation data, inference kind. The backend returns samples plus
-diagnostics; returned samples carry no parametric envelope facts
-and are treated downstream as opaque draws.
+**Summary.** Tier C handoff is whole-stochastic-SCC handoff after
+Tier A exact rewrites and authorized Tier B approximations have run
+to exhaustion. The compiler serializes each unresolved stochastic
+SCC as an inference task: latent nodes, observations, deterministic
+terms, supports / bounds, capability requirements, log-density
+recipe, and requested inference kind. The backend returns samples,
+traces, and diagnostics; returned samples are opaque draws with
+provenance, not new parametric envelope facts.
 
-Tier C stochastic SCCs (§13.2) ship to the backend's PPL handler
-as opaque log-density problems. The handoff is a protocol, not a
-library call: the backend receives a sampling / inference task
-described by a standard serialized form (log-density callable,
-parameter shape and bounds, observation data, inference kind: MCMC,
-VI, importance, etc.), runs inference with backend-native machinery,
-and returns samples plus diagnostics. Samples come back without
+Tier C stochastic SCCs (§13.2) ship to the backend's PPL handler as
+opaque log-density problems. The handoff is a protocol, not a
+library call. The compiler owns task construction and serialization;
+the backend owns inference execution.
+
+The backend receives one task per unresolved stochastic SCC, not
+one task per factor. The task contains the latent nodes, observed
+nodes / data, visible deterministic terms, support and refinement
+bounds, capability requirements, a log-density assembly recipe, and
+the requested inference kind (`hmc`, `nuts`, `vi`, `importance`,
+etc.). Whole-SCC handoff lets the backend see posterior geometry,
+shared latents, observation structure, and constraints that would be
+lost under per-factor handoff.
+
+The backend returns an `InferenceResult`: posterior draws or samples,
+optional log-density evaluations, traces / chains, diagnostics
+(acceptance statistics, effective sample size, R-hat, divergences,
+backend warnings), and task provenance. Samples come back without
 envelope facts about the parametric form (§13 recommits this);
-downstream code treats them as opaque draws.
+downstream code treats them as opaque draws or empirical summaries,
+not as newly proven distribution families.
 
 #### 31.3 Opaque-Callable Runtime
 
@@ -5808,21 +5825,24 @@ backends invalidates the cache correctly.
 
 #### 31.5 Stochastic E-Class Serialization
 
-**Summary.** Tier C handoff serializes stochastic e-classes across
-the trait boundary: e-class identity, envelope parametric metadata
-(family, parameters, shape), layer-1 equational term, capability
-requirements, observation constraints. The compiler owns
-serialization; backends own deserialization and any backend-specific
-canonicalization post-receipt.
+**Summary.** Tier C handoff serializes stochastic SCC tasks across
+the trait boundary. The wire format includes SCC identity, stochastic
+e-class identities, envelope parametric metadata, layer-1 terms,
+deterministic dependency terms, capability requirements, support /
+refinement constraints, observation constraints, and requested
+inference kind. The compiler owns serialization; backends own
+deserialization and backend-specific canonicalization post-receipt.
 
 Stochastic e-classes (§13 distributional metadata in the envelope)
 need to cross the trait boundary when Tier C SCCs hand off to the
-backend's PPL. The serialization: e-class identity, parametric form
-recorded in envelope metadata (family, parameters, shape), current
-layer-1 equational-core term, capability requirements, observation
-constraints (§13.9). This is the wire format the PPL handoff protocol
-(§31.2) uses. The compiler owns the serialization; backends own the
-deserialization and any backend-specific canonicalization after
+backend's PPL. The serialization contains the SCC identity; e-class
+identities; parametric forms recorded in envelope metadata (family,
+parameters, shape); current layer-1 equational-core terms; visible
+deterministic dependency terms; capability requirements; support /
+refinement constraints; observation constraints (§13.9); and the
+requested inference kind. This is the wire format the PPL handoff
+protocol (§31.2) uses. The compiler owns the serialization; backends
+own deserialization and any backend-specific canonicalization after
 receipt.
 
 #### 31.6 No Primary-Backend Commitment
