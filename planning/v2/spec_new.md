@@ -800,8 +800,9 @@ different mathematical operation.
 
 Remaining chunk-05 matrix work:
 
-- **Matrix literal syntax.** Whether v2.1 ships a literal form or
-  relies on constructors / providers remains open.
+- **Final commitment text.** Matrix type, fact, dynamic-shape,
+  scalar, primitive, and finite-assembly decisions are locked; the
+  remaining chunk-05 work is editorial consolidation.
 
 #### 3.10 Sum Types / Enums (STUB)
 
@@ -857,6 +858,18 @@ affine conversion bodies, and structural positions (shape tuples,
 indices, generic-parameter definitions) are not value positions;
 they are declarations about the type or shape of a quantity, and
 CC1 does not apply to them.
+
+Finite matrix assembly is not a CC1 exception. `matrix[[a, b]; [c,
+d]]` is a source-level assembly expression from entry expressions
+that are already legal graph values. CC1 is checked recursively
+inside each entry: float and unit-qualified numeric entries are
+rejected, while bare dimensionless integer entries follow the same
+`integer<N>` desugar as any other value position. Example:
+
+```myco
+A = matrix[[a, b]; [c, d]]          # legal when a,b,c,d are graph values
+B = matrix[[1.2, 0.1]; [0.1, 3.4]] # rejected: float literals in value position
+```
 
 Mathematical constants. π, e, and similar fixed reals are ordinary
 stdlib-declared identifiers (`universal pi: Scalar<dimensionless>`,
@@ -4421,6 +4434,15 @@ builders) are workflow-side data constructors. They are not `.myco`
 being Python classes. They merely package values or providers for
 binding against paths in the node catalog.
 
+Bulk binding UX is a first-class workflow requirement, not a source
+language feature. Large models must not require one `bind(...)` call
+per scalar. The Python library should accept structured data through
+catalog-aware adapters for pandas / Polars dataframes, xarray
+objects, nested dict / list data, NumPy-like arrays or matrices, and
+file-backed readers such as CSV or Parquet. Exact adapter names,
+path-matching rules, schema diagnostics, and partial-binding behavior
+remain open in the workflow API design (§35).
+
 Workflow-only capabilities live here rather than in `.myco`: RNG
 seeds, checkpoint/restart, wall-clock limits, backend selection,
 profile hints, long-rollout gradient regimes, and failure policy.
@@ -5511,10 +5533,11 @@ report unmet obligations when a required fact is unknown. Backend
 kernels are implementation choices that preserve the same semantics,
 not semantic fallbacks.
 
-Chunk 05 is the design venue for the remaining matrix type layer:
-scalar reconciliation and matrix literal syntax. This section commits
-the stdlib function surface and the primitive fact contracts; type
-content lives in §3.9 per the chunk 05 scope decision.
+Chunk 05 is the design venue for the remaining matrix type layer.
+This section commits the stdlib function surface, finite matrix
+assembly syntax, provider-slot distinction, and primitive fact
+contracts; type content lives in §3.9 per the chunk 05 scope
+decision.
 
 The matrix / tensor stdlib ships the linear-algebra primitives that
 the rest of the spec depends on by name, in particular the Cholesky
@@ -5563,10 +5586,37 @@ short aliases, if provided by the stdlib, desugar to those full
 refinement names. Forms such as `Matrix<_, PositiveDefinite>` are not
 canonical.
 
-Matrix literal syntax remains open in chunk 05. The primitive surface
-does not require a literal form; matrices can be built through
-constructors, collection-axis extraction, providers, or stdlib
-relations until literal syntax is locked.
+Finite matrix assembly is source-level construction from existing
+graph values:
+
+```myco
+a: Scalar<dimensionless>
+b: Scalar<dimensionless>
+c: Scalar<dimensionless>
+d: Scalar<dimensionless>
+
+A = matrix[[a, b]; [c, d]]
+```
+
+This form emits `shape(A) = (2, 2)`, row / column axis facts, entry
+provenance facts (`A[0,0] = a`, etc.), and a homogeneous
+`Matrix<U, 2, 2>` type when entries establish a shared unit `U`.
+Heterogeneous-unit assemblies are ordinary matrices with explicit
+`entry_unit_law` facts; downstream primitives consume those facts as
+usual (§3.9). Rows must have equal length. The assembly form does
+not introduce numeric values by itself, and CC1 applies recursively
+to every entry expression (§4).
+
+This is distinct from a provider slot:
+
+```myco
+A: Matrix<dimensionless, 2, 2>
+```
+
+The declaration above says that the graph contains a matrix-valued
+node with fixed unit and shape; the workflow must bind, infer,
+observe, train, or otherwise provide it according to context. Numeric
+matrix values enter through workflow providers, not `.myco` source.
 
 Each primitive carries a capability contract that records what facts
 it requires and what facts its result satisfies (see §3.9). The
@@ -5824,8 +5874,9 @@ vocabulary is resolved and kept here only as a completed reference.
   resolved by matrix facts (§3.9); shape expressions, envelope
   views, the structural fact lattice, tensor `convert` scope, dynamic
   topology shape handling, scalar reconciliation, and the primitive
-  catalog are locked. Remaining work covers matrix literal syntax and
-  final commitment text.
+  catalog are locked. Finite matrix assembly is the source syntax for
+  assembling matrices from graph values; numeric matrix values remain
+  workflow-bound. Remaining work covers final commitment text.
 - **Chunk 06.** Backend abstraction.
 - **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04
   (expression e-graph substrate), 05 (refinement-lattice examples

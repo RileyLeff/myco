@@ -278,7 +278,7 @@ obligation to prove or validate the fact, not a grant of the fact.
 
 This closes the type-signature branch of the heterogeneous-unit
 question. Remaining chunk-05 work after the resolved sections below:
-matrix literal syntax and final commitment text.
+final commitment text.
 
 ### 3.3 Envelope flavors for matrix-valued quantities — RESOLVED: parallel views
 
@@ -606,10 +606,62 @@ Committed primitive groups:
 | `diag_of(A)` | Matrix input | Vector of diagonal entries. |
 | `stack`, `hstack`, `vstack` | Shape constraints from §3.6 | Tensor with derived shape, axis, and unit facts. |
 
-Matrix literals remain the one syntax question in this cluster. The
-primitive surface does not require a literal form; users can build
-matrices through constructors, collection-axis extraction, providers,
-or stdlib relations until literal syntax is locked.
+### 4.1 Finite matrix assembly — RESOLVED
+
+Decision (2026-04-24): v2.1 ships finite matrix assembly from
+existing graph values, not concrete numeric matrix data literals.
+
+```myco
+a: Scalar<dimensionless>
+b: Scalar<dimensionless>
+c: Scalar<dimensionless>
+d: Scalar<dimensionless>
+
+A = matrix[[a, b]; [c, d]]
+```
+
+This is an assembly expression, not a data literal. The entries are
+ordinary graph expressions, so provenance, units, distributions,
+trainability, observations, and constraints remain visible to the
+compiler. The compiler emits shape facts, row / column axis facts,
+entry provenance facts, and the appropriate `entry_unit_law`.
+
+```text
+shape(A) = (2, 2)
+A[0,0] = a
+A[0,1] = b
+A[1,0] = c
+A[1,1] = d
+```
+
+Rows must have equal length. If all entries establish a shared unit
+`U`, the inferred type is `Matrix<U, rows, cols>`. Heterogeneous-unit
+assemblies remain ordinary matrices with explicit `entry_unit_law`
+facts; downstream primitives consume or reject those facts according
+to their contracts.
+
+CC1 applies recursively inside every entry expression. This is
+rejected:
+
+```myco
+A = matrix[[1.2, 0.1]; [0.1, 3.4]]
+```
+
+because the entries are float literals in `.myco` value position.
+Bare dimensionless integer entries follow the ordinary `integer<N>`
+desugar from the canonical spec (§4); the matrix form itself creates
+no special numeric-literal carve-out.
+
+Provider slots remain separate and supported:
+
+```myco
+A: Matrix<dimensionless, 2, 2>
+```
+
+This declares a matrix-valued graph node with unit and shape facts.
+The workflow must bind, infer, observe, train, or otherwise provide
+the value according to context. Concrete numeric matrix data enters
+through workflow providers rather than source literals.
 
 ---
 
@@ -692,11 +744,10 @@ Completed: §3.6 shape-expression model, §3.3 envelope views, §3.4
 structural fact lattice, §3.5 tensor `convert` scope, §3.7
 collections boundary, §3.8 dynamic topology shape handling, and §4
 primitive catalog. Scalar reconciliation is also closed: `Scalar<U>`
-is rank-0 `Tensor<U, ()>` with scalar source spelling.
+is rank-0 `Tensor<U, ()>` with scalar source spelling. Finite matrix
+assembly is closed as source construction from graph values only.
 
-1. **Resolve matrix literal syntax (§4 Q11).** Does v2.1 ship a
-   literal form, or constructors/providers only?
-2. **Write the final v2.1 commitment text into the spec.**
+1. **Write the final v2.1 commitment text into the spec.**
 
 Parallelizable with chunk 06 (backend abstraction) — chunk 06
 needs this chunk's primitive list to have lowering targets; this
@@ -742,5 +793,9 @@ fact contracts being established for `Σ`.
   (§3.8).
 - **Q10.** Primitive catalog. RESOLVED 2026-04-24: committed names,
   signatures, fact contracts, and unmet-obligation behavior (§4).
-- **Q11.** Matrix literal syntax — `[[1, 2]; [3, 4]]` or alternative.
-  (§4)
+- **Q11.** Matrix literal syntax. RESOLVED 2026-04-24:
+  `matrix[[a, b]; [c, d]]` is finite assembly from graph values;
+  float and unit-qualified numeric entries remain banned by CC1.
+  Provider slots such as `A: Matrix<dimensionless, 2, 2>` are
+  separate declarations whose values enter through workflow binding
+  (§4.1).
