@@ -76,6 +76,11 @@ gap-review stale list, subsequent design locks.
 | NumPy / CPU reference as privileged language backend | semantics-complete CPU reference as first conformance implementation target | first implementation target is for correctness and debugging; backend trait remains symmetric |
 | fat backend trait requiring every scientific operation | `CoreBackend` plus advertised capabilities / capability profiles | keeps backend portability honest without making every backend implement Cholesky, SVD, PPL, sparse kernels, dynamic axes, and runtime AD modes |
 | residual graph as core semantic object | e-graph three-layer split (equational core / envelope metadata / adjacent keyed state); residual = user-facing projection | chunk 04 recommitment |
+| one unified e-graph where types are terms | separate type graph + expression e-graph with explicit live guard-discharge bridge | equality, implication, contract satisfaction, and conversion legality are different relations; merging them into one equational substrate blurs Myco's fact discipline |
+| type graph erased at elaboration as semantic model | live monotone guard discharge, with precompiled / cached guards allowed only as optimization | facts discovered during saturation can unlock later rewrites; caching must not be a semantic limit |
+| refinement casts or source-level proof witnesses | refinements as evidence-backed facts attached to e-classes | `positive_definite(A)` is a fact about `A`, not a new value or user-plumbed witness argument |
+| ambient generic parameter variance | generic parameters invariant by default; parameter relationships are explicit facts, conversions, obligations, or dispatch rules | prevents silent substitution across units, shapes, runtime sizing, and contract heterogeneity |
+| conversion legality as execution-cost choice | type graph owns semantic conversion edges; extraction / lowering owns realization cost | cheap or convenient does not make an illegal conversion legal; legal conversions may still be expensive or unsupported on a backend |
 | compiler auto-emitted admissibility projections | workflow picks projection flavor (`hard_clip` / `sigmoid` / `soft_clip`) | projection-free-compiler principle |
 | compiler auto-selected solver | workflow selects | same principle |
 | controller as `.myco` construct | workflow-only concept | strict `.myco` / Python split |

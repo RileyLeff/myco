@@ -1,22 +1,21 @@
-# Myco v2.1 — Type Graph vs. Expression E-Graph Design Report (IN PROGRESS — STUB)
+# Myco v2.1 — Type Graph vs. Expression E-Graph Design Report (LOCKED)
 
-**Date:** 2026-04-20 (stub created)
+**Date:** 2026-04-20 (stub created); locked 2026-04-24
 **Authors:** Riley Leff, Claude (Opus 4.7)
 **Reviewers:** None yet
-**Status:** STUB. Captures a design question Riley surfaced live during the
-consolidation-audit wait: relations form an e-graph (chunk 04 commitment) —
-do *types and their relations* live in a graph too, and if so, how does that
-structure interact with the expression e-graph? Undesigned. Do not treat any
-of this as settled.
+**Status:** LOCKED. The type graph is a separate static semantic substrate
+from the expression e-graph. They interact through a live guard-discharge
+bridge. Precompiled / cached guards are implementation optimizations, not the
+semantic model.
 
 ---
 
 ## 1. Why this chunk exists
 
 Chunk 04 commits to an e-graph as the internal equality substrate for
-*expressions / relations / terms*. What it does **not** say is what
-structure the *type system* itself lives in, or how type-level equality
-and implication talk to the expression e-graph.
+*expressions / relations / terms*. This chunk locks what structure the
+*type system* itself lives in, and how type-level equality and implication
+talk to the expression e-graph.
 
 Riley's question (2026-04-20, paraphrased): "I know the defined
 relationships in a `.myco` constitute an e-graph. Do the types and their
@@ -24,28 +23,27 @@ relations also live in a graph too?"
 
 They do. There are at least five distinct type-level relations in v2.1:
 
-- **Refinement lattice.** `Matrix<U, n, n>` has child refinements
-  `Symmetric`, `PosDef`, `Diagonal`, `Triangular`, `Orthogonal`, and
-  compositions like `Symmetric ∧ PosDef`. Lattice, not tree.
+- **Refinement implication lattice.** Matrix facts such as `symmetric`,
+  `positive_definite`, `diagonal`, `triangular`, and `orthogonal` compose as
+  evidence-backed facts and implication rules. Lattice, not tree; facts, not
+  casts into new values.
 - **Conversion graph.** Units (`seconds ↔ minutes × 60`), shape reshapes
-  (`Tensor<U, (m, n)> ↔ Tensor<U, (m*n,)>` under caveats), precision
-  casts. Directed edges, each with cost and possibly a witness function.
+  with named index bijections, sparse / dense materialization with proven
+  pattern facts, and structural-refinement widening. Directed semantic edges
+  carry witnesses, faithfulness, and obligations; realization cost is a
+  lowering concern.
 - **Definitional / alias equality.** `Vector<U, n>` ≡ `Tensor<U, (n,)>`.
-  `Matrix<U, m, n>` ≡ `Tensor<U, (m, n)>`. Currently assumed to be
-  resolved at elaboration — terms entering the expression e-graph are
-  already normalized.
-- **Contract / `dyn` satisfaction.** Which concrete types satisfy which
-  contracts; which `dyn` witnesses close over which concrete
-  implementations. Bipartite-ish graph between types and contracts.
+  `Matrix<U, m, n>` ≡ `Tensor<U, (m, n)>`. Resolved at elaboration:
+  terms entering the expression e-graph are already normalized.
+- **Contract / `impl` satisfaction.** Which concrete types satisfy which
+  contracts; which `impl Contract` monomorph sets are in scope. Runtime sizing
+  is `some`, not erased `dyn`.
 - **Generic instantiation.** `Tensor<U, shape>` → the concrete
   `(U, shape)` monomorphs that actually appear in a program. Not a
   relation in the type-theoretic sense — more a demand-driven projection.
 
-These relations are not currently described as a unified structure
-anywhere in the v2.1 docs. They are implicit in the surface language
-(the user can write `Matrix<U, n, n> where Symmetric`) but their
-internal representation and the bridge to the expression e-graph is
-undesigned.
+These relations are now described as a unified structure in canonical
+spec §18, with a guard-discharge bridge to the expression e-graph.
 
 ---
 
@@ -53,105 +51,121 @@ undesigned.
 
 Three interaction points, identified live:
 
-1. **Structural view equalities.** `Symmetric.view(M)` and `M` are the
-   same value when `M : Symmetric<U, n>`. That equality belongs in the
-   expression e-graph (so rewrites using `Symmetric.view(M)` can also
-   apply to `M` and vice-versa). The *guard* that licenses the equation
-   is a type-graph query. The *equation itself* is an e-graph fact.
+1. **Refinement-gated equalities.** A refinement fact such as
+   `symmetric(M)` or `positive_definite(M)` can license a rewrite, but the
+   rewrite itself belongs in the expression e-graph. The *guard* that licenses
+   the equation is discharged through the type graph / fact store. The
+   *equation itself* is an e-graph fact.
 
 2. **Unit-conversion identities.** `x [s] × 60 [min/s]` and `x [s]`
    represent the same physical quantity. That's a rewrite, but it's
    conditioned on unit metadata the type graph owns. The rule is an
    e-graph rule; the preconditions are type-graph facts.
 
-3. **Refinement-gated rewrites.** `A⁻¹ b` → `cholesky_solve(A, b)` is
-   only valid when `A : PosDef`. The rewrite lives in the e-graph; the
-   precondition is a type-graph query ("is this term's type in the
-   `PosDef` refinement?"). Without the precondition the rewrite is
-   unsound.
+3. **Refinement-gated rewrites.** `solve(A, b)` → `cholesky_solve(A, b)`
+   is only valid when facts prove `positive_definite(A)` and axis
+   compatibility. The rewrite lives in the e-graph; the precondition is a
+   guard-discharge query. Without the precondition the rewrite is unsound.
 
 In all three cases the pattern is the same: **e-graph holds the
-equation, type graph provides the guard.** The open design question is
-how that coupling is mechanized.
+equation, type graph / fact store provides the guard.**
 
 ---
 
-## 3. Three options for the coupling (not locked)
+## 3. Coupling decision — LOCKED
 
-### Option A — Two graphs, explicit bridge
+### Accepted semantic model — two graphs, explicit bridge
 
-The type graph is its own machinery (subtype/refinement lattice +
-conversion graph + contract satisfaction). The expression e-graph has
+The type graph is its own machinery (refinement implication lattice,
+conversion graph, contract satisfaction, and generic instantiation).
+The expression e-graph has
 rewrite rules *parameterized by type-graph queries*. At saturation
-time, applying a rewrite requires a "does type predicate hold for this
+time, applying a rewrite requires a "does this guard predicate hold for this
 e-class?" check.
 
-- **Pros:** clean separation; type-level reasoning uses the right
-  algorithms (unification, lattice meets); e-graph stays term-oriented.
-- **Cons:** you pay for the predicate query at every rewrite attempt;
-  the bridge API is load-bearing and easy to get wrong.
+This is the locked semantic model. It preserves the distinction between
+equality and implication: the e-graph merges values; the type graph and
+monotone fact store discharge rewrite guards.
 
-### Option B — One graph, types are terms
+### Rejected model — one graph, types are terms
 
 Everything — types, refinements, conversion witnesses — lives in the
 e-graph. Requires a more expressive equational logic, closer to
 dependent-type territory. Type equality is just e-class equality.
 
-- **Pros:** uniform substrate; no bridge; type-level and term-level
-  reasoning compose.
-- **Cons:** e-graph blow-up; equational logic has to handle variance
-  and subtyping, which e-graphs don't natively express; probably
-  requires a layered or tagged e-graph.
+Rejected. It blurs "these expressions are equal" with "this value satisfies a
+fact" or "this type implies another fact." That cuts against the three-layer
+e-graph discipline and the matrix/refinement-fact decisions.
 
-### Option C — Two graphs, type graph compiled to e-graph rules at elaboration
+### Allowed optimization — precompiled / cached guards
 
 Before saturation, walk the type graph and emit all the conditional
 rewrites it implies as standalone rules into the e-graph. The
 type-graph structure is erased at that point; the e-graph sees only
 concrete rules.
 
-- **Pros:** no runtime bridge; fast saturation; type-graph algorithms
-  stay whatever they want.
-- **Cons:** loses online reasoning — anything that depends on a
-  type-level derivation discovered *during* saturation is impossible;
-  rule set can get large after monomorphization.
-
-No strong lean yet. Option A is the honest default; option C is the
-performance-optimal version of A; option B is the most uniform but
-also the most ambitious.
+Allowed as an implementation optimization only. The compiler may precompile
+or cache guard results when sound, but online monotone fact discovery remains
+semantic: facts discovered during saturation can unlock later guarded
+rewrites.
 
 ---
 
-## 4. Adjacent questions this opens
+## 4. Adjacent questions — resolved in this chunk
 
-- **Subtype semantics for refinements.** `PosDef <: Symmetric`:
-  width-subtyping? Or refinement-subtyping with a witness function?
-  The answer affects whether option A's bridge is a predicate or a
-  cast.
-- **Variance.** `Tensor<U, shape>` is parameterized by `U`. Does
-  `Tensor<Length_m, shape> <: Tensor<Length, shape>` (subtyping on
-  units)? Does `Tensor<U, (3,)> <: Tensor<U, shape?>` (existential in
-  shape)? Currently not specified.
-- **Contract satisfaction for generics.** A generic function
-  `foo<T: HasInverse>(x: T)` — when instantiated at `T = Matrix<U, n, n>
-  where Symmetric ∧ PosDef`, does the refinement affect which
-  implementation of `inverse` is selected? That's a type-graph query
-  that drives e-graph rewrite selection.
-- **Conversion graph cost.** Chunk 05 resolved the source semantics
-  of tensor `convert`: reshape with an index bijection, sparse /
-  dense materialization with proven pattern facts, and
-  structural-refinement widening. Whether a legal conversion lowers
-  as a structural view, copy, backend materialization, or cached
-  representation is an edge-cost question in the conversion graph.
-  That belongs here once this chunk gets real.
-- **Dyn witness caching.** `dyn` objects carry type-graph information
-  at runtime. Whether two `dyn` values are interchangeable is a
-  type-graph query. Interacts with Tier C distributional machinery
-  from chunk 04.
+- **Subtype semantics for refinements.** Refinements are evidence-backed
+  facts with provenance, not casts into new values and not source-level
+  witness arguments. Implication rules (`positive_definite` implies
+  `symmetric` and `square`, etc.) produce more facts; guarded rewrites
+  consume those facts.
+- **Variance.** Generic parameters are invariant by default. Parameter
+  relationships can authorize conversions, rewrites, obligations, or
+  dispatch, but they do not silently substitute one instantiated type for
+  another.
+- **Contract satisfaction for generics.** Contract satisfaction and
+  `impl Contract` monomorph sets are type-graph facts. They drive rewrite
+  guard discharge and dispatch, but they do not erase values into runtime
+  trait objects.
+- **Conversion graph cost.** Conversion legality belongs to the type graph:
+  semantic edges carry witnesses, faithfulness, and obligations. Realization
+  cost belongs to extraction / lowering and is parameterized by backend
+  capabilities and workflow policy.
+- **Online derivation.** Guard discharge may query the evolving monotone fact
+  store during saturation. Type-graph structure is static, but e-class facts
+  can grow monotonically and unlock later guarded rewrites.
 
 ---
 
-## 5. Out of scope for this chunk
+## 5. Final v2.1 commitment
+
+1. Myco has two semantic substrates: the type graph and the expression
+   e-graph.
+2. The type graph carries static semantic relationships: type constructors,
+   aliases, contract satisfaction, `impl` monomorph sets, unit dimensions,
+   conversion legality, generic instantiations, and refinement implication
+   rules.
+3. The e-graph carries value expressions, value equalities, rewrite results,
+   conversion-result terms, and residual candidates.
+4. The bridge is a live guard-discharge interface. E-graph rewrites own the
+   equation; guard discharge proves whether the rewrite may fire.
+5. Guard discharge may consult type-graph facts, envelope facts, matrix facts,
+   unit algebra, contract satisfaction, geometry / site facts, shape-phase
+   facts, backend capability facts, and adjacent keyed records where a rule
+   explicitly permits them.
+6. Facts discovered during saturation can unlock later guarded rewrites, as
+   long as fact growth is monotone and provenance-tracked.
+7. Precompiled / cached guards are allowed for performance, but they are not
+   the semantic model.
+8. Refinements are facts with evidence and provenance, not casts and not
+   user-carried witness objects.
+9. Generic parameters are invariant by default.
+10. Conversion legality is separate from conversion realization cost.
+11. The retired `dyn` framing does not participate in this design. Static
+    heterogeneity is `impl Contract`; runtime sizing is `some`.
+
+---
+
+## 6. Out of scope for this chunk
 
 - Implementation (data structures for the type graph itself) — spec,
   not impl.
@@ -163,54 +177,56 @@ also the most ambitious.
 
 ---
 
-## 6. Dependencies / ordering
+## 7. Dependencies / ordering
 
-This chunk is best tackled **after** chunk 06 lands; chunks 04 and 05
-now supply the expression substrate and matrix refinement examples:
+This chunk was tackled after chunk 06 landed; chunks 04, 05, and 06
+supplied the expression substrate, matrix refinement examples, and backend
+capability model:
 
 - Chunk 04 locks the expression e-graph substrate that the type graph
   has to bridge to.
-- Chunk 05 exercises the refinement lattice most heavily (structural
-  matrix subtypes) and will produce the first concrete refinement
-  examples to reason about.
-- Chunk 06 settles backend abstraction; some type-graph edges
-  (precision casts, device placement) have backend-dependent cost, so
-  the backend interface needs to exist first.
+- Chunk 05 supplies the strongest refinement-lattice examples through
+  matrix facts, envelope views, shape phases, and conversion scope.
+- Chunk 06 settles backend abstraction; legal conversion edges can have
+  backend-dependent realization costs, so the backend interface needed to
+  exist first.
 
-This chunk does **not** block chunk 07 (B2 joint syntax / B4 coupling
-machinery) — those are orthogonal. Numbering preserved: this is 07,
-the B2+B4 chunk is now 08.
+This chunk does **not** block chunk 08 (B2 joint syntax / B4 coupling
+machinery); those are orthogonal.
 
 ---
 
-## 7. Open questions to carry forward
+## 8. Closed questions
 
-- Q1. Is the type graph mechanized as option A, B, or C? (Primary
-  blocker for this chunk.)
-- Q2. What precisely lives in the type graph vs. the expression
-  e-graph? Inventory-level breakdown for every construct in v2.1.
-- Q3. Subtype semantics for refinements — predicate, cast, or
-  witness-function? Interacts with Q1.
-- Q4. Variance rules for generic parameters. Especially for the
-  `U` parameter of `Tensor<U, shape>` (unit variance) and the
-  `shape` parameter (shape subtyping / existentials).
-- Q5. How does `dyn` interact with the type graph? Is a `dyn Contract`
-  a type-graph node or an e-class?
-- Q6. Cost model for conversion-graph edges. Interacts with chunk 06
-  backend abstraction (some edges have backend-dependent cost).
-- Q7. Does the type graph support online derivation during e-graph
-  saturation, or is it fully compiled out (option C)?
+- **Q1.** Mechanization choice. RESOLVED: two substrates with an explicit
+  live guard-discharge bridge; precompiled / cached guards are optimization;
+  one unified type/value e-graph is rejected.
+- **Q2.** Inventory boundary. RESOLVED: type graph = static semantic
+  relationships; e-graph = value equalities and rewrites; envelope = facts on
+  e-classes; adjacent keyed state = keyed runtime / process records.
+- **Q3.** Refinement semantics. RESOLVED: refinements are facts with evidence
+  and provenance, not casts or user-carried witness arguments.
+- **Q4.** Variance. RESOLVED: generic parameters are invariant by default;
+  relationships across parameters are explicit facts, conversions,
+  obligations, or dispatch rules.
+- **Q5.** `dyn` interaction. VOID: `dyn` is retired. Static heterogeneity is
+  `impl Contract`; runtime sizing is `some`.
+- **Q6.** Conversion-graph cost. RESOLVED at the semantic boundary:
+  conversion legality is type-graph meaning; realization cost is extraction /
+  lowering and backend-policy information.
+- **Q7.** Online derivation. RESOLVED: guard discharge may query evolving
+  monotone facts during e-graph saturation.
 
 ---
 
-## 8. Notes to self (for resuming)
+## 9. Notes to self (historical)
 
 - Riley surfaced this question unprompted during the consolidation-
   audit wait on 2026-04-20. Treat as a confirmed-intent topic, not a
   speculative one.
 - The three-option framework (A/B/C) in §3 was Claude's framing in
-  the live conversation; Riley said "good call" to filing it but has
-  not yet expressed a lean.
+  the live conversation. The locked answer is A semantically, C as
+  optimization, reject B.
 - The "e-graph holds the equation, type graph provides the guard"
   framing in §2 is the most compact summary of the three interaction
   points. Lead with that if revisiting cold.

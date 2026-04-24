@@ -147,12 +147,15 @@ machinery of §13) lives on the `.myco` side. Epistemic content
 (measurements, priors, training directives) lives on the workflow
 side and uses the source model of §24.
 
-**Conversion-graph cost model.** Open. Unit conversions, tensor
+**Conversion-graph semantics / cost boundary.** Conversion legality
+and conversion realization are separate. Unit conversions, tensor
 reshapes, sparse or dense materialization, and structural-refinement
-widenings all carry costs that the compiler should minimize when
-multiple valid paths exist. Tensor `convert` scope is locked in
-§3.8; the remaining cost model sits between the type layer and the
-e-graph rewrite cost model and is tracked in chunk 07 Q6.
+widenings enter the type graph as semantic edges with witnesses,
+faithfulness, and obligations; extraction / lowering records whether
+a legal edge realizes as a view, copy, kernel, host route, backend
+materialization, or other costed plan. A legal conversion may still be
+expensive or unsupported for a selected backend; an illegal conversion
+never becomes legal because it is cheap.
 
 **Projection-free compiler.** The compiler does not auto-emit
 projection operators or solver selection to satisfy a constraint.
@@ -349,14 +352,23 @@ runtime sizing drives dynamic-allocation choices.
 
 #### 3.6 Generic Parameter Variance
 
-**Summary.** Variance rules for generic type parameters:
-covariant / contravariant / invariant positions. Subtyping discipline
-for named types, refinements, and conservation-group hierarchies.
-Full treatment tracked in chunk 07 Q4.
+**Summary.** Generic parameters are invariant by default. Parameter
+relationships can authorize explicit conversions, rewrites,
+obligations, or dispatch, but they do not silently substitute one
+instantiated type for another.
 
-Variance rules for generic type parameters (chunk 07 Q4):
-covariant / contravariant / invariant positions. Subtyping discipline
-for named types + refinements + conservation-group hierarchies.
+Generic parameters are invariant by default. `Tensor<m, shape>` is not
+silently a subtype of `Tensor<Length, shape>`; `Tensor<U, (3,)>` is
+not silently a subtype of `Tensor<U, (1, 3)>`; `Collection<some T>` is
+not a hidden `Collection<T, N>`; and `impl Contract` does not erase to
+a runtime trait object. Relationships across parameters must be named
+by the relevant system: unit conversion edges, shape / index
+bijections, refinement facts with evidence, contract satisfaction and
+monomorphization, or `ShapePhase` facts for runtime sizing.
+
+Parameter relationships may discharge rewrite guards, select lowering
+or dispatch paths, or produce obligations / diagnostics. They do not
+silently change the value's instantiated type.
 
 Scalar-value generics. A generic parameter may itself be a typed
 scalar (e.g., `LOW: Scalar<U>`) rather than a type. Scalar-value
@@ -3312,7 +3324,7 @@ What the compiler sees and manipulates.
 structural operation is decomposing the relation graph into
 strongly connected components (SCCs) at multiple scales. The top-
 level decomposition partitions the full model into SCCs over
-variables; each SCC becomes a residual block under §18's
+variables; each SCC becomes a residual block under §20's
 classification. Within each SCC, the compiler may further
 decompose. Tier A stochastic closed-form SCCs (§13.2) may nest
 within deterministic SCCs. Tier B lossy-model SCCs may contain
@@ -3744,26 +3756,37 @@ annotation; they extend it by composition.
 #### 17.4 Unified Rewrite-Predicate Language
 
 **Summary.** All merge sources share one predicate language for
-guards: refinements, capability satisfaction, structural shape, and
-unit algebra. Compile-time only; runtime values do not drive
-rewrites. One surface, one discharge procedure.
+guards. Guard discharge can consult the type graph, envelope facts,
+unit algebra, contract satisfaction, structural shape, site / geometry
+facts, shape-phase facts, and backend capabilities. Compile-time only;
+runtime values do not drive rewrites.
 
 All merge sources use one predicate language for expressing
 guards. A rewrite predicate can reference:
 
 - Refinement predicates on participating types (`x: Scalar<m>
   where { x > 0 }`).
+- Type-graph facts (§18): type constructors, conversion legality,
+  unit dimensions, generic instantiations, `impl` monomorphs, and
+  refinement implication rules.
 - Capability satisfaction (`D : Distribution + AffineSelfClosed`).
 - Structural shape (generic arity, tensor rank, contract
   satisfaction).
+- Envelope facts (§16.3, §16.4), including value bounds,
+  distributional facts, matrix facts, tolerance facts, and provenance.
+- Site / geometry facts and adjacent keyed state where a rule is
+  explicitly site-gated (§11, Appendix C X).
+- Backend capability facts for lowering-sensitive guards (§31).
 - Unit algebra (dimensional matching).
 
 Predicates are compile-time only; runtime-observed values do
-not drive rewrites. The unified language means a Tier B
-approximate rewrite (§13.2) uses the same predicate form as a
-stdlib algebraic rewrite, which uses the same form as a
-`convert` body. One surface, one discharge procedure
-(e-graph reasoning with refinement + contract lookup).
+not drive rewrites. Guard discharge may query the evolving monotone
+fact store during saturation (§18); a fact discovered by one rewrite
+can unlock a later guarded rewrite, provided the fact is monotone and
+provenance-tracked. The unified language means a Tier B approximate
+rewrite (§13.2) uses the same predicate form as a stdlib algebraic
+rewrite, which uses the same form as a `convert` body. One surface,
+one discharge procedure.
 
 #### 17.5 Rewrite-Rule Groups A-Z
 
@@ -3840,19 +3863,94 @@ an explicit `approximate` declaration.
 
 ### 18. The Type Graph
 
-**Summary.** The type graph is a separate substrate from the expression
-e-graph, carrying named-type relations (subtyping, conversion,
-conservation-group membership, refinement implications). Its precise
-interaction with the e-graph (how conversions inject merges, how
-refinement obligations translate to rewrite predicates) remains open
-pending chunk 07.
+**Summary.** The type graph is a separate static semantic substrate
+from the expression e-graph. It carries type constructors, contract
+satisfaction, unit dimensions, conversion legality, generic
+instantiations, and refinement implication rules. The e-graph owns
+value equalities and rewrites. The two interact through a live
+guard-discharge bridge: e-graph rewrites ask whether required facts
+hold, and the guard may query the type graph plus monotone e-class
+facts.
 
-STUB, chunk 07 pending. The type graph is a separate substrate from
-the expression e-graph, carrying named-type relations (subtyping,
-conversion, conservation-group membership, refinement implications).
-Its interaction with the e-graph (how named-type conversions inject
-expression-level merges, how refinement obligations translate to
-rewrite predicates) is the chunk 07 deliverable.
+The type graph and expression e-graph are separate substrates with an
+explicit bridge. This is the semantic model. A compiler may precompile
+or cache type-graph facts into concrete rewrite guards when doing so
+is sound, but that optimization does not erase the type graph
+semantically. Myco rejects the one-graph model where types, values,
+contracts, refinements, and conversion witnesses all become e-graph
+terms. Equality and implication are different relations and remain
+separate.
+
+The type graph owns static semantic relationships:
+
+- Type constructors and aliases (`Scalar<U>`, `Tensor<U, shape>`,
+  `Matrix<U, m, n>`, `Vector<U, n>`), including definitional
+  normalization before terms enter the e-graph.
+- Contract satisfaction and `impl Contract` monomorph sets.
+- Unit dimensions and conservation-group membership.
+- Conversion legality: semantic edges with witnesses, faithfulness
+  class, and obligations.
+- Generic instantiations and invariant parameter relationships (§3.6).
+- Refinement implication rules (`positive_definite(A)` implies
+  `symmetric(A)` and `square(A)`, etc.).
+
+The e-graph owns value equalities: relation equations, algebraic
+rewrites, stdlib inverse rewrites, unit-preserving rewrites,
+conversion-result terms, `identify`-authorized merges, and residual
+candidate expressions (§17). A rewrite such as:
+
+```text
+solve(A, b) -> cholesky_solve(A, b)
+```
+
+is an e-graph rewrite. Its guard:
+
+```text
+positive_definite(A) and compatible_axes(A, b)
+```
+
+is discharged by querying available facts. Those facts may come from
+the type graph, envelope metadata (§16.3, §16.4), matrix facts (§3.9),
+unit algebra (§5), contract satisfaction (§7), site / geometry facts
+(§11), shape-phase facts (§3.8), or backend capability facts (§31).
+
+Guard discharge is live and monotone. Type-graph relations are static
+after elaboration, but e-class envelope facts can grow during
+saturation. A fact discovered by one rewrite can unlock a later
+guarded rewrite as long as the fact is append-only and
+provenance-tracked. Cached or precompiled guards are permitted as
+performance strategy; they are not a semantic limit on online
+derivation.
+
+Refinements are facts with evidence and provenance, not casts and not
+user-carried witness objects. If the compiler derives
+`positive_definite(A)` from symmetric structure plus a spectral lower
+bound, `A` remains the same value; the refinement fact attaches to
+`A`'s e-class and can discharge later guards. There is no source-level
+`A as PositiveDefiniteMatrix` trust boundary and no
+`PositiveDefiniteWitness<A>` argument plumbing.
+
+Conversion edges separate semantic legality from execution
+realization. A legal edge records what it means to move from one
+type/fact state to another. Extraction and lowering decide whether
+that edge realizes as a view, copy, kernel, host route, backend
+materialization, or other costed plan (§19.1, §21, §31). A legal edge
+may be expensive or unsupported for a selected backend; an illegal
+edge never becomes legal because it would be convenient.
+
+Inventory boundary:
+
+- **Type graph:** static semantic relationships between types, units,
+  contracts, conversions, generics, and refinement facts.
+- **E-graph:** value expressions, relation equalities, rewrite results,
+  conversion-result terms, and residual candidates.
+- **Envelope:** facts attached to value e-classes: bounds,
+  distributional metadata, matrix facts, observations, tolerance facts,
+  structural certificates, and provenance.
+- **Adjacent keyed state:** runtime / keyed records that reference
+  e-classes without asserting equality: events, geometry sites, SCC
+  records, provider handles, samples, dynamic collection identities,
+  and backend run records.
 
 ### 19. Residual Graph (Projection)
 
@@ -5973,8 +6071,8 @@ capabilities.
 chunk-slotted work, and a catalog of smaller opens) carried forward
 explicitly so they are not silently committed during consolidation.
 Covers joint distribution syntax, residual-graph mechanics, and more.
-Matrix heterogeneous-unit resolution and backend abstraction are
-closed design blockers.
+Matrix heterogeneous-unit resolution, backend abstraction, and the
+type-graph / e-graph bridge are closed.
 
 Carried forward explicitly so they are not silently committed during
 consolidation.
@@ -6004,11 +6102,10 @@ abstraction is closed by Part V.
 
 ### 34. Chunk-Slotted Work
 
-**Summary.** Outstanding design chunks: chunk 07 type-graph to
-e-graph bridge, chunk 08 joint syntax and coupling, chunk 03 kernels
-(resumes after substrate lock), and chunk 11 sum types / enums.
-Chunks 05, 06, and 12 are resolved and kept here as completed
-references.
+**Summary.** Outstanding design chunks: chunk 08 joint syntax and
+coupling, chunk 03 kernels (resumes after substrate lock), and chunk
+11 sum types / enums. Chunks 05, 06, 07, and 12 are resolved and kept
+here as completed references.
 
 - **Chunk 05.** RESOLVED: matrix details. Heterogeneous-unit type
   mechanics are resolved by matrix facts (§3.9); shape expressions,
@@ -6026,13 +6123,14 @@ references.
   handlers; opaque callables require explicit runtime and AD
   capabilities; no backend is primary; the first conformance target is
   a semantics-complete CPU reference backend.
-- **Chunk 07.** Type-graph ↔ e-graph bridge. Depends on chunks 04
-  (expression e-graph substrate), 05 (refinement-lattice examples
-  from matrix types), and 06 (backend-dependent conversion-edge
-  costs). Three-option coupling framing (A two graphs with
-  explicit bridge / B unified term-e-graph / C type graph compiled
-  to e-graph rules at elaboration) and Q1-Q7 tracked in
-  `planning/v2/v2.1_chunk_reports/07_type_graph_in_progress.md`.
+- **Chunk 07.** RESOLVED: type-graph ↔ e-graph bridge. The semantic
+  model is two substrates with an explicit live guard-discharge
+  bridge: the type graph carries static semantic relationships and
+  the e-graph carries value equalities. Precompiled / cached guards
+  are an optimization only. Refinements are evidence-backed facts,
+  generic parameters are invariant by default, conversion legality is
+  separate from realization cost, and monotone facts discovered during
+  saturation may unlock later guarded rewrites.
 - **Chunk 08.** User-`fn` ban and parameterized-relation lock
   (applied in §6 / §7 / §8 / §28). Distribution contract shape and
   B2/B4 joint syntax remain tied to later PPL work.
@@ -6067,8 +6165,8 @@ Tier 0 Phase 2 Q3 (residual ↔ e-graph relationship) and Q4 (envelope
 ownership). Literal-constants diagnostic surface (CC1 enforcement
 messages; shape in §4.1). GPU-incompatibility of BigFloat and
 Rational (cross-refs §26.1 numeric table, §26.3 Rational termination
-caveat, §31.1 backend fallback modes). Conversion-graph cost
-model. **Chunk 04 carryovers:** O4.1 `replaces` obligation
+caveat, §31.1 backend fallback modes). **Chunk 04 carryovers:**
+O4.1 `replaces` obligation
 retraction (rewrite group W1 in Appendix C; three candidate
 semantics still open). O4.3 per-residual training emission (CC3
 cross-cut: overconstrained relations must survive extraction with
