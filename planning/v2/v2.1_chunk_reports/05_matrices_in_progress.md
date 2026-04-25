@@ -587,7 +587,7 @@ Committed primitive groups:
 | `lu(A)` | `rank(A)=2`, `square(A)`, `invertible(A)` or pivoting route | `(L, U, P)` with `P * A = L * U`, triangular facts, `permutation(P)`. |
 | `qr(A)` | `rank(A)=2`, numeric entries, and scaling policy for heterogeneous units | `orthogonal(Q)`, `upper_triangular(R)`, `A = Q * R`, rank facts when rank-revealing route is selected. |
 | `svd(A)` | `rank(A)=2`, numeric entries, and scaling policy for heterogeneous units | `(U, S, Vt)` with orthogonality facts, diagonal / nonnegative singular-value facts, and rank / spectral facts where classifiable. |
-| `eigen(A)` | `square(A)`; symmetric / Hermitian facts for the real-symmetric route; Complex / backend facts for the general route | Eigenvalue / eigenvector facts, spectral-radius / eigenvalue bounds where classifiable. |
+| `eigen(A)` | `square(A)`; symmetric / Hermitian facts for the real-symmetric route; Complex semantics plus `supports_complex_linalg` for the general route | Eigenvalue / eigenvector facts, spectral-radius / eigenvalue bounds where classifiable. |
 | `solve(A, b)` | `rank(A)=2`, `compatible_axes(A, b)`, `solvable(A, b)` | Solution axes / units, residual report, `condition_of(solve_block)` facts. Dispatch uses facts such as triangular, positive-definite, full-rank, or rank-deficient. |
 | `solve_triangular(A, b)` | `lower_triangular(A)` or `upper_triangular(A)`, compatible axes, nonzero diagonal / solvability facts | Explicit direct-solve primitive; `solve` may route here when facts establish eligibility. |
 | `least_squares(A, b)` | Rectangular or rank-deficient system facts, compatible axes, scaling policy | Solution / residual facts, rank / conditioning diagnostics. |
@@ -595,7 +595,7 @@ Committed primitive groups:
 | `det(A)` | `square(A)` and determinant-capable unit / scalar facts | Determinant unit law and triangular-product simplifications. |
 | `trace(A)` | `square(A)` and diagonal-entry unit comparability | Trace unit law; diagonal / block-diagonal simplifications. |
 | `transpose(A)` | `rank(A)=2` | Swaps axes, transposes entry-unit law, flips upper / lower triangular facts, preserves applicable facts (§3.4). |
-| `adjoint(A)` | Complex numeric support or real route where adjoint reduces to transpose | Conjugate-transpose facts; required by Hermitian primitives. |
+| `adjoint(A)` | real route where adjoint reduces to transpose, or Complex semantics / backend support for complex entries | Conjugate-transpose facts; required by Hermitian primitives. |
 | `norm(expr, kind)` | Supported kind (`"1"`, `"2"`, `"fro"`, `"inf"`), unit / scaling policy where needed | Norm envelope facts consumed by `condition_of` and approximation accounting. |
 | `condition_of(expr)` | Shape, axis comparability, unit comparability, norm / scaling policy | `condition_estimate`, `condition_mode`, `condition_bound` when available. |
 | `matrix_rank(A)` | `rank(A)=2`, numeric entries, tolerance / scaling policy | `rank_value(A)`, full-rank / nullspace facts when classifiable. |
@@ -779,6 +779,10 @@ Chunk 05 is closed for v2.1. The canonical spec now commits:
   committed. Linear-algebra primitives consume established facts,
   emit facts with provenance, and report unmet obligations rather
   than choosing semantic fallbacks.
+- Complex matrix semantics consume the canonical Complex numeric
+  representation lock (§26.4): `adjoint` is transpose for real matrices
+  and conjugate transpose for complex matrices; general complex routes
+  require advertised backend capability.
 
 Chunk 06 owns execution concerns: backend capability advertisement,
 kernel availability, layout / device decisions, AD ownership for
@@ -833,3 +837,7 @@ matrix vocabulary.
   Provider slots such as `A: Matrix<dimensionless, 2, 2>` are
   separate declarations whose values enter through workflow binding
   (§4.1).
+- **Q12.** Complex matrix route. RESOLVED 2026-04-25:
+  Complex is an ordinary scalar representation; Hermitian, unitary,
+  adjoint, and general-eigen routes consume Complex numeric semantics
+  plus backend capability facts rather than a separate matrix kind.

@@ -283,8 +283,10 @@ with named fields. "Atomic" means the type is a leaf of the
 containment tree rather than a single-field wrapper; a composite is
 atomic at sites that do not decompose its fields. Named-type
 comparison rules: `=` and ordering between two distinct named types
-require an explicit `convert` to share scope; the compiler rejects
-cross-type arithmetic and comparison without it.
+require an explicit `convert` to share scope. Named-type arithmetic
+follows the Appendix C name-preservation / stripping rules; cross-
+wrapper arithmetic without a stdlib rule or explicit `convert` is
+rejected.
 
 Nominal wrappers (`type Depth: Scalar<m>`) distinguish a name from
 its underlying representation without changing structure. Composite
@@ -300,6 +302,14 @@ under a conservation group (§3.7) satisfy this requirement without
 a conversion body. Comparisons between a named type and its
 underlying representation are never implicit; the modeler must name
 which side of the wrapper the comparison lives on.
+
+Named semantic quantity types preserve their name only through
+stdlib-declared name-preserving operations. Same-named addition is
+name-preserving; multiplication, division, affine subtraction, and
+cross-wrapper arithmetic strip to the underlying unit result or require
+an explicit `convert` (§17 Appendix C groups D/U). This is the pattern
+used by stdlib angle quantities: `Angle` and `Phase` are nominal
+wrappers over `Scalar<rad>`, not new unit syntax.
 
 #### 3.4 Node Instantiation
 
@@ -1067,12 +1077,12 @@ enforcement actionable instead of cryptic.
 
 ### 5. Units
 
-**Summary.** Base units, derived units, affine conversions,
-dimensional algebra, and unit-generic types. The `convert` declaration
-(four variants), round-trip verification, and `value_in` operator are
-the modeler surface. Unit-normalization rewrites live in the e-graph
-machinery (§17, Appendix C group C); §5 covers the declaration surface
-and the modeler-facing invariants.
+**Summary.** Base units, derived units, named dimensionless units,
+affine conversions, dimensional algebra, and unit-generic types. The
+`convert` declaration (four variants), round-trip verification, and
+`value_in` operator are the modeler surface. Unit-normalization
+rewrites live in the e-graph machinery (§17, Appendix C group C); §5
+covers the declaration surface and the modeler-facing invariants.
 
 #### 5.0 Unit System Fundamentals
 
@@ -1093,8 +1103,8 @@ base_unit second
 base_unit kilogram
 ```
 
-`Scalar<U>` is the built-in source spelling for "a real number
-measured in unit U"; internally it is the rank-0 tensor
+`Scalar<U>` is the built-in source spelling for "a unit-bearing scalar
+quantity measured in unit U"; internally it is the rank-0 tensor
 `Tensor<U, ()>` (§3.8). Derived units are defined as products,
 quotients, and scalar multiples of existing units:
 
@@ -1102,6 +1112,30 @@ quotients, and scalar multiples of existing units:
 unit meter_per_second = meter / second
 unit pascal = kilogram / (meter * second^2)
 ```
+
+Named dimensionless units are allowed when a dimensionless quantity
+has important semantic intent. The core example is the SI radian:
+
+```myco
+unit rad = dimensionless
+```
+
+`rad` has dimension `dimensionless` and participates in ordinary
+dimension algebra, but stdlib/compiler facts can keep angle intent
+available to trig, geometry, and complex-number atoms while the unit
+name is still present. The semantic wrapper lives in the named type
+layer, not in a new unit-kind syntax:
+
+```myco
+type Angle: Scalar<rad>
+type Phase: Scalar<rad>
+```
+
+`Angle` is the general semantic quantity type for angles. `Phase` is a
+stdlib refined angle quantity for principal complex phase; its chosen
+principal interval is a stdlib fact. Arithmetic on semantic quantity
+types follows the named-type preservation / stripping rules in §3.3
+and Appendix C groups D/U.
 
 **Base-unit storage invariant.** Internally, all computation happens in
 base units. Declared units are a user-facing layer; the compiler never
@@ -1117,7 +1151,7 @@ unit-typed position is a compile error.
 followed by a unit name attaches the unit to the result:
 
 ```myco
-(0.1579 + 0.0017 * T_c) mol_m2_s
+(a + b * T_c) mol_m2_s
 ```
 
 This is syntactic sugar for multiplying by the unit's base-SI scale
@@ -1186,13 +1220,15 @@ No silent coercion occurs; the compiler rejects disallowed forms.
 Temperature in Celsius is an affine unit: its zero point differs from
 Kelvin's. Arithmetic on affine quantities follows these rules:
 
-- `20°C * 2` is not `40°C`. Multiplication by a dimensionless scalar
-  requires converting to Kelvin first: `(20°C.to_base() * 2).value_in(celsius)`.
-- `20°C - 5°C` yields `15 K`, not `15°C`. Subtracting two affine
+- Multiplying a Celsius quantity by a dimensionless scalar does not
+  produce another Celsius quantity. Multiplication requires converting
+  to the absolute unit first, then converting the result for
+  presentation if desired.
+- Subtracting one Celsius quantity from another yields a Kelvin
+  difference, not a Celsius quantity. Subtracting two affine
   quantities of the same affine unit produces a base-unit difference
   (the offsets cancel).
-- Adding an affine quantity to a base-unit difference is defined:
-  `20°C + 5 K` is `25°C`.
+- Adding an affine quantity to a base-unit difference is defined.
 - Adding two affine quantities directly is a compile error.
 
 The compiler enforces these rules statically. No silent coercion
@@ -5390,7 +5426,7 @@ T. The stdlib provides:
 | `Float32` | IEEE single | backend-dependent availability |
 | `Float64` | IEEE double | default; universal backend support |
 | `BigFloat` | arbitrary-precision floats | exact rounding semantics; GPU-incompatible |
-| `Complex` | complex numbers | in scope, representation and contracts open (§35) |
+| `Complex` | complex numbers | ordinary numeric representation; algebraic contracts locked in §26.4 |
 
 Forward-mode AD is not a user-facing representation.
 Backends own AD (§31); dual numbers would duplicate what the
@@ -5403,11 +5439,12 @@ T within one expression is forbidden without explicit
 #### 26.2 Default-Compatibility Constraints on T
 
 **Summary.** `T` must satisfy a base `Numeric` hierarchy: ring
-closure, total ordering (where applicable; Complex is exempt), zero
-and one identity elements, and backend representability. Mixed-T
-arithmetic is a compile error and requires explicit `convert`.
-`Float32 -> Float64` is lossless; `Float64 -> Float32` requires an
-`approximate` block with a precision-downcast tolerance class.
+closure, total ordering where applicable, zero and one identity
+elements, and backend representability. `Complex` satisfies the
+algebraic numeric contracts but not total ordering. Mixed-T arithmetic
+is a compile error and requires explicit `convert`. `Float32 ->
+Float64` is lossless; `Float64 -> Float32` requires an `approximate`
+block with a precision-downcast tolerance class.
 
 The `T` parameter in `Scalar<U, T>` must satisfy a base
 `Numeric` contract hierarchy:
@@ -5464,6 +5501,93 @@ compile-time guards:
 compile-time algebraic constant folding, and short bounded
 computations where exactness matters. It is rarely the right
 runtime representation for production models.
+
+#### 26.4 Complex Numeric Semantics
+
+**Summary.** `Complex` is an ordinary numeric representation for
+`Scalar<U,T>`, alongside the real and exact numeric representations.
+It is not a separate scalar kind or a separate `Numeric` sub-hierarchy.
+`Scalar<U, Complex>` is one unit-bearing scalar quantity whose real and
+imaginary components share unit `U`. Complex values satisfy algebraic
+contracts and conjugation / magnitude contracts, but not ordering
+contracts. Backend execution is capability-gated.
+
+The canonical spelling is:
+
+```myco
+z: Scalar<ohm, Complex>
+```
+
+`z` is one scalar quantity with unit `ohm` and complex numeric
+representation. It is not a record with independently unitable
+components. Stdlib atoms preserve units as follows:
+
+```text
+real(z: Scalar<U, Complex>) -> Scalar<U>
+imag(z: Scalar<U, Complex>) -> Scalar<U>
+conj(z: Scalar<U, Complex>) -> Scalar<U, Complex>
+abs(z: Scalar<U, Complex>) -> Scalar<U>
+phase(z: Scalar<U, Complex>) -> Phase
+complex(re: Scalar<U>, im: Scalar<U>) -> Scalar<U, Complex>
+```
+
+Both arguments to `complex(re, im)` must share the same unit `U` or
+have an explicit unit conversion path. `phase(z)` requires `z != 0`
+or produces a domain obligation; it returns the stdlib `Phase` semantic
+quantity type (§5.0), not an arbitrary `Scalar<dimensionless>`.
+
+`Complex` satisfies:
+
+```text
+Plus, Minus, Times, Divide, Zero, One, Conjugate, Abs/Magnitude
+```
+
+It does not satisfy total ordering:
+
+```myco
+max(z1, z2)            # rejected for Complex
+max(abs(z1), abs(z2))  # valid
+```
+
+Stdlib trig atoms consume angle-compatible quantities, not arbitrary
+dimensionless ratios. Angle-compatible means `Angle`, `Phase`, or
+`Scalar<rad>` while the named dimensionless unit is still present:
+
+```text
+sin(theta: Angle) -> Scalar<dimensionless>
+cos(theta: Scalar<rad>) -> Scalar<dimensionless>
+atan2(y: Scalar<U>, x: Scalar<U>) -> Phase
+```
+
+Complex-valued stdlib atoms with branch choices (`phase`, complex
+`log`, complex `sqrt`, fractional powers, and inverse trig functions)
+carry domain and branch-cut facts. Their branch cuts are ordinary
+regime boundaries (§8.10): gradients flow within a branch, but no
+ordinary smooth gradient crosses a branch cut or the undefined point
+without an explicit crossing policy.
+
+Complex differentiability is fact-specific. Holomorphic stdlib atoms
+may emit complex-analytic derivative facts on their proven domains.
+Atoms such as `real`, `imag`, `conj`, `abs`, and `phase` may be
+real-differentiable where defined, but they do not emit holomorphic
+derivative facts. Runtime complex AD is a backend capability with an
+advertised convention (for example real/imag splitting or Wirtinger
+calculus); backend AD values remain execution results and provenance,
+not new symbolic derivative facts (§31).
+
+Execution capabilities are advertised separately:
+
+```text
+supports_complex
+supports_complex_linalg
+supports_complex_ad
+```
+
+If a plan requires complex arithmetic, complex linear algebra, or
+complex runtime AD and the selected backend does not advertise the
+needed capability, workflow composition fails by default (§31.1).
+`host` or `emulate` policy may be selected explicitly; such lowering
+does not change source semantics.
 
 ### 27. Distribution Families (Z-group)
 
@@ -7057,15 +7181,19 @@ Remaining kernel-adjacent work:
 ### 29. Units Library
 
 **Summary.** The core units library ships SI base units, common
-SI-derived units via derived-unit algebra, standard affine
-conversions between equivalent spellings, and dimensionless-ratio
-handling. Domain-specific unit libraries (ecophysiology, chemistry,
-finance) stay out of core and ship as distributable packages on top.
+SI-derived units via derived-unit algebra, the named dimensionless
+angle unit `rad`, stdlib semantic quantity types `Angle` and `Phase`,
+standard affine conversions between equivalent spellings, and
+dimensionless-ratio handling. Domain-specific unit libraries
+(ecophysiology, chemistry, finance) stay out of core and ship as
+distributable packages on top.
 
 SI base units (m, kg, s, A, K, mol, cd). Common SI-derived units
-(N, Pa, J, W, C, V, Ω, Hz, etc.) via derived-unit algebra (§5).
-Standard affine conversions between equivalent SI-derived spellings.
-Dimensionless-ratio handling.
+(N, Pa, J, W, C, V, Ω, Hz, rad, etc.) via derived-unit algebra (§5).
+`rad` is a named dimensionless unit; `Angle` and `Phase` are stdlib
+semantic quantity types over `Scalar<rad>` (§5.0). Standard affine
+conversions between equivalent SI-derived spellings. Dimensionless-
+ratio handling.
 
 Domain-specific unit libraries (ecophysiology, chemistry, astronomy,
 finance, etc.) are **out of scope** for Myco core: they ship as
@@ -7107,7 +7235,7 @@ rank is `matrix_rank(A)` to avoid collision with shape rank
 | `lu(A)` | `rank(A)=2`, `square(A)`, `invertible(A)` or a route to pivoting facts | `(L, U, P)` with `P*A = L*U`, `lower_triangular(L)`, `upper_triangular(U)`, `permutation(P)` | If invertibility or pivot route is unknown, report the missing fact. |
 | `qr(A)` | `rank(A)=2`, numeric entries, and a scaling policy when heterogeneous units make orthogonality unit-dependent | `orthogonal(Q)`, `upper_triangular(R)`, `A = Q*R`, rank report where rank-revealing QR is selected | Missing scaling / rank facts are obligations; no automatic nondimensionalization. |
 | `svd(A)` | `rank(A)=2`, numeric entries, and a scaling policy when heterogeneous units make singular values unit-dependent | `orthogonal(U)`, `diagonal(S)`, `nonnegative_entries(diag(S))`, `orthogonal(V)`, singular-value / rank facts when classifiable | Missing scaling policy blocks interpretation rather than silently producing meaningless units. |
-| `eigen(A)` | `square(A)`; `symmetric(A)` / `hermitian(A)` for the real-symmetric route; Complex support for the general route | eigenvalue / eigenvector facts, `spectral_radius_bound(A)` or `eigenvalue_bounds(A)` when classifiable | General non-symmetric eigen requires the Complex/backend facts to be established. |
+| `eigen(A)` | `square(A)`; `symmetric(A)` / `hermitian(A)` for the real-symmetric route; `supports_complex_linalg` for the general complex route | eigenvalue / eigenvector facts, `spectral_radius_bound(A)` or `eigenvalue_bounds(A)` when classifiable | General non-symmetric eigen requires Complex semantics (§26.4) and backend capability facts. |
 | `solve(A, b)` | `rank(A)=2`, `compatible_axes(A, b)`, and `solvable(A, b)`; specialized routes consume `lower_triangular`, `upper_triangular`, `positive_definite`, `full_rank`, or rank facts | solution axes / units, residual report, `condition_of(solve_block)` facts | Under/overdetermined or ill-conditioned blocks become explicit obligations / diagnostics. Solver orientation is a lowering choice, not source semantics. |
 | `solve_triangular(A, b)` | `lower_triangular(A)` or `upper_triangular(A)`, compatible axes, nonzero diagonal / solvability facts | solution axes / units and direct triangular-solve provenance | Unknown triangularity or diagonal solvability reports an unmet obligation. `solve` may dispatch here only when facts prove eligibility. |
 | `least_squares(A, b)` | rectangular or rank-deficient system facts, compatible axes, scaling policy | solution / residual facts, rank / conditioning diagnostics | Missing scaling, rank, or compatibility facts are obligations. |
@@ -7115,7 +7243,7 @@ rank is `matrix_rank(A)` to avoid collision with shape rank
 | `det(A)` | `square(A)` and determinant-capable scalar / unit facts | determinant unit law, triangular product simplification when `triangular(A)` is established | Missing square or unit facts are reported. |
 | `trace(A)` | `square(A)` and diagonal-entry unit comparability | trace unit law plus diagonal / block-diagonal simplifications | Missing square or unit-comparability facts are reported. |
 | `transpose(A)` | `rank(A)=2` | swapped axes, transposed `entry_unit_law`, flipped upper/lower triangular facts, preserved applicable facts (§3.9) | Rank mismatch is a compile error or obligation depending on shape phase. |
-| `adjoint(A)` | Complex numeric support, or real route where adjoint reduces to transpose | conjugate-transpose facts; Hermitian route facts when applicable | Missing Complex/backend support is a capability obligation. |
+| `adjoint(A)` | `rank(A)=2`; real route where adjoint reduces to transpose, or Complex semantics / backend support where entries are complex | conjugate-transpose facts; Hermitian route facts when applicable | Missing Complex/backend support is a capability obligation. |
 | `norm(expr, kind)` | supported kind (`"1"`, `"2"`, `"fro"`, `"inf"`), unit / scaling policy where needed | norm envelope facts used by `condition_of` and approximation accounting | Heterogeneous units without scaling policy block interpretation. |
 | `condition_of(expr)` | expression shape, unit / axis comparability, and norm / scaling policy for matrix-valued expressions | `condition_estimate(expr)`, `condition_mode`, `condition_bound` when available | Heterogeneous units without a scaling policy make condition number interpretation unknown; the diagnostic asks for scaling evidence. |
 | `matrix_rank(A)` | `rank(A)=2`, numeric entries, tolerance / scaling policy | `rank_value(A)`, full-rank / nullspace facts when classifiable | Missing tolerance / scaling policy reports an obligation. |
@@ -7128,6 +7256,19 @@ rank is `matrix_rank(A)` to avoid collision with shape rank
 | `diag_of(A)` | matrix input | vector of diagonal entries | Non-matrix input is rejected. |
 | `stack` / `hstack` / `vstack` | shape constraints from §3.8 | derived shape, axis, and unit facts | Shape incompatibility is an unmet obligation. |
 | spatial operator lowering | geometry/domain facts, discretization facts, boundary/locus facts | `stencil_pattern`, `local_coupling`, `discretization_order`, `mesh_dependent`, and conservation facts such as `row_sum_zero` or `graph_laplacian` when proven | Missing conservation / stability facts are visible in inspection; the compiler does not claim preserved physics it cannot establish. |
+
+For real-valued matrices, `adjoint(A)` rewrites to `transpose(A)`. For
+complex-valued matrices, `adjoint(A)` is the conjugate transpose:
+
+```text
+adjoint(A) = conj(transpose(A))
+hermitian(A) means A = adjoint(A)
+unitary(A) means adjoint(A) * A = identity(n)
+```
+
+`transpose(A)` never conjugates. Complex linear algebra consumes the
+same matrix fact lattice as real linear algebra, plus the Complex
+numeric semantics in §26.4 and backend capability facts from §31.
 
 `Matrix<U, m, n>` is the canonical base constructor. Full structural
 property names such as `PositiveDefinite`, `Symmetric`,
@@ -7215,8 +7356,9 @@ plan and to report why a richer plan cannot bind.
 Scientific machinery beyond that core is capability-advertised, not
 mandatory. Cholesky, SVD, eigendecomposition, sparse kernels,
 iterative solvers, runtime AD modes, PPL inference modes,
-dynamic-keyed axes, complex numbers, host interop, and
-opaque-callable gradients are all backend capabilities. A backend may
+dynamic-keyed axes, complex arithmetic, complex linear algebra,
+complex runtime AD, host interop, and opaque-callable gradients are all
+backend capabilities. A backend may
 also advertise a named **capability profile**, a composable bundle of
 capabilities with `requires`, `provides`, and `implies` rules. This
 is an implementation-surface vocabulary, not a `.myco` source
@@ -7276,6 +7418,7 @@ approximation-error layer). Fallback is per-run via
 `run.config.backend`.
 
 Backends advertise capabilities (e.g. `supports_complex`,
+`supports_complex_linalg`, `supports_complex_ad`,
 `supports_forward_ad`, `supports_reverse_ad`,
 `supports_hamiltonian_monte_carlo`, `supports_sparse_matmul`,
 `supports_cholesky`, `supports_svd`,
@@ -7504,8 +7647,8 @@ resolved blocker ledger carried forward explicitly so they are not
 silently recommitted during consolidation. Covers kernel work, sum
 types / enums, residual-graph mechanics, Tier 2 family-catalog polish,
 and smaller opens. The B-tagged blockers, matrix heterogeneous-unit
-resolution, backend abstraction, and the type-graph / e-graph bridge
-are closed.
+resolution, backend abstraction, the type-graph / e-graph bridge, and
+Complex numeric semantics are closed.
 
 Carried forward explicitly so they are not silently committed during
 consolidation.
@@ -7611,6 +7754,12 @@ references.
   sugar, and joint-envelope coupling metadata are locked in §13 and
   §27; detailed rationale lives in
   `planning/v2/v2.1_chunk_reports/13_ppl_blockers.md`.
+- **Complex numeric representation.** RESOLVED: `Complex` is an
+  ordinary `Scalar<U,T>` numeric representation (§26.4), not a separate
+  scalar kind or sub-hierarchy. It satisfies algebraic / conjugation /
+  magnitude contracts but not ordering; `Scalar<U, Complex>` has one
+  unit `U` shared by real and imaginary components; `phase` returns
+  stdlib `Phase` over `Scalar<rad>`.
 
 ### 35. Other Opens
 
@@ -7618,9 +7767,9 @@ references.
 retraction under monotonicity, residual-to-e-graph mechanics, CC1
 diagnostics, GPU-incompatibility of exact numeric types, chunk 04
 carryovers (per-residual objective exposure, heterogeneous `argmax`,
-event-driven topology, spatial operator lowering), Complex contracts,
-controller-interface affordances, Tier 2 family-catalog polish, and
-remaining Tier 3 non-parametric catalog / backend machinery.
+event-driven topology, spatial operator lowering), controller-interface
+affordances, Tier 2 family-catalog polish, and remaining Tier 3
+non-parametric catalog / backend machinery.
 
 `replaces` obligation retraction (monotonicity tension with the
 e-graph; cross-refs §8.11 declaration, §10.5 semantics, §15
@@ -7648,14 +7797,6 @@ aggregation surface (stdlib primitive vs user-composed from `exp` +
 `sum`; collection-aggregation syntax pending zip/alignment semantics
 lock; Y2 `soft_select` already uses softmax internally in §8.7, so
 the shape is known but the ergonomic surface is not).
-
-**Complex numeric representation in scope.** Riley-confirmed that
-`Complex` ships; open items are which contracts it satisfies (not
-totally ordered, so `Compare`-dependent stdlib functions exclude it;
-which of `Plus` / `Minus` / `Times` / `Divide` close; interaction
-with units in `Scalar<U, Complex>`), backend support commitments,
-and whether `Complex` forms a separate `Numeric` sub-hierarchy or
-lives alongside `Float`.
 
 **Controller-interface affordances in the Python layer.** General-
 system question: what hooks does Myco need to expose so workflows
@@ -7944,8 +8085,9 @@ context), `|` (currently unassigned, reserved for future
 pattern or pipe use).
 
 **Stdlib-reserved identifiers.** The stdlib atom namespace reserves
-`exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sqrt`,
-`abs`, `sign`, `floor`, `ceil`, `round`, `min`, `max`, `sum`,
+`exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
+`sqrt`, `abs`, `real`, `imag`, `conj`, `phase`, `complex`, `sign`,
+`floor`, `ceil`, `round`, `min`, `max`, `sum`,
 `prod`, `mean`, `std`, `var`, `argmin`, `argmax`, `solve`,
 `solve_triangular`, `least_squares`, `cholesky`, `lu`, `qr`, `svd`,
 `eigen`, `inverse`, `det`, `trace`, `transpose`, `adjoint`, `norm`,
@@ -8066,6 +8208,9 @@ level, name-preserving arithmetic. LOCKED.
   CarbonPool → CarbonPool` (uni; name cannot be re-inferred if stripped)
 - D5. Named + anonymous-matching-dimension addition preserves the name
   (uni; name-join semilattice with anonymous as bottom)
+- D6. Stdlib-declared name-preserving semantic quantity operations
+  preserve wrappers such as `Angle` / `Phase`; arbitrary arithmetic
+  does not infer semantic names from units alone.
 
 **E. Stdlib-inverse round-trip elimination.** Requires declared or
 registered inverse. LOCKED.
@@ -8086,8 +8231,9 @@ LOCKED; vector/tensor seams OPEN (§35 geometry chunk 01).
 
 - G1. `exp(a)*exp(b) → exp(a+b)`, `log(a*b) → log(a)+log(b)` (gated
   `a,b > 0`), `exp(a)^b → exp(a*b)` (Arrhenius canonicalization)
-- G2. Trig fundamentals: `sin(0) → 0`, `cos(0) → 1`, `tan(0) → 0`;
-  Pythagorean `sin(x)² + cos(x)² → 1`
+- G2. Trig fundamentals over angle-compatible arguments (`Angle`,
+  `Phase`, or `Scalar<rad>`): `sin(0) → 0`, `cos(0) → 1`,
+  `tan(0) → 0`; Pythagorean `sin(x)^2 + cos(x)^2 → 1`.
 - G3. Idempotency of lossy ops: `abs(abs(x)) → abs(x)`, `abs(-x) →
   abs(x)`, `min(x,x) → x`, `max(x,x) → x`
 
@@ -8216,6 +8362,9 @@ checking; directional because names cannot be re-inferred. LOCKED.
   division strips the name)
 - U3. `Temperature - Temperature → anonymous Scalar<K>` (affine
   subtraction breaks named-type symmetry)
+- U4. Cross-wrapper arithmetic such as `Angle + Phase` requires an
+  explicit `convert` or stdlib-declared operation; same underlying unit
+  `rad` is not enough to infer semantic equivalence.
 
 **V. Observation injection.** Ground-truth data pinning (§13.9).
 LOCKED.
