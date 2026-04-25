@@ -7589,8 +7589,9 @@ references.
   `integrate` / `sum` kernel operators are locked (§28). Exact
   support, sparse / index lowering semantics, and provider-pattern
   provenance are locked. Low-rank / feature approximation semantics
-  are locked. GP/HSGP machinery, concrete sparse / low-rank backend
-  implementations, and cost calibration remain open.
+  and process-prior / GP-HSGP consumer semantics are locked. Concrete
+  sparse / low-rank / process-inference backend implementations and
+  cost calibration remain open.
 - **Chunk 11.** Sum types / enums. Core surface locked (§3.10):
   `enum`, flat exhaustive `match`, unit / positional / struct-like
   variants, no wildcard/default arm, explicit narrowing before field
