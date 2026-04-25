@@ -3088,9 +3088,9 @@ by layer, not by spelling.
 
 **Summary.** The core Tier 2 PPL blockers are locked: B1 distribution
 contract and opaque-family policy, B2 structured joint syntax, and
-B4 coupling metadata. Higher-order distributions continue to route
-through kernel machinery (§28) and remaining work is family-catalog
-polish, not unresolved core semantics.
+B4 coupling metadata. Higher-order process priors route through
+process-prior and kernel machinery (§28); remaining work is
+family-catalog polish, not unresolved core semantics.
 
 The Tier 2 PPL design lock extends the core `~` mechanism to cover
 structured stochastic values without adding user annotations or
@@ -3113,9 +3113,9 @@ imperative correlation surfaces:
   root are dependent by default unless the joint envelope proves an
   independent partition or dependency graph. Distinct field names do
   not prove independence.
-- **Higher-order distributions.** Distributions over functions
-  (Gaussian processes, etc.) route through kernel machinery (§28)
-  rather than the parametric Tier 1 list.
+- **Higher-order distributions.** Process-valued priors such as
+  Gaussian processes route through the process-prior and kernel
+  machinery (§28), not through the parametric Tier 1 list.
 
 Tier 1 primitives (§27) remain the current ship surface. Tier 2
 family-catalog details such as copula and Wishart-family capability
@@ -4751,8 +4751,9 @@ particular model. Exact syntax for node paths, the typing of the
 catalog, and output-query formats remain open (§35).
 
 Python value providers (`Constant`, `Series`, `Prior`, `Trainable`,
-`Controller`, `GPPrior`, CSV readers, array adapters, distribution
-builders) are workflow-side data constructors. They are not `.myco`
+`Controller`, `ProcessPrior`, CSV readers, array adapters,
+distribution builders) are workflow-side data constructors. They are
+not `.myco`
 `Distribution<S>` implementations and do not satisfy contracts by
 being Python classes. They merely package values or providers for
 binding against paths in the node catalog.
@@ -4929,8 +4930,8 @@ in backend and deployment surfaces.
 **Summary.** The workflow-composition surface has three binding
 verbs: `bind(path, source)`, `bind_topology(path, geometry)`, and
 `observe(path, data)`. Fixed values, time series, trainable
-parameters, priors, controllers, and Gaussian-process priors are
-source objects passed to `bind`, not separate verbs. Run mode
+parameters, priors, controllers, and process priors are source objects
+passed to `bind`, not separate verbs. Run mode
 decides how sources participate in execution, training, or PPL.
 
 `.myco` states world claims. Workflow composition materializes those
@@ -4990,9 +4991,14 @@ Representative source objects:
   contract is also the visibility boundary: widening what the
   callable may read requires widening the declared input contract.
   No `.myco` keyword introduces a controller.
-- **`GPPrior(kernel, hyperparameters=...)`.** Structured prior source
-  for functions; hyperparameters may themselves be `Trainable`
-  sources.
+- **`ProcessPrior(index=..., value=..., law=...)`.** Workflow source
+  for epistemic process priors over indexed `.myco` contracts. The
+  binding names the index slots and value slots explicitly; the
+  process law may be a `GaussianProcess`, a finite-feature process,
+  or another curated process law (§28.8). `GPPrior(...)` may exist as a
+  Python convenience for `ProcessPrior(law=GaussianProcess(...))`, but
+  it is not the canonical source object. Process priors introduce no
+  `.myco` syntax.
 
 All source objects are dumb workflow data. They do not expose Myco
 types as Python classes and they do not create new source-language
@@ -5727,7 +5733,8 @@ capability contracts and conjugate-rewrite wiring. Tier 2 mechanics
 for structured joint roots, named field projections, and coupling
 metadata are locked; remaining Tier 2 work is family-catalog and
 capability-table polish for copulas, Wishart variants, and related
-joint families. Tier 3 (non-parametric) is open. Tier 1/2/3 orders
+joint families. Tier 3 process-prior routing is scoped for GP-style
+families; other non-parametric catalogs remain open. Tier 1/2/3 orders
 the family catalog; Tier A/B/C orders dispatch and is orthogonal.
 
 Tiers are the PPL scoping axis distinct from the distribution-
@@ -5748,23 +5755,25 @@ family catalog:
   tables for copulas, Wishart / InverseWishart / LKJ (gated on matrix
   fact propagation for SPD matrices, determinant, trace, and
   factorable unit laws), and related joint families. Higher-order
-  distributions route through kernel machinery (§28). Tracked in
-  §35 Other Opens as catalog polish, not unresolved core semantics.
-- **Tier 3.** Open. Non-parametric and process-valued families
-  (Gaussian Process, Dirichlet Process, Chinese Restaurant
-  Process, Pitman-Yor, Indian Buffet Process, Beta Process). No
-  formal tier boundary has been drawn. GPs are expected to route
-  through §28 Kernels rather than through a distribution-family
-  catalog entry, but whether non-parametric families share that
-  routing, require a distinct mechanism, or are treated as Tier C
-  (opaque PPL handoff) is an open question. Tracked in §35.
+  process-valued priors route through process-prior and kernel
+  machinery (§28). Tracked in §35 Other Opens as catalog polish, not
+  unresolved core semantics.
+- **Tier 3.** Partially scoped. Process-valued uncertainty is not a
+  third uncertainty kind: an epistemic or aleatoric source may have
+  process / field sample shape (§28.8). Gaussian-process-style priors
+  route through `ProcessPrior<I,V>` and kernel finite-projection
+  machinery, then dispatch through Tier A/B/C like any other stochastic
+  SCC. Remaining Tier 3 work is the catalog and capability boundary for
+  other non-parametric families (Dirichlet Process, Chinese Restaurant
+  Process, Pitman-Yor, Indian Buffet Process, Beta Process) and their
+  backend/PPL handlers, not the core GP routing.
 - **Tier A / B / C.** Dispatch tiers (§13.2), orthogonal to
   Tier 1/2/3. A = exact closed-form, B = approximate rewrites
   (Delta, Fenton-Wilkinson, CLT, block-maxima → GEV), C =
   opaque PPL handoff.
 
 "Tier 1 ships" is the positive commitment. "Tier 2 partial /
-Tier 3 open" are explicit open design questions, not deferrals
+Tier 3 partially scoped" are explicit design boundaries, not deferrals
 to a future Myco version: they belong inside the current design
 envelope and block shipping only of the specific families that
 need their machinery. Tier A/B/C are about dispatch, not about
@@ -5785,14 +5794,17 @@ integral kernel-operator semantics are ordinary Myco math. Exact
 support / locality semantics are graph facts. Sparse / index lowering
 is planner-owned and consumes exact facts without becoming source
 semantics. Low-rank / feature approximation semantics are graph and
-plan facts. GP/HSGP process machinery remains tracked work.
+plan facts. Process-prior / GP-HSGP consumer semantics are locked:
+processes are indexed stochastic roots with demand-driven finite
+projections; concrete backend and PPL implementations remain tracked
+work.
 
 Chunk 03 can now resume on the settled e-graph substrate; the kernel
 surface below is committed through finite assembly and ordinary
 integral / sum kernel operators, plus exact support / locality facts.
 Sparse / index lowering semantics are committed; concrete backend
-implementations, concrete low-rank algorithm kernels, and GP/HSGP
-process machinery remain tracked work.
+implementations, concrete low-rank algorithm kernels, and concrete
+process-inference backends remain tracked work.
 
 #### 28.1 Kernels as Parameterized Relations with Capability Contracts
 
@@ -6681,11 +6693,350 @@ ordinary obligations or workflow artifact facts. PSD / rank facts
 follow when the mode construction proves them; PD still requires
 full-rank or explicit positive diagonal evidence.
 
-**Consumer note.** GP and HSGP process machinery consumes the facts
-above, but process-level GP syntax, posterior inference, and
-specialized PPL handoff remain separate work. Low-rank covariance
-objects are ordinary PSD / rank-bounded matrix or operator objects
-until a process consumer uses them.
+**Consumer note.** The process-prior machinery in §28.8 consumes the
+facts above. Low-rank covariance objects are ordinary PSD /
+rank-bounded matrix or operator objects until a process consumer uses
+them; HSGP is one workflow approximation pattern over these facts, not
+a source-language mechanism.
+
+#### 28.8 Process Priors and GP / HSGP Consumers
+
+**Summary.** Process priors are workflow-side sources over indexed
+`.myco` contracts. The source model declares indexed relations,
+fields, and contracts; the workflow binds a `ProcessPrior<I,V>` by
+naming the index slots and value slots explicitly. Gaussian processes
+are one `ProcessLaw<I,V>` that consumes kernel / covariance facts and
+emits demand-driven finite projection problems. HSGP, inducing-point,
+random-feature, and other low-rank forms are explicit exact or
+approximate process-law / workflow artifacts with provenance, not
+special syntax. Structured process values are first-class.
+
+Process-valued uncertainty is not a third branch beside epistemic and
+aleatoric uncertainty. The uncertainty kind still classifies the
+source of uncertainty; process-valuedness describes the sample shape
+and identity of the stochastic root:
+
+```text
+uncertainty kind: epistemic | aleatoric
+sample shape: scalar | vector | record | field/process |
+              graph-indexed family | temporal path
+```
+
+Core facts:
+
+```text
+process_root(P)
+process_index_contract(P) = I
+process_value_contract(P) = V
+projection_of(x_i, P, index_i)
+same_process_root(x_i, x_j)
+process_coupling(P, kernel_or_law)
+epistemic_process(P) | aleatoric_process(P)
+```
+
+The words `index` and `value` do not create input/output direction in
+the Myco graph. They identify the finite projection axis and the
+sample component being coupled by the process law. Information still
+flows through the ordinary graph constraints as freely as the model and
+solver permit.
+
+**Source / workflow split.** `.myco` declares the indexed world shape:
+
+```myco
+relation vulnerability_curve(
+    psi: Scalar<MPa>,
+    loss: Scalar<dimensionless>,
+) { ... }
+```
+
+The workflow binds an epistemic process prior to that shape:
+
+```python
+workflow.bind(
+    "Plant.vulnerability_curve",
+    ProcessPrior(
+        index=["psi"],
+        value="loss",
+        law=GaussianProcess(mean=Zero(), kernel=matern52),
+    ),
+)
+```
+
+The binding must name slots. The compiler does not guess which side of
+a relation is "input" or "output" from position, ordering, or naming
+convention. Canonical emitted facts include:
+
+```text
+process_target = Plant.vulnerability_curve
+process_index_slots = [psi]
+process_value_slot = loss
+process_index_contract = Scalar<MPa>
+process_value_contract = Scalar<dimensionless>
+process_law = GaussianProcess
+```
+
+`GPPrior(...)` may exist as Python convenience sugar for
+`ProcessPrior(law=GaussianProcess(...))`, but `ProcessPrior` is the
+canonical workflow object. There is no GP-specific `.myco` syntax in
+v2.1.
+
+**Process-law contract.** The general source object is:
+
+```text
+ProcessPrior<I, V>
+```
+
+where `I` is the index contract and `V` is the value contract. A
+process law advertises finite-projection capabilities:
+
+```text
+ProcessLaw<I,V>
+FiniteProjectionLaw<I,V>
+ClosedFormConditionable<I,V>
+ProjectionLogDensity<I,V>
+ProjectionSampleable<I,V>
+ApproximationFamily<I,V>
+```
+
+A Gaussian process law has the shape:
+
+```text
+GaussianProcessLaw<I,V>
+requires:
+  mean: I -> V
+  covariance/kernel: I x I -> Covariance<V>
+emits for finite indices:
+  finite joint distribution, usually MVN when facts permit
+```
+
+Non-Gaussian process laws may emit an opaque finite joint and route to
+`ProcessInferenceTask` / Tier C unless they advertise stronger
+finite-projection or conditioning capabilities.
+
+**Demand-driven finite projections.** A process envelope remains
+abstract until a finite projection is demanded by a model read, an
+observation, or a workflow prediction/output query. For one process
+root `P`, all such points are gathered into projection axes:
+
+```text
+process_projection(y_i, process=P, index=psi_i)
+projection_axis(P, observed_points)
+projection_axis(P, required_model_points)
+projection_axis(P, prediction_points)
+same_process_root(y_i, y_j)
+coupled_by(P, K)
+```
+
+For a GP law:
+
+```text
+points = observed_points union required_model_points union prediction_points
+K = gram(kernel(P), points)
+mu = mean(P, points)
+finite_process_joint(y_points, mu, K)
+```
+
+Finite projection construction preserves process identity. Projections
+from the same process are coupled by one stochastic root; they are not
+independent roots merely because they appear at different points in the
+graph.
+
+**Observations condition projections.** Observations condition finite
+projections; they do not equationally merge the process value with the
+data. Exact observation is an explicit mode. Noisy observation requires
+an explicit noise law:
+
+```python
+workflow.observe(
+    "Plant.vulnerability_curve.loss",
+    data=points,
+    noise=Normal(sigma_obs),
+)
+```
+
+Semantics:
+
+```text
+projection f_i = P.at(x_i)
+observation y_i = f_i + eps_i
+eps_i ~ NoiseLaw(...)
+likelihood_term(log_density(noise, y_i - f_i))
+```
+
+There is no silent nugget, jitter, stabilization, or observation noise.
+Correlated observation noise is another explicit joint/process family:
+
+```python
+workflow.observe(
+    "Plant.vulnerability_curve.loss",
+    data=points,
+    noise=ProcessNoise(kernel=obs_noise_kernel, over=["psi"],
+                       value="loss"),
+)
+```
+
+For observations plus prediction queries, the finite joint includes
+both observed and queried projection points:
+
+```text
+[y_obs, y_pred] ~ MVN([mu_obs, mu_pred],
+  [[Koo, Kop],
+   [Kpo, Kpp]])
+```
+
+Closed-form conditioning is available only when the process law, kernel
+facts, matrix facts, and observation-noise facts satisfy the required
+obligations:
+
+```text
+closed_form_process_predictive(P, query_axis)
+posterior_predictive_of(pred_values, P, observations, query_axis)
+predictive_mean(pred_values)
+predictive_covariance(pred_values)
+```
+
+Otherwise the compiler constructs:
+
+```text
+process_inference_task(P, observed_axis, query_axis)
+```
+
+and routes through the ordinary Tier A/B/C dispatch ladder. Posterior
+samples, predictive means, covariances, and draws are workflow results
+with provenance. They do not mutate the source process and do not
+become new global process facts unless a closure rule proves that
+parametric posterior process.
+
+**Structured process values.** `V` may be scalar, vector, tensor,
+enum-narrowed record, or named record. A process prior over multiple
+value slots creates one structured process root. Separate
+`ProcessPrior` bindings create separate roots unless a visible shared
+latent construction or joint process law couples them.
+
+Example:
+
+```myco
+relation growth_response(
+    temp: Scalar<K>,
+    water: Scalar<dimensionless>,
+    height_gain: Scalar<m>,
+    leaf_area_gain: Scalar<m^2>,
+) { ... }
+```
+
+Workflow:
+
+```python
+workflow.bind(
+    "Plant.growth_response",
+    ProcessPrior(
+        index=["temp", "water"],
+        value=["height_gain", "leaf_area_gain"],
+        law=GaussianProcess(mean=structured_mean,
+                            kernel=growth_kernel),
+    ),
+)
+```
+
+Finite projections flatten into a product axis:
+
+```text
+projection axis: points i = 1..N
+component axis: fields/components a in components(V)
+joint covariance axis: (i, a) x (j, b)
+
+process_component_axis(P) = [height_gain, leaf_area_gain]
+joint_process_axis(P) = projection_axis x component_axis
+entry_unit_law(K[(i,a),(j,b)]) = unit(value[a]) * unit(value[b])
+```
+
+For example:
+
+```text
+cov((temp_i, water_i, height_gain),
+    (temp_j, water_j, leaf_area_gain)) : Scalar<m * m^2>
+```
+
+For a structured process value, `P.at(index)` returns one value of
+contract `V`; field access is a deterministic component projection:
+
+```text
+process_projection(g, P, index)
+component_projection_of(h, g, component=height_gain)
+component_projection_of(a, g, component=leaf_area_gain)
+same_process_root(h, a)
+```
+
+Mean functions normalize to:
+
+```text
+process_mean(P): I -> V
+```
+
+Component-wise workflow mean helpers are convenience only:
+
+```python
+mean={
+    "height_gain": Zero(),
+    "leaf_area_gain": LinearMean(...),
+}
+```
+
+They normalize to a structured mean value. Mean values obey ordinary
+units and contracts; unknown mean parameters are ordinary trainable
+sources.
+
+**Structured covariance validity.** Multi-output covariance validity is
+proved over the flattened `(index, component)` domain. Legal routes:
+
+```text
+k_flat: (I,Component<V>) x (I,Component<V>)
+    -> Scalar<unit(a) * unit(b)>
+PositiveDefinite<I x Component<V>>(k_flat)
+gram(k_flat, joint_axis) => positive_semidefinite(K_joint)
+```
+
+or an audited / derived operator-valued kernel fact:
+
+```text
+PositiveOperatorValuedKernel<I,V>
+```
+
+Construction rules can also prove validity. A separable output kernel
+is PSD when `k_input` is PD/PSD and `B` is PSD:
+
+```text
+k((x,a),(y,b)) = k_input(x,y) * B[a,b]
+```
+
+An LMC / coregionalization construction is PSD when each input kernel
+and component covariance is PSD:
+
+```text
+k((x,a),(y,b)) = sum_q B_q[a,b] * k_q(x,y)
+```
+
+Visible shared-latent factor constructions are another valid route.
+User source cannot assert structured covariance validity without
+evidence.
+
+**Dispatch and backend handoff.** Process priors use the same dispatch
+ladder after finite projection construction:
+
+```text
+ProcessPrior bound
+-> finite projections demanded
+-> finite joint / operator problem constructed
+-> A: closed-form process conditioning
+-> B: authorized approximation
+-> C: whole stochastic SCC / process inference task
+```
+
+Tier C receives the whole unresolved stochastic SCC: latent sources,
+process projections, observations, deterministic downstream relations,
+constraints, approximation/provenance facts, and kernel/process-law
+facts. Myco does not hand off one observation, one kernel, or one
+process factor at a time.
 
 Remaining kernel-adjacent work:
 
@@ -6697,8 +7048,11 @@ Remaining kernel-adjacent work:
   committed; concrete backend kernels, cost calibration, and stdlib
   family catalogs for Nyström, random features, spectral truncation,
   and HSGP-style plans remain implementation work.
-- **Process-level GP / HSGP machinery.** GP and HSGP are consumers of
-  the general kernel semantics above, not the definition of kernels.
+- **Concrete process-inference implementations.** The source/workflow
+  split, finite-projection semantics, structured values, and dispatch
+  contract are committed. Backend kernels, PPL serializers, closed-form
+  conditioning implementations, approximation-family catalogs, and
+  non-GP process-law catalogs remain implementation / catalog work.
 
 ### 29. Units Library
 
@@ -7265,7 +7619,7 @@ diagnostics, GPU-incompatibility of exact numeric types, chunk 04
 carryovers (per-residual objective exposure, heterogeneous `argmax`,
 event-driven topology, spatial operator lowering), Complex contracts,
 controller-interface affordances, Tier 2 family-catalog polish, and
-Tier 3 distribution machinery.
+remaining Tier 3 non-parametric catalog / backend machinery.
 
 `replaces` obligation retraction (monotonicity tension with the
 e-graph; cross-refs §8.11 declaration, §10.5 semantics, §15
@@ -7325,13 +7679,15 @@ subset that admits factorization or closed-form reparameterization
 (MVN, Dirichlet, Multinomial) already ships in Tier 1 so this open
 does not block the common cases.
 
-**Tier 3 distribution machinery.** Non-parametric and process-valued
-families (Gaussian Process, Dirichlet Process, Chinese Restaurant
-Process, Pitman-Yor, Indian Buffet Process, Beta Process). Open
-question whether these share §28 kernel routing (likely for GPs),
-require a distinct process-family mechanism, or are treated as
-Tier C opaque PPL handoff. No formal tier boundary drawn; design
-not yet scoped to a chunk.
+**Tier 3 distribution machinery.** GP-style process priors are scoped
+in §28.8: they bind through workflow `ProcessPrior<I,V>`, produce
+demand-driven finite projections, consume kernel / covariance facts,
+and dispatch through Tier A/B/C. Remaining Tier 3 work is catalog and
+backend/PPL machinery for other non-parametric families (Dirichlet
+Process, Chinese Restaurant Process, Pitman-Yor, Indian Buffet
+Process, Beta Process), plus concrete closed-form / approximate /
+opaque handlers for process laws that do not fit the GP finite-joint
+path.
 
 **Cost/objective vocabulary resolved.** Chunk 12 is no longer an open
 design item. `cost_of(expr)` owns extraction economics with

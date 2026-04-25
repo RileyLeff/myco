@@ -8,7 +8,10 @@
 kernel-operator semantics are locked; exact support / locality /
 truncation semantics are locked; sparse / index lowering semantics
 are locked; low-rank / feature approximation semantics are locked;
-GP/HSGP process machinery remains under discussion.
+process-prior / GP-HSGP consumer semantics are locked. Concrete
+backend implementations, PPL serializers, approximation-family
+catalogs, and non-GP process-law catalogs remain implementation /
+catalog work.
 
 ---
 
@@ -585,8 +588,122 @@ approx_feature_expansion(k_M, k, Phi_M, Lambda_M)
 tail_bound(k, modes_not_in(Phi_M), spectral_envelope)
 ```
 
-GP and HSGP process machinery consumes these facts, but process-level GP
-syntax, posterior inference, and specialized PPL handoff remain separate work.
+Process-prior machinery consumes these facts. HSGP is one workflow
+approximation pattern over general spectral / feature-expansion semantics, not
+a source-language mechanism.
+
+## 2.6 Process priors and GP / HSGP consumers
+
+Process priors are workflow-side sources over indexed `.myco` contracts. The
+source model declares indexed relations, fields, and contracts; the workflow
+binds a `ProcessPrior<I,V>` by naming index slots and value slots explicitly:
+
+```python
+workflow.bind(
+    "Plant.vulnerability_curve",
+    ProcessPrior(
+        index=["psi"],
+        value="loss",
+        law=GaussianProcess(mean=Zero(), kernel=matern52),
+    ),
+)
+```
+
+`index` and `value` are not input/output directions. They identify the finite
+projection axis and sample component coupled by the process law. The compiler
+does not infer them by relation position.
+
+Process-valued uncertainty is a sample shape / identity fact, not a third
+uncertainty kind:
+
+```text
+uncertainty kind: epistemic | aleatoric
+sample shape: scalar | vector | record | field/process |
+              graph-indexed family | temporal path
+```
+
+Core facts:
+
+```text
+process_root(P)
+process_index_contract(P) = I
+process_value_contract(P) = V
+projection_of(x_i, P, index_i)
+same_process_root(x_i, x_j)
+process_coupling(P, kernel_or_law)
+epistemic_process(P) | aleatoric_process(P)
+```
+
+The general source object is `ProcessPrior<I,V>`. A process law advertises
+finite-projection capabilities:
+
+```text
+ProcessLaw<I,V>
+FiniteProjectionLaw<I,V>
+ClosedFormConditionable<I,V>
+ProjectionLogDensity<I,V>
+ProjectionSampleable<I,V>
+ApproximationFamily<I,V>
+```
+
+A GP law requires `mean: I -> V` and `covariance/kernel: I x I ->
+Covariance<V>`. It emits a finite joint over demanded projections when model
+reads, observations, or prediction queries require them:
+
+```text
+points = observed_points union required_model_points union prediction_points
+K = gram(kernel(P), points)
+mu = mean(P, points)
+finite_process_joint(y_points, mu, K)
+```
+
+Projections from one process share one stochastic root; they are not independent
+roots created at each point. Observations condition those projections rather
+than equationally merging them with data:
+
+```text
+projection f_i = P.at(x_i)
+observation y_i = f_i + eps_i
+eps_i ~ NoiseLaw(...)
+likelihood_term(log_density(noise, y_i - f_i))
+```
+
+Exact observation is explicit, and noisy observation requires an explicit noise
+law. There is no silent nugget, jitter, or observation noise.
+
+Structured values are first-class. `ProcessPrior<I,V>` supports scalar, vector,
+tensor, enum-narrowed record, and named-record values. For structured `V`,
+finite projections flatten into `(projection, component)` axes:
+
+```text
+process_component_axis(P) = [height_gain, leaf_area_gain]
+joint_process_axis(P) = projection_axis x component_axis
+entry_unit_law(K[(i,a),(j,b)]) = unit(value[a]) * unit(value[b])
+```
+
+Structured covariance validity is proven over that flattened domain through a
+product-domain kernel fact, an audited `PositiveOperatorValuedKernel<I,V>`, or
+visible construction rules such as separable output kernels, LMC /
+coregionalization, or shared-latent factor construction. User source cannot
+assert covariance validity without evidence.
+
+Process priors dispatch after finite projection construction:
+
+```text
+ProcessPrior bound
+-> finite projections demanded
+-> finite joint / operator problem constructed
+-> A: closed-form process conditioning
+-> B: authorized approximation
+-> C: whole stochastic SCC / process inference task
+```
+
+Tier C receives the whole stochastic SCC, including process projections,
+observations, downstream deterministic relations, constraints, approximation
+facts, and kernel/process-law facts. Posterior predictive means, covariances,
+draws, and diagnostics are workflow results with provenance; they do not mutate
+the source process or become new global process facts unless a closure rule
+proves such a process.
 
 ---
 
@@ -644,7 +761,7 @@ action.
 
 This closes the need for a special kernel integration syntax. The remaining
 work is approximation policy for quadrature, concrete sparse / low-rank backend
-implementations, and GP/HSGP process consumers.
+implementations, and concrete process-inference backends.
 
 ---
 
