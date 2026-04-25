@@ -2,124 +2,236 @@
 
 Durable summary of the Python-side / workflow-side data layer. Locks
 the principle that Python is a dumb data-provenance layer and never
-knows `.myco` types. Enumerates the Python-visible surface, the node
-addressing scheme, and the bind / observe / run primitives. Leaves
-concrete API details as open work but pins the shape.
+knows `.myco` types. Locks catalog-backed addressing via `NodePath`,
+`FacetPath`, and workflow-only `Selector`s. The canonical home is
+`spec_new.md` §23.5 and §24.
 
 ## Principle
 
 **Python does not know Myco types.** The Python library is a generic
 data-provenance and orchestration layer. It handles data in, data out,
 run orchestration, and infrastructure (RNG, wall-clock, checkpointing).
-It does not handle type construction, contract implementation, or any
-model semantics.
+It does not handle type construction, contract implementation, or model
+semantics.
 
 Consequence: spore authors ship one artifact (`.myco` sources +
 `myco.toml`). There is no Python mirror package. The Python library's
-surface grows along one axis only — data primitives.
+surface grows along one axis only: generic workflow primitives and data
+adapters.
 
-## What Python sees
+## What Python Sees
 
-When a `.myco` model compiles, the resulting artifact exposes a **node
-catalog**: a structured manifest of every node the workflow can touch.
+When a `.myco` model compiles, the resulting artifact exposes a
+**catalog**: a structured manifest of every workflow-visible slot.
 
 Each catalog entry carries:
 
-- **Path** — dotted name into the model's entity tree
-  (`leaf.water_potential`, `stem.vc.b`, ...).
-- **Declared type** — the `.myco` type, expressed as a shape descriptor
-  (`Scalar<Pressure>`, `TimeSeries<Scalar<Dimensionless>>`,
-  `Tensor<Shape=[n_wavelengths], Scalar<Radiance>>`, ...).
-- **Binding role** — initial-condition, parameter, observed,
-  configuration-only, etc. (Exact taxonomy open; see below.)
-- **Units** — where applicable, the unit and dimension for coercion
-  against user-supplied values.
+- **Canonical path** — stable name for the declaration-level schema
+  slot.
+- **Declared type expression** — specialized when the compiled model is
+  concrete; explicitly constrained when an interface remains generic.
+- **Unit / numeric representation** — dimension, named unit where
+  relevant, dtype / representation requirements, and conversion
+  affordances.
+- **Axes / shape facts** — static, provider-validated, runtime-bounded,
+  dynamic-keyed axes, shape expression provenance, and matrix facts.
+- **Binding roles / facets** — whether the slot accepts source values,
+  initial values, observations, topology, process priors, controller
+  outputs, or output queries.
+- **Contracts / refinements** — obligations and capability requirements
+  that bound values must satisfy.
+- **Existence domain** — where the slot exists over instance, time,
+  geometry, event phase, enum variant, or dynamic topology.
+- **Diagnostics metadata** — source location, declaration origin,
+  stable catalog id, and human-readable schema text.
 
 Python does not see:
 
-- Relation bodies or their equational content
-- Contract implementations or method dispatch internals
-- E-graph structure, rewrite choices, extraction plans
-- Any spore-specific types as Python classes
+- relation bodies or their equational content;
+- contract implementations or method dispatch internals;
+- e-graph structure, rewrite choices, extraction plans;
+- spore-specific types, entities, or enums as Python classes.
 
-## Node addressing
+## Addressing
 
-Nodes are addressed by path. The path resolves into the entity tree
-declared in `.myco`, with a few extensions for populations and temporal
-indexing.
+The canonical workflow address is a catalog-backed handle:
 
-| Path form | Meaning |
-|---|---|
-| `"leaf.water_potential"` | Scalar field on each Leaf instance |
-| `"leaf.vc.b"` | Field-of-a-field-of-an-instance |
-| `"leaf.k@t=30_days"` | Observed value at a specific time |
-| `"leaf.k@all"` | All observed values across the run |
-| `"species.vuln_curve"` | Field on a shared entity (non-population) |
-| `"universals.R"` | Universal binding |
+- **`NodePath`** — a dumb handle to a catalog node / schema slot.
+- **`FacetPath`** — a dumb handle to a bindable or observable facet such
+  as `path.initial`.
+- **`Selector`** — a workflow-only query over catalog metadata for bulk
+  binding, bulk querying, diagnostics, and policy selection.
 
-The exact syntax is open. The principle is: paths are stable, explicit,
-and deterministic — no reflection, no string-mangling magic, no
-implicit broadcasting.
+All three are dumb workflow objects. They carry catalog identity and
+schema metadata; they do not implement `.myco` semantics.
+
+Strings remain accepted because serialized workflows, config files, CLI
+commands, and quick scripts need them. A string is not the canonical
+semantic object; it immediately resolves through the catalog.
+
+```python
+model = myco.load("leaf_model")
+cat = model.catalog
+
+psi = cat.path("leaf.water_potential")
+workflow.bind(psi, Series(df, column="psi", unit="MPa",
+                          index=["leaf_id", "time"]))
+
+# equivalent convenience, resolved through the same catalog:
+workflow.bind("leaf.water_potential",
+              Series(df, column="psi", unit="MPa",
+                     index=["leaf_id", "time"]))
+```
+
+Paths name schema slots, not runtime instances. Instance, time,
+coordinate, event phase, and variant selection live in bind/query
+arguments and catalog metadata.
+
+## Dynamic Existence
+
+Dynamic objects and event-driven fields are represented through the
+catalog entry's existence domain. A path can be valid even when no
+value exists for a particular coordinate.
+
+```python
+tip = cat.path("root.tip.position")
+run.query(tip, at={"root_id": roots, "time": times}, missing="masked")
+```
+
+Required missing/existence policies:
+
+- **`error`** — strict default for bindings and queries when requested
+  coordinates include nonexistent slots.
+- **`masked`** — return values plus an existence mask.
+- **`ragged`** — return dynamic-keyed data for axes whose cardinality
+  varies by time, event phase, or parent instance.
+- **`nan`** — output convenience only when dtype / unit and downstream
+  container support it; never the semantic model.
+
+Bindings over dynamic domains must either match the existence domain or
+explicitly provide an inactive / mask column. Values for pre-birth,
+post-removal, inactive enum-variant, or otherwise nonexistent slots are
+workflow-composition errors unless the adapter declares those rows
+inactive.
+
+## Complex Types, Enums, and Generics
+
+Structured values bind through the whole slot. Variant-specific field
+paths require explicit narrowing through the catalog:
+
+```python
+stage = cat.path("leaf.stage")
+workflow.bind(stage, {"tag": "Seedling",
+                      "fields": {"age": 12.0, "height": 0.08}})
+
+seedling_height = stage.variant("Seedling").field("height")
+```
+
+An unqualified path such as `leaf.stage.height` is invalid unless the
+field is common to every variant with the same type, unit, and
+existence domain. This mirrors the `.myco` narrowing rule.
+
+Compiled concrete models expose specialized generic uses wherever
+specialization is known. Reusable spore/interface artifacts may expose
+constrained generic entries, but the catalog spells the type parameters
+and required contracts explicitly. Workflow code never constructs or
+subclasses Myco type parameters in Python.
 
 ## Primitives
 
-The Python library provides three kinds of verbs. Exact spelling is
-open; the shape is pinned.
+The Python library provides generic workflow verbs. Exact method names
+can evolve; the semantic shape is locked.
 
-### Load / compile / spawn
+### Load / Compile
 
 ```python
-world = myco.load("my_model")           # compile + load a .myco model
-pop   = world.spawn("Leaf", n=1000)     # instantiate a population
+model = myco.load("my_model")   # compile + load a .myco model
+cat = model.catalog
 ```
 
 ### Bind
 
-Associate a named node with data:
+Associate a catalog path with source data:
 
 ```python
-# scalar field, one value per instance:
-pop.bind("kmax", values=np.full(1000, 3.0))
+leaf_kmax = cat.path("leaf.kmax")
+workflow.bind(leaf_kmax, Constant(3.0, unit="mol_m2_s"))
 
-# scalar field, sampled from a distribution:
-pop.bind("vc.b", sampled_from=myco.lognormal(mu=1.5, sigma=0.3))
+vc_b = cat.path("leaf.vc.b")
+workflow.bind(vc_b, Prior(myco.lognormal(mu=1.5, sigma=0.3)))
 
-# scalar field, factory callable per-instance:
-pop.bind("vc.b", factory=lambda: 3.0 + np.random.randn() * 0.2)
-
-# time-series forcing data:
-pop.bind("water_potential", series=psi_array, times=time_array)
+psi = cat.path("leaf.water_potential")
+workflow.bind(psi, Series(df, column="psi", unit="MPa",
+                          index=["leaf_id", "time"]))
 ```
 
-The library type-checks supplied values against the node catalog:
-shape, dtype, and (where applicable) units. Mismatches are errors at
-bind time, not at run time.
+The library type-checks supplied values against the catalog: shape,
+dtype, units, contracts, existence domain, and capability requirements.
+Mismatches are workflow-composition errors.
 
-### Observe
+### Bulk Binding
 
-Request values back from a completed run:
+Large models must not require one call per scalar. Bulk adapters map
+external data to catalog paths explicitly or through catalog-backed
+selectors.
 
 ```python
-run = world.run(duration=30_days)
-
-# scalar at final time:
-k_final = run.observe("k")              # shape (n_leaves,)
-
-# time series:
-k_series = run.observe("k", all_times=True)   # shape (n_leaves, n_t)
-
-# structured: subset of nodes as a dataframe:
-df = run.observe_frame(["k", "water_potential", "net_photosynthesis"])
+workflow.bind_frame(
+    df,
+    mapping={
+        "leaf_id": axis("leaf"),
+        "time": axis("time"),
+        "psi": cat.path("leaf.water_potential"),
+        "k": cat.path("leaf.conductance"),
+    },
+    units={"psi": "MPa", "k": "mol_m2_s"},
+)
 ```
 
-Output formats should cover the common scientific-Python shapes:
-NumPy arrays, xarray DataArrays, pandas DataFrames, nested dicts.
-Exact menu is open.
+Required adapter families: pandas / Polars dataframes, xarray objects,
+nested dict / list data, NumPy-like arrays or matrices, and file-backed
+readers such as CSV or Parquet. Exact class/function names remain API
+detail; catalog-driven validation is normative.
 
-## Sampling / distribution primitives
+### Observe Evidence
 
-The Python library ships a minimal set of distribution and utility
-primitives for binding:
+`workflow.observe(path, data)` attaches evidence to a catalog-resolved
+path as layer-2 envelope metadata. It does not assert equality unless
+the `.myco` model explicitly states a hard observation model.
+
+```python
+workflow.observe(
+    cat.path("leaf.water_potential"),
+    data=obs_df,
+    noise=Normal(sigma=obs_sd),
+)
+```
+
+### Query Outputs
+
+Output retrieval is a workflow-library query surface, not the evidence
+verb. Common scientific-Python containers should be supported: NumPy
+arrays, xarray DataArrays / Datasets, pandas / Polars DataFrames, and
+nested dicts.
+
+```python
+run = workflow.run(duration=30_days)
+
+k_final = run.query(cat.path("leaf.conductance"),
+                    at={"time": "final"},
+                    format="xarray")
+
+df = run.query_frame([
+    cat.path("leaf.conductance"),
+    cat.path("leaf.water_potential"),
+    cat.path("leaf.net_photosynthesis"),
+])
+```
+
+## Sampling / Distribution Primitives
+
+Workflow distribution builders and file readers are **value providers**
+or source-object helpers, not Myco distribution types.
 
 ```python
 myco.uniform(low, high)
@@ -130,91 +242,53 @@ myco.from_csv(path, column)
 myco.from_dataframe(df, column)
 ```
 
-These are **value providers**, not Myco distribution types. They
-produce concrete numbers at bind time. They are distinct from the
-`.myco` `Distribution<U>` contract, which lives inside the model and
-describes equational claims about random variables.
+They package values, providers, priors, or workflow artifacts for
+binding. They are distinct from `.myco` `Distribution<S>` contracts,
+which live inside the model and participate in graph semantics.
 
-The split is:
+## Run / Control
 
-- **`.myco` distributions** (`Normal`, `Beta`, `Gamma`, ...) — symbolic
-  objects participating in the e-graph; log-pdf and sampling are
-  compile-time/extraction-time concerns.
-- **Python value providers** — ordinary numerical RNG tools used to
-  pick concrete bind-time values.
-
-A user sampling a Python `myco.lognormal(...)` to initialize a field is
-just writing "please draw one random number per instance." It is not
-declaring a posterior or a prior; that's `.myco`-side.
-
-## Run / control
+RNG control, wall-clock scheduling, checkpointing, restart, backend
+selection, and relaxation policy are Python-side workflow concerns.
+None of these cross into `.myco` as model syntax.
 
 ```python
-run = world.run(duration=30_days, dt=0.5_hours)
-run = world.run(until=lambda s: s.leaf.water_potential.min() < -5_MPa)
+run = workflow.run(duration=30_days)
 run.checkpoint("day_15.ckpt")
 ```
 
-RNG control, wall-clock scheduling, checkpointing, restart — all
-Python-side. None of these cross into `.myco`; they are workflow
-concerns.
+## Mode B Interaction
 
-## Mode B interaction
+The dumb-data principle means per-instance contract-type selection
+cannot be driven from Python alone. Heterogeneous contract selection is
+represented `.myco`-side through sum types / enums (§3.10). Python binds
+catalog-validated tagged records; `.myco` dispatches by explicit
+`match`.
 
-The dumb-data principle means **per-instance contract-type selection
-cannot be driven from Python alone**. If Mode B is desired — different
-leaves in the same population using different VC families — the choice
-must be made `.myco`-side.
+## What This Locks
 
-Workable `.myco`-side patterns (one is enough, not all needed):
-
-- A discriminant field on each leaf with a tagged-union / sum-type VC.
-  Python binds the discriminant; `.myco` dispatches per-tag to the
-  matching relation.
-- A species-level field that commits to a family; leaves inherit via
-  composition (each species's population is homogeneous).
-- A `.myco` sub-model per VC family, with a dispatcher relation
-  selecting based on an integer tag.
-
-The tagged-union / sum-type approach is cleanest but depends on Myco
-having sum types. See §35 open for the Mode B mechanism question.
-
-## What this locks
-
-- Python is a data layer, not a model layer. Locked.
+- Python is a data layer, not a model layer.
 - Spore authors ship `.myco` + `myco.toml` only; no Python mirror.
-  Locked.
-- Node catalog, path-based addressing, bind / observe / run verb
-  families. Shape pinned; exact API open.
+- Catalog-backed `NodePath` / `FacetPath` is the canonical address
+  model; strings are serialization / convenience.
+- `Selector`s are workflow-only catalog queries, not source wildcards.
+- Paths name schema slots, not runtime instances or Python objects.
+- Existence domains, masks, and ragged outputs are required for dynamic
+  worlds.
+- Bulk binding is first-class and adapter-driven.
 - Python value providers are distinct from `.myco` distributions.
-  Locked.
 
-## Open items
+## Remaining API Details
 
-- Exact syntax for node paths (especially temporal indexing).
-- Exact typing of the node catalog (how units, shapes, and binding
-  roles are expressed in Python).
-- The complete menu of observe output formats.
-- Mode B mechanism: sum types / tagged unions in `.myco`, or a
-  different dispatcher story.
-- Whether the node catalog is user-readable (`hypha describe
-  my_model`) or only library-consumed.
-- Whether bind accepts `.myco`-side expressions, or only Python-
-  computed concrete values.
-- Streaming / partial-observation APIs for long-running studies.
+- Exact Python method/class names for adapters and query containers.
+- Full output-format menu and streaming / partial-observation APIs.
 - Parameter inference / calibration API (posterior draws, MCMC
-  integration). This is load-bearing for the research use case but
-  depends on the distribution contract shape (chunk-08 deferred item).
+  integration), building on the locked distribution and process-prior
+  semantics.
 
-## Relationship to the relation/fn lock (chunk 08)
+## Relationship to the Relation/Fn Lock
 
 Chunk 08's dumb-data Python principle is the partner to the "ban user
 fn, everything equational" rule on the `.myco` side. Together they
 establish: **all model semantics lives in `.myco`; Python handles data
-and orchestration.** Neither side grows the other's responsibilities.
-
-## Status
-
-Principle locked. Shape of the API pinned. Exact syntax, naming, and
-output-format menu open. Needs its own follow-up sweep across §24
-(workflow verbs) and §31 (Python API) once the exact syntax lands.
+and orchestration.**

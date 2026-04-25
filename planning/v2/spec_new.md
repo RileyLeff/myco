@@ -194,7 +194,8 @@ Terms: `variable`, `bound variable`, `free variable`, `relation`,
 `e-class`, `envelope`, `universal`, `SCC`, `residual graph`,
 `~` (distribution operator), `impl`, `some`, `` `approximate` `` block,
 `observe`, `regime boundary`, `regime surface`, `crossing policy`,
-`relaxation`.
+`relaxation`, `catalog`, `catalog entry`, `node path`, `facet path`,
+`selector`, `existence domain`, `adapter`.
 
 ---
 
@@ -4763,10 +4764,11 @@ The boundary between `.myco` and Python.
 ### 23. The `.myco` ↔ Python Boundary
 
 **Summary.** `.myco` declares structure; Python supplies values and
-drives execution. The compiler stays projection-free: solver choice,
-projection flavor, and numeric configuration all cross from Python.
-Subsections cover runtime `where`, multi-binding compilation,
-cross-study callable reuse, and the two error tiers.
+drives execution through a catalog-backed workflow surface. The
+compiler stays projection-free: solver choice, projection flavor, and
+numeric configuration all cross from Python. Subsections cover runtime
+`where`, multi-binding compilation, cross-study callable reuse, the
+two error tiers, and catalog-backed paths.
 
 `.myco` declares structure; Python supplies values and drives
 execution. The compiler does not auto-emit projection or solver
@@ -4777,14 +4779,15 @@ cross this boundary.
 
 **Dumb-data Python layer.** Python never sees `.myco` types as
 Python classes. The compiled artifact exposes a node catalog (path,
-declared type shape, binding role, units, refinement bounds where
-declared). Workflow verbs operate over those path names, not over
-spore-specific Python symbols. Spore authors ship one artifact
-(`.myco` sources plus `myco.toml`); there is no Python mirror
-package. The Python library grows along one axis only — generic
-source, evidence, and run primitives — not along the shape of any
-particular model. Exact syntax for node paths, the typing of the
-catalog, and output-query formats remain open (§35).
+declared type shape, binding role, units, axes, existence domain, and
+refinement bounds where declared). Workflow verbs operate over
+catalog-backed paths, not over spore-specific Python symbols. Spore
+authors ship one artifact (`.myco` sources plus `myco.toml`); there
+is no Python mirror package. The Python library grows along one axis
+only — generic source, evidence, and run primitives — not along the
+shape of any particular model. The catalog/path surface is locked in
+§23.5; concrete convenience method names and output container menus
+remain workflow-library details.
 
 Python value providers (`Constant`, `Series`, `Prior`, `Trainable`,
 `Controller`, `ProcessPrior`, CSV readers, array adapters,
@@ -4799,9 +4802,11 @@ language feature. Large models must not require one `bind(...)` call
 per scalar. The Python library should accept structured data through
 catalog-aware adapters for pandas / Polars dataframes, xarray
 objects, nested dict / list data, NumPy-like arrays or matrices, and
-file-backed readers such as CSV or Parquet. Exact adapter names,
-path-matching rules, schema diagnostics, and partial-binding behavior
-remain open in the workflow API design (§35).
+file-backed readers such as CSV or Parquet. Adapter spelling is a
+workflow-library API detail; adapter semantics are catalog-driven:
+external columns, dimensions, keys, and arrays are matched to
+`NodePath` / `FacetPath` handles or explicitly resolved canonical
+strings, then checked against catalog metadata before the run starts.
 
 Workflow-only capabilities live here rather than in `.myco`: RNG
 seeds, checkpoint/restart, wall-clock limits, backend selection,
@@ -4961,6 +4966,148 @@ divergence, overflow, solver non-convergence) are a third
 tier that this spec does not address normatively; they live
 in backend and deployment surfaces.
 
+#### 23.5 Workflow Catalog and Path Surface
+
+**Summary.** The compiled artifact exposes a catalog. The canonical
+workflow address is a catalog-backed `NodePath` or `FacetPath`; strings
+are accepted as serialization / convenience and immediately resolve
+through the catalog. A path names a declaration-level schema slot, not
+a runtime Python object. Complex values, generics, events, and dynamic
+existence are represented by catalog metadata: type expression, axes,
+facets, constraints, and existence domain.
+
+The workflow catalog is the manifest of everything the workflow may
+bind, observe, query, configure, or diagnose. A catalog entry carries:
+
+- **Canonical path.** Stable source-derived name for the schema slot.
+- **Declared type expression.** The `.myco` type after compilation:
+  specialized for concrete model instantiations, or carrying explicit
+  type parameters and constraints at reusable spore / interface
+  boundaries.
+- **Unit and numeric representation.** Dimension, named unit when
+  relevant, dtype / representation requirements, and conversion
+  affordances at the binding boundary.
+- **Axes and shape facts.** Static axes, provider-validated axes,
+  runtime-bounded axes, dynamic-keyed axes, matrix facts, and shape
+  expression provenance.
+- **Binding roles and facets.** Whether the slot accepts source
+  values, initial values, observations, topology, process priors,
+  controller outputs, or output queries. Facets such as
+  `path.initial` are catalog entries or `FacetPath`s, not ad hoc
+  string suffixes.
+- **Contracts and refinements.** Contracts, refinement facts,
+  obligations, and backend capabilities required for a valid binding.
+- **Existence domain.** The condition under which the slot exists over
+  instance, time, geometry, event phase, or enum variant axes.
+- **Provenance and diagnostics.** Source location, declaration origin,
+  stable catalog id, and schema text used in workflow-composition
+  diagnostics.
+
+`NodePath` is a dumb workflow handle containing the canonical path and
+catalog id. It does not expose `.myco` types as Python classes and it
+does not implement model semantics. Workflow verbs accept a `NodePath`
+or the equivalent canonical string; strings are resolved at
+composition time and diagnostics report the resolved catalog entry.
+Serialized workflows store canonical strings / ids so plans remain
+portable across processes and machines.
+
+```python
+model = myco.load("leaf_model")
+cat = model.catalog
+
+psi = cat.path("leaf.water_potential")
+workflow.bind(psi, Series(df, column="psi", unit="MPa",
+                          index=["leaf_id", "time"]))
+```
+
+`FacetPath` addresses a bindable or observable facet of a node:
+
+```python
+height = cat.path("leaf.height")
+workflow.bind(height.facet("initial"), Constant(0.02, unit="m"))
+workflow.observe(height, data=height_df, noise=Normal(sigma=obs_sd))
+```
+
+A `Selector` is a workflow-only query over catalog metadata, used for
+bulk binding, bulk querying, diagnostics, and policy configuration. It
+is not `.myco` wildcard syntax and it does not become a source
+language construct. Selectors may match by role, unit, contract, axis,
+path prefix, event phase, or user-facing tags, but every selected slot
+resolves to concrete catalog entries before composition succeeds.
+
+```python
+rates = cat.select(role="bindable", contract="PhotosynthesisRate")
+workflow.bind_frame(df, mapping={
+    "leaf_id": axis("leaf"),
+    "time": axis("time"),
+    "A_net": rates.one(path="leaf.net_photosynthesis"),
+})
+```
+
+Paths name schema slots, not runtime instances. Instance, time,
+coordinate, variant, and event-phase selection live in binding/query
+arguments and catalog metadata rather than in fragile object-like path
+strings. A dynamic path may be perfectly valid even where no value
+exists at a particular coordinate:
+
+```python
+tip = cat.path("root.tip.position")
+run.query(tip, at={"root_id": roots, "time": times}, missing="masked")
+```
+
+The required missing/existence policies are:
+
+- **`error`.** Strict default for bindings and queries when requested
+  coordinates include nonexistent slots.
+- **`masked`.** Return values plus an existence mask.
+- **`ragged`.** Return dynamic-keyed data for axes whose cardinality
+  varies by time, event phase, or parent instance.
+- **`nan`.** Convenience output policy only when dtype / unit and
+  downstream container support it; never the internal semantic model.
+
+Bindings over dynamic domains must either match the existence domain
+or explicitly provide an inactive / mask column. Supplying values for
+pre-birth, post-removal, inactive enum-variant, or otherwise
+nonexistent slots is a workflow-composition error unless the adapter
+declares those rows inactive.
+
+Structured values bind through the whole slot. Variant-specific field
+paths require explicit narrowing through the catalog:
+
+```python
+stage = cat.path("leaf.stage")
+workflow.bind(stage, {"tag": "Seedling",
+                      "fields": {"age": 12.0, "height": 0.08}})
+
+seedling_height = stage.variant("Seedling").field("height")
+```
+
+An unqualified path such as `leaf.stage.height` is invalid unless
+`height` is common to every variant with the same type, unit, and
+existence domain. This mirrors the `.myco` rule: field access on
+enum-typed values requires narrowing.
+
+For generics, compiled concrete models expose specialized catalog
+entries wherever specialization is known. Reusable spore/interface
+artifacts may expose constrained generic entries, but the catalog
+spells the type parameters and required contracts explicitly; workflow
+code never constructs or subclasses Myco type parameters in Python.
+
+```python
+CatalogEntry(
+    path="growth_response.rate",
+    type_params={"T": "PhotosyntheticOrgan"},
+    requires=["T: HasArea", "T: HasConductance"],
+    type="Scalar<Rate>",
+)
+```
+
+The path surface therefore scales to complex types and dynamic worlds
+without making Python a model layer: Python holds catalog-backed
+handles and data adapters; the compiler owns type interpretation,
+existence reasoning, event phases, generic specialization, and
+backend lowering.
+
 ### 24. Workflow Source Model
 
 **Summary.** The workflow-composition surface has three binding
@@ -4972,7 +5119,8 @@ decides how sources participate in execution, training, or PPL.
 
 `.myco` states world claims. Workflow composition materializes those
 claims for a particular experiment by attaching sources and evidence
-to paths in the compiled node catalog.
+to `NodePath` / `FacetPath` handles resolved through the compiled
+catalog (§23.5).
 
 #### 24.1 The Three Binding Verbs
 
@@ -4982,20 +5130,25 @@ evidence. Orchestration verbs such as `load`, `spawn`, `run`,
 `checkpoint`, and output queries are workflow-library operations, not
 model bindings.
 
-- **`bind(path, source)`.** Attaches a source object to a node path or
-  path facet such as `path.initial`. The source declares its value
-  shape, units, dtype, gradient participation, and any contracts.
+- **`bind(path, source)`.** Attaches a source object to a `NodePath`,
+  `FacetPath`, or equivalent canonical string. The source declares its
+  value shape, units, dtype, gradient participation, and any
+  contracts.
 - **`bind_topology(path, geometry)`.** Supplies concrete topology or
   discretization data for a declared geometry (§11).
-- **`observe(path, data)`.** Attaches evidence to a path as layer-2
-  envelope metadata (§13.8, §13.9). It does not assert equality with
-  the data unless the `.myco` model explicitly states a hard
-  observation model.
+- **`observe(path, data)`.** Attaches evidence to a catalog-resolved
+  path as layer-2 envelope metadata (§13.8, §13.9). It does not assert
+  equality with the data unless the `.myco` model explicitly states a
+  hard observation model.
+
+All three verbs resolve their path arguments through the catalog.
+Bulk surfaces may accept `Selector`s only when their fanout behavior
+is explicit and every selected entry is validated independently.
 
 The verbs fire at workflow composition. Bind-time type checking
 validates shape, dtype, units, path existence, contract satisfaction,
-N-max ceilings, and backend capability requirements before the run
-starts.
+N-max ceilings, existence-domain compatibility, and backend
+capability requirements before the run starts.
 
 Workflow binding is the only path by which source objects become
 Layer-2 envelope facts or Layer-3 provider records (§16, §17.1 source
@@ -7692,7 +7845,7 @@ canonical spec.
 
 **Summary.** Outstanding design chunks: chunk 03 kernels (resumes
 after substrate lock) and chunk 11 sum types / enums. Chunks 05, 06,
-07, 08, 12, and 13 are resolved and kept here as completed
+07, 08, 09, 12, and 13 are resolved and kept here as completed
 references.
 
 - **Chunk 05.** RESOLVED: matrix details. Heterogeneous-unit type
@@ -7724,6 +7877,15 @@ references.
   relations, not a separate keyword; reusable user-authored model
   structure adds graph obligations via relations, not expression-
   position functions.
+- **Chunk 09.** RESOLVED: workflow data layer. Python is a dumb data
+  / orchestration layer, not a model layer; spore authors ship `.myco`
+  plus `myco.toml`, not Python mirror packages. The canonical workflow
+  address model is catalog-backed `NodePath` / `FacetPath` with
+  canonical string serialization; `Selector`s are workflow-only catalog
+  queries for bulk binding / querying / diagnostics. Catalog entries
+  carry type, unit, axes, contracts, facets, and existence domains so
+  complex types, generics, enums, and event-driven dynamic worlds stay
+  expressible without Python owning Myco semantics.
 - **Chunk 03.** Kernels, resumed after substrate lock. Kernel identity
   is locked: kernels are parameterized relations over two input
   domains and one scalar output, with point-point same-locus kernels

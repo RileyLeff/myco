@@ -89,6 +89,10 @@ gap-review stale list, subsequent design locks.
 | compiler auto-emitted admissibility projections | workflow picks projection flavor (`hard_clip` / `sigmoid` / `soft_clip`) | projection-free-compiler principle |
 | compiler auto-selected solver | workflow selects | same principle |
 | controller as `.myco` construct | workflow-only concept | strict `.myco` / Python split |
+| generated Python mirror classes for `.myco` models, entities, generics, or enums | catalog-backed `NodePath` / `FacetPath` handles, catalog-validated tagged records, plus optional thin data helpers | Python remains a dumb workflow layer; the catalog owns validation and type interpretation |
+| string-only workflow ABI as the canonical address model | catalog-backed handles with canonical string serialization | strings are useful for configs and CLIs, but complex types, generics, axes, and existence domains need catalog metadata |
+| path strings as runtime object references (`leaf[7].k@t=...`) | schema `NodePath` plus explicit query / bind coordinates and missing policy | paths name declaration-level slots, not Python objects or guaranteed-live instances |
+| implicit binding across nonexistent dynamic instances | catalog existence domains with strict / masked / ragged handling | events and dynamic topology can make slots absent; data for absent coordinates must be explicit or rejected |
 | "slot is gone" narrative / "v2.0 had X" retirement prose | none — use anti_spec.md instead of in-spec versioning | consolidation strips versioning prose |
 | X-category bundling pole L'Hopital and `identify` as one rewrite shape | X1 (pole L'Hopital, removable-singularity operator substitution) / X2 (identify, quotient-induced value equality via Layer-3 site records) | different data paths: X1 rewrites an operator at a locus, X2 installs a Layer-1 merge mediated by Layer-3 adjacent keyed state. Bundling obscured the geometric-fact-in-Layer-3 / value-equality-in-Layer-1 split. Resolved 2026-04-22 |
 | "structural-predicate-gated" as the X-category name | "site-gated strict" | collision with §16.4 structural tolerance and §17.4 structural shape; X fires on a site or geometric predicate owned by a geometry, not on structural envelope properties |
@@ -161,7 +165,6 @@ gap-review stale list, subsequent design locks.
 | implicit same-name carryover in enum variant transitions | every next-variant field supplied explicitly | same field name does not prove same meaning, unit, or provenance |
 | enum variant transition outside `event` bodies | event-boundary `becomes` only | shape/discriminant changes are regime-boundary crossings, not mid-solve mutation |
 | tombstoned access to removed enum-variant fields | removed fields leave scope unless explicitly copied into the next variant or an event/history record | history is a model claim, not implicit storage |
-| generated Python mirror classes for `.myco` enums | catalog-validated dumb-data tagged records, plus optional thin helpers | Python remains catalog-driven and does not mirror source type definitions |
 | lifted arithmetic or `materialize(prior, out)` sugar for `Prior<S>` in v2.1 | explicit exhaustive `match` on `Prior<S>` | keeps `~` visible for the first compiler; sugar waits for real model pressure |
 | ordinary-gradient-through-discontinuity semantics | regime-boundary records with explicit crossing policy | gradients flow inside regimes; crossings require one-sided, subgradient, saltation, estimator, relaxation, or strict rejection |
 | default auto-smoothing of nonsmooth source models | strict default plus workflow-selected relaxation handlers | smoothing is either a `.myco` model claim or an explicit workflow surrogate, never compiler housekeeping |
