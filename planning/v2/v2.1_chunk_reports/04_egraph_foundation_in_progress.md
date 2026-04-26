@@ -1295,11 +1295,14 @@ ordinary Layer-1 expressions. Homogeneous and heterogeneous collections
 share the same surface, and type-specific field access requires explicit
 match / narrowing.
 
-**O4.7 — Event-driven topology mutation.** Events add nodes, edges,
-equivalences. This is covered at the semantic level by Section 5 (events
-add facts). Operationally, the e-graph's saturation must handle
-incremental additions without re-running from scratch. Implementation
-concern; not a design blocker but needs a note.
+**O4.7 — Event-driven topology mutation. RESOLVED (2026-04-26).**
+Events emit `TopologyDelta`s at regime boundaries; applying a delta to
+the active `TopologyVersion` produces the next version. Execution uses
+explicit topology handlers (`CapacityMask`, `EventReplan`,
+`DynamicKeyed`) selected through portable workflow intent and resolved
+backend / device capability facts. Incremental saturation and plan-cache
+reuse are implementation optimizations with a full-replan equivalence
+requirement, not semantic assumptions.
 
 **O4.8 — Spatial operator lowering.** Kernels, integrals, convolutions.
 Deferred to the kernel thread resumption. This chunk report provides the
@@ -1931,10 +1934,11 @@ surface.
    math, collections, continuous/discrete, functions/contracts, temporal,
    stochastic, inequalities, opaque callables, events, SCCs, learning
    targets).
-8. Phase 4 — remaining audit-specific items (O4.7 incremental
-   saturation, O4.8 spatial operator lowering). O4.2 / O4.3 / O4.4 /
-   O4.5 already resolved; O4.1 resolved by the obligation ledger; O4.6
-   resolved by `Selected<T>` selector semantics.
+8. Phase 4 — remaining audit-specific item: O4.8 spatial operator
+   lowering. O4.2 / O4.3 / O4.4 / O4.5 already resolved; O4.1
+   resolved by the obligation ledger; O4.6 resolved by `Selected<T>`
+   selector semantics; O4.7 resolved by versioned topology and explicit
+   topology-handler capability negotiation.
 9. Phase 1 Q2 — structural partition of commitment section.
 10. Write the actual commitment section text into the spec (two
     placements).

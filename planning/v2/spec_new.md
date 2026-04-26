@@ -197,7 +197,8 @@ Terms: `variable`, `bound variable`, `free variable`, `relation`,
 `relaxation`, `catalog`, `catalog entry`, `node path`, `facet path`,
 `selector`, `existence domain`, `adapter`, `residual site`,
 `residual realization`, `selected handle`, `Selected<T>`,
-`SelectedSite`.
+`SelectedSite`, `TopologyDelta`, `TopologyVersion`, `capability profile`,
+`resolved run lock`.
 
 ---
 
@@ -562,23 +563,32 @@ tensor operations while still letting models intentionally assemble
 linear-algebra objects from entity state.
 
 Dynamic topology and tensor shapes use regime-boundary semantics
-(§8.10) plus `ShapePhase` evidence:
+(§8.10) plus `ShapePhase` evidence. Topology-changing events emit a
+`TopologyDelta`; applying the delta to the current `TopologyVersion`
+produces the next version. The runtime may apply that transition by
+capacity masks, event-time replanning, dynamic keyed state, or a later
+backend-specific handler, but the semantic object is always the
+versioned topology, not in-place shape mutation inside an SCC solve:
 
 - **`static`.** Shape known from source / generics.
 - **`provider_validated`.** Shape known after workflow materializes a
   topology or dataset before planning.
 - **`runtime_bounded`.** Fixed maximum shape with alive masks,
-  zero-pattern facts, or capacity records. Shape is stable; active
-  set changes.
+  zero-pattern facts, or capacity records. Tensor shape is stable;
+  active set changes. This is the `CapacityMask` handler and requires
+  backend capability for masked capacity arrays and any needed masked
+  AD / sparse update operations.
 - **`event_replan`.** A topology-changing event creates a new
   topology version and a new member of an SCC family. The executor
-  stops at the event boundary, applies the topology diff, recomputes
+  stops at the event boundary, applies the topology delta, recomputes
   axes / facts / sparsity / obligations, and re-lowers or dispatches
-  a cached plan for the new version.
+  a cached plan for the new topology fingerprint. This is the
+  `EventReplan` handler.
 - **`dynamic_keyed`.** Axis sets are runtime maps keyed by entity IDs.
-  This is a valid Myco semantic mode for CPU / host execution and
-  dynamic sparse runtimes; compiled accelerator backends may reject
-  or route through host / replan according to capability facts.
+  This is the `DynamicKeyed` handler and is a valid Myco semantic mode
+  for CPU / host execution and dynamic sparse runtimes. Compiled
+  accelerator backends must advertise direct support or the workflow
+  must explicitly authorize host / replan routing.
 - **`dynamic_unknown`.** Shape is not sufficiently bounded or keyed
   for a selected backend / handler. Planning reports an unmet
   obligation or asks the workflow to choose a crossing policy (§24.6).
@@ -587,9 +597,12 @@ An SCC may not silently change tensor shape in the middle of one
 solve step. Shape-changing events cross a regime boundary and must
 use one of the explicit handlers above (`CapacityMask`,
 `EventReplan`, `DynamicKeyed`, or a later backend-specific handler).
-CPU reference execution is semantics-complete for `dynamic_keyed`;
-JIT / GPU backends advertise which modes they lower without host
-fallback.
+Incremental saturation and plan-cache reuse are implementation
+optimizations only; they must produce the same symbolic plan as a
+fresh compile from the source bundle, workflow intent config, and
+event history. CPU reference execution is semantics-complete for
+`dynamic_keyed`; JIT / GPU backends advertise which modes they lower
+without host fallback.
 
 The `convert` facility (§5.1) extends to tensors only for
 meaning-preserving isomorphisms, materializations, and widenings:
@@ -4872,12 +4885,37 @@ names exposed through run-config (§24.5); backends choose the concrete
 checkpointing primitive or scan representation.
 
 Event-time topology mutation crosses a regime boundary (§8.10) rather
-than mutating an SCC's tensor shape in place. The committed semantic
-modes are `runtime_bounded`, `event_replan`, and `dynamic_keyed`
-(§3.8). Incremental e-graph resaturation during a run is an
-implementation target, not required for semantic correctness:
-`event_replan` may rebuild / re-lower at the event boundary and
-`dynamic_keyed` may execute through a host runtime. Mesh
+than mutating an SCC's tensor shape in place. A firing emits a
+`TopologyDelta`; applying it to the active `TopologyVersion` produces a
+new version whose live entities, edges, loci, axes, sparsity facts,
+obligations, SCC family member, selected sites, residual sites, and
+backend lowering artifacts are re-derived from source plus event
+history. Prior-version ground terms remain valid historical facts.
+
+The committed topology handlers are `runtime_bounded`,
+`event_replan`, and `dynamic_keyed` (§3.8, §24.5, §31.1):
+
+- **`runtime_bounded` / `CapacityMask`.** Tensor shapes remain fixed;
+  events update alive masks, free lists, capacity records, and sparse /
+  zero-pattern facts. Overflow is a runtime error (§21.4), not silent
+  growth.
+- **`event_replan` / `EventReplan`.** The executor stops at the event
+  boundary, applies the topology delta, invalidates every derived plan
+  artifact whose provenance mentions the changed topology version, and
+  rebuilds or dispatches a cached plan for the new topology fingerprint.
+- **`dynamic_keyed` / `DynamicKeyed`.** Runtime maps keyed by entity IDs
+  represent changing axes directly. This is semantics-complete on the
+  CPU reference backend and valid for backends that advertise direct
+  dynamic-keyed support.
+
+Invalidation is provenance-driven. At minimum, a topology delta can
+invalidate collection membership, extracted tensor axes, shape and
+sparsity facts, obligation-ledger entries, SCC decomposition, selected
+handle sites, residual sites, spatial lowering products, and backend
+plan caches. Incremental e-graph resaturation during a run is an
+implementation target, not required for semantic correctness: any
+incremental strategy must be equivalent to full replanning from the
+source bundle, workflow intent config, and event history. Mesh
 discretization lowering likewise remains an architectural open item
 (Appendix C P1): whether spatial operators become e-graph rewrites or
 pre-e-graph codegen is not yet locked.
@@ -4952,16 +4990,18 @@ The textual report includes:
 - Symbolic resolutions, closure-policy choices, and rewrite groups.
 - Residual graph nodes, original relation names, and extraction costs
   (§19).
-- Numerical fallbacks, backend capability requirements, and selected
-  fallback policy (§31).
+- Numerical fallbacks, backend / device capability requirements,
+  selected topology handler, selected fallback policy, and resolved
+  run-lock identity (§21.3, §31).
 - Execution order and temporal state requirements.
 - Observation, source, and topology bindings that materialize the
   plan.
 - Envelope facts: bounds, distributions, approximation tolerances,
   provenance, and rewrite traces (§16).
-- Regime boundaries and relaxation ledger entries: detected surfaces,
-  continuity / derivative class, selected crossing policy, and any
-  workflow-authorized surrogate used by the run (§8.10, §24.6).
+- Regime boundaries and crossing-handler ledger entries: detected
+  surfaces, continuity / derivative class, selected crossing policy,
+  topology handler, and any workflow-authorized surrogate used by the
+  run (§8.10, §24.6).
 - Obligation ledger entries: keys, loci / events / guards, explicit
   fulfillments, selected package defaults, suppressed default
   candidates, unfulfilled obligations, and conflicts (§8.11).
@@ -5575,12 +5615,13 @@ materializes a specific instance.
 
 **Summary.** Run-config is the non-binding configuration the
 workflow supplies at composition: seed, backend, verbosity, dt
-(when used), profile hints, gradient regime, relaxation policy,
-default-fulfillment policy, and fallback policy.
+(when used), profile hints, gradient regime, crossing-handler policy,
+topology-handler policy, default-fulfillment policy, and fallback policy.
 Distinct from source binding since run-config does not bind model
-values; it configures how the
-compiled plan executes. Different runs of one plan can use
-different run-config without recompilation.
+values; it configures how the compiled plan executes. Different runs of
+one source bundle can use different run-configs; the compiler may reuse
+plan-cache state where the backend / handler capability envelope is
+unchanged.
 
 Run-config is the non-binding configuration the workflow
 supplies at composition. Distinct from `bind`: run-config
@@ -5592,16 +5633,30 @@ Representative fields:
 - `run.config.seed`. RNG seed for stochastic SCCs.
 - `run.config.backend`. Backend selection and its
   capability-fallback mode (error / host / emulate, §31).
+- `run.config.backend.intent`. Portable backend intent: backend family,
+  compiler mode, device class, and required / rejected capability
+  classes. This should avoid machine-specific device IDs unless exact
+  reproduction is required.
 - `run.config.backend_version`. Optional backend identity / version
   pin when reproducibility requires an exact implementation (§31.4).
+- `run.config.topology_handlers`. Allowed dynamic-topology handlers,
+  optionally ordered by preference: `CapacityMask`, `EventReplan`, and
+  `DynamicKeyed` (§3.8, §21.3). The compiler may select only a handler
+  in this allowed set and only when the resolved backend/device
+  advertises the required capability facts or the workflow explicitly
+  authorizes host / emulate fallback.
 - `run.config.verbosity`. Diagnostics level.
 - `run.config.dt`. Referenced via `bind("config.dt", Constant(...))`
   or `bind("config.dt", Series(...))` in a discrete-time model
   (§9.1).
 - `run.config.gradient_regime`. Long-rollout gradient strategy:
   `full_BPTT`, `truncated_BPTT(k)`, or `checkpointed`.
-- `run.config.relaxations`. Crossing / surrogate policy for regime
-  boundaries (§8.10, §24.6). Default is `strict`.
+- `run.config.crossing_handlers`. Handler policy for regime boundaries
+  (§8.10, §24.6): strict gradients, one-sided / subgradient rules,
+  surrogate relaxations, estimators, and exact topology handlers.
+  Default is `strict`.
+- `run.config.relaxations`. Optional convenience view for the surrogate
+  / smoothing subset of `crossing_handlers`.
 - `run.config.default_fulfillments`. Obligation-ledger policy for
   package-provided default candidates (§8.11): `allow`, `warn`, or
   `error`. Default is `allow`; audit workflows can require explicit
@@ -5622,30 +5677,57 @@ Representative fields:
   inference backend, or enabling approximate-inference switches. The
   compiler never assumes these silently.
 
+`run.config.topology_handlers` is the coarse allow-list for dynamic
+topology execution in the run. `run.config.crossing_handlers` is the
+per-opportunity selection surface. When both are supplied, every
+topology handler selected by `crossing_handlers` must belong to the
+allow-list, and the resolved backend/device must advertise the
+corresponding capability facts unless fallback is explicitly authorized.
+
+Run-config separates **portable intent** from the **resolved run lock**.
+The intent config is what users should share: backend family or device
+class, allowed topology handlers, fallback policy, and semantic
+requirements. At plan binding, the compiler resolves that intent against
+the actual backend, compiler mode, device / hardware, version, and
+capability probe results. The run record / lock captures the concrete
+selection: backend family and version, compiler mode, device kind,
+selected topology handler, capability profile set, capability-probe
+hash, fallback authorizations, and any host / emulate routes actually
+used. This keeps shared workflows portable while preserving exact
+reproducibility for completed runs.
+
 Run-config fields may be referenced from workflow bindings as
 paths (`bind("run.config.dt", Constant(0.01))`); the
 compiler does not bake them into the plan beyond the
 binding surface. Different runs of the same plan can use
-different run-config without recompilation.
+different run-configs; backend or topology-handler changes may require
+rebinding or re-lowering while preserving the same source semantics.
 
-#### 24.6 Relaxation Opportunity Inventory
+#### 24.6 Relaxation and Crossing-Handler Inventory
 
-**Summary.** Relaxations are workflow-authorized surrogate choices
-over regime boundaries. The compiler exposes a passive inventory of
+**Summary.** Relaxations and crossing handlers are workflow-authorized
+choices over regime boundaries. Some handlers are surrogate choices
+(`SmoothStep`, estimators); dynamic-topology handlers (`CapacityMask`,
+`EventReplan`, `DynamicKeyed`) preserve source semantics while choosing
+an execution strategy. The compiler exposes a passive inventory of
 opportunities with stable IDs, compatible handlers, defaults, and
-diagnostics. Default behavior is strict; no smoothing or surrogate is
-applied unless written in `.myco` as a model claim or selected by the
-workflow for a run.
+diagnostics. Default behavior is strict; no smoothing, surrogate, host
+route, or topology-handler fallback is applied unless written in
+`.myco` as a model claim or selected by the workflow for a run.
 
-Every compiled model exposes a passive opportunity inventory:
+Every compiled model exposes a passive crossing-opportunity inventory:
 
 ```python
-ops = model.relaxation_opportunities()
+ops = model.crossing_opportunities()
 ```
+
+Workflow libraries may also expose `relaxation_opportunities()` as a
+filtered convenience for surrogate / smoothing opportunities only.
 
 The call does not change the plan. It returns stable records for
 regime boundaries (§8.10) that may require a crossing policy in
-gradient-demanding, optimization, or accelerated-execution contexts.
+gradient-demanding, optimization, topology-changing, or accelerated-
+execution contexts.
 Representative record shape:
 
 ```python
@@ -5675,7 +5757,7 @@ handles, not `.myco` symbols.
 The workflow selects handlers explicitly:
 
 ```python
-run.config.relaxations = {
+run.config.crossing_handlers = {
     "leaf.pv_curve.turgor_loss": SmoothStep(width=0.02, budget=0.001),
     "hydraulics.segment_split": EventReplan(),
 }
@@ -5684,7 +5766,7 @@ run.config.relaxations = {
 or by typed policy rules:
 
 ```python
-run.config.relaxations = RelaxationPolicy(
+run.config.crossing_handlers = CrossingPolicy(
     default="strict",
     rules=[
         match(kind="piecewise_boundary", path="leaf.*")
@@ -5713,11 +5795,12 @@ Handlers are typed by opportunity kind:
 - **`SmoothStep` / smoothing handlers.** Build a surrogate extraction
   plan with declared width, budget, and error / distortion ledger.
 - **`EventReplan` / `CapacityMask` / `DynamicKeyed`.** Dynamic-
-  topology crossing handlers (§21.4, §30) selected according to
-  backend capability and workflow performance needs.
+  topology crossing handlers (§3.8, §21.3, §31.1) selected according
+  to portable workflow intent and resolved backend / device capability
+  facts. They are exact execution strategies, not smooth relaxations.
 
-`AutoSmooth` is an opt-in workflow convenience that fills handler
-choices for compatible opportunities:
+`AutoSmooth` is an opt-in workflow convenience that fills surrogate
+handler choices for compatible smoothing opportunities:
 
 ```python
 run.config.relaxations = AutoSmooth(
@@ -5739,6 +5822,12 @@ for a hard boundary, the original source model remains hard and the
 run's plan records the smoothed surrogate, handler parameters,
 affected residuals, error / distortion budget, and selected crossing
 policy.
+
+A topology crossing handler selected in workflow is an execution
+strategy for preserving source semantics across a topology-changing
+regime boundary, not a model relaxation. The run's plan records the
+selected handler, required backend / device capabilities, rejected
+alternatives, and any explicitly authorized host or emulation route.
 
 ### 25. Training Emission
 
@@ -7897,21 +7986,28 @@ the relevant derivative fact.
 
 **Summary.** Backends advertise capability facts and capability
 profiles (complex support, forward AD, HMC, sparse matmul, dynamic
-shape modes, etc.). The compiler verifies required capabilities at
+topology modes, device / compiler-mode support, hidden-fallback
+detection, etc.). The compiler verifies required capabilities at
 plan-binding time. Three capability-mismatch modes handle missing
 support: `error` (fail), `host` (route to host-side reference),
 `emulate` (substitute approximate algorithm and enter
 approximation-error layer). Fallback is per-run via
-`run.config.backend`.
+`run.config.backend`, and the resolved backend/device plan is captured
+in the run lock.
 
 Backends advertise capabilities (e.g. `supports_complex`,
 `supports_complex_linalg`, `supports_complex_ad`,
 `supports_forward_ad`, `supports_reverse_ad`,
 `supports_hamiltonian_monte_carlo`, `supports_sparse_matmul`,
 `supports_cholesky`, `supports_svd`,
-`supports_runtime_bounded_shapes`, `supports_event_replan`,
-`supports_dynamic_keyed_axes`, `opaque_callable_runtime`,
-`opaque_callable_ad`) and capability profiles such as
+`supports_runtime_bounded_topology`,
+`supports_autograd_through_masked_topology`,
+`supports_event_replan`, `supports_event_replan_cache`,
+`supports_dynamic_keyed_axes`, `supports_dynamic_sparse_adjacency`,
+`supports_ragged_axes`, `supports_dynamic_output_shapes`,
+`supports_host_execution`, `supports_hidden_fallback_detection`,
+`opaque_callable_runtime`, `opaque_callable_ad`) and capability
+profiles such as
 `LinearAlgebraBasic`, `LinearAlgebraDecompositions`,
 `RuntimeADReverse`, `DynamicTopology`, `OpaqueCallableAD`, or
 `PPLHMC`. Profiles expand through their `requires` / `provides` /
@@ -7933,9 +8029,30 @@ fallback policy:
   The substitution enters the approximation-error layer (§16 adjacent
   keyed state) so its effect on guarantees is tracked.
 
+Backend family alone is not a capability set. The advertised facts are
+specific to the resolved backend family, backend version, compiler mode
+(eager, compiled, AOT/exported, etc.), device kind / hardware class
+(CPU, CUDA GPU, MPS GPU, TPU, etc.), and any backend feature flags.
+For example, a tensor runtime may advertise `DynamicKeyed` on CPU
+eager execution while rejecting it for a compiled accelerator target;
+that is one backend family with two different capability profiles.
+
+Topology-handler selection follows the same rule as every other
+capability decision. The `.myco` model declares the world can create,
+retire, re-key, or reconnect entities; the workflow declares which
+handler classes are acceptable (`CapacityMask`, `EventReplan`,
+`DynamicKeyed`, or later handlers); the resolved backend/device
+advertises which handlers it can lower directly. The compiler chooses a
+valid handler from the allowed set, records the choice in the run lock,
+or fails with a capability diagnostic. It never silently changes
+topology semantics, grows a capacity, routes to host execution, or
+enables a backend's hidden CPU fallback to make a run appear to work.
+
 Fallback mode is set per-run via `run.config.backend` (§24.5);
 workflows can also scope fallback to specific capabilities. If no
-fallback policy is specified, the mode is `error`.
+fallback policy is specified, the mode is `error`. Explicit `host` or
+`emulate` routes are execution-plan facts and must appear in
+`hypha explain` and the run lock.
 
 #### 31.2 PPL Handoff Protocol
 
@@ -8262,14 +8379,16 @@ references.
 **Summary.** Catalog of smaller open items: general source-level
 retraction under monotonicity, envelope ownership, CC1 diagnostics,
 GPU-incompatibility of exact numeric types, remaining chunk 04
-carryovers (event-driven topology and spatial operator lowering),
-controller-interface affordances, Tier 2 family-catalog polish, and
-remaining Tier 3 non-parametric catalog / backend machinery. Obligation
-retraction is resolved by the `ObligationSite` / `fulfills` ledger
-(§8.11, §10.5). Heterogeneous selection is resolved by `Selected<T>` /
-`Option<Selected<T>>` selector semantics (§12.2). Residual-to-e-graph
-projection and per-residual objective identity are resolved by
-`ResidualSite` / `ResidualRealization` semantics (§19.2, §25).
+carryover (spatial operator lowering), controller-interface affordances,
+Tier 2 family-catalog polish, and remaining Tier 3 non-parametric
+catalog / backend machinery. Obligation retraction is resolved by the
+`ObligationSite` / `fulfills` ledger (§8.11, §10.5). Heterogeneous
+selection is resolved by `Selected<T>` / `Option<Selected<T>>` selector
+semantics (§12.2). Event-driven topology mutation is resolved by
+versioned topology, explicit topology handlers, and backend capability
+negotiation (§3.8, §21.3, §24.5, §31.1). Residual-to-e-graph projection
+and per-residual objective identity are resolved by `ResidualSite` /
+`ResidualRealization` semantics (§19.2, §25).
 
 General source-level retraction remains out of the core language; if a
 future feature admits it, it must preserve the monotonicity invariant
@@ -8285,10 +8404,13 @@ resolved: residual identities live on `ResidualSite`s while extraction
 may share `ResidualRealization`s (§19.2, §25). O4.6 heterogeneous
 selection is resolved: selector provenance lives in `SelectedSite`
 Layer-3 records; projected fields are ordinary expressions (§12.2).
+O4.7 event-driven topology mutation is resolved: events emit
+`TopologyDelta`s that create new `TopologyVersion`s at regime
+boundaries; execution uses explicit `CapacityMask`, `EventReplan`, or
+`DynamicKeyed` handlers selected through workflow intent and backend /
+device capability facts (§3.8, §21.3, §24.5, §31.1).
 
-O4.7 event-driven topology mutation (incremental saturation strategy
-when events add nodes, edges, or locus structure mid-run). O4.8
-spatial operator lowering (rewrite group P1 architectural call:
+O4.8 spatial operator lowering (rewrite group P1 architectural call:
 e-graph rewrite versus pre-e-graph codegen; geometry chunk 01
 cross-ref). Macros (dropped from the current surface; revisit if
 concrete boilerplate pain emerges). `softmax` and weighted-sum
