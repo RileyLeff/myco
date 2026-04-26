@@ -3531,7 +3531,7 @@ expression or residual candidate. The canonical fields are:
   and backend-kernel availability as a lowering-time resource cost.
 - `memory` — peak allocation and intermediate-buffer pressure.
 - `approximation` — contribution from authorized approximate rewrites
-  (§15, Appendix C).
+  (§15, §15.6, Appendix C).
 - `condition` — conditioning estimate consumed from `condition_of`
   Levels I/II where available (§14.1).
 - `truncation` — finite-support, quadrature, iteration, or finite-
@@ -3549,6 +3549,11 @@ If a baseline default-off rewrite is `promoted_exact_in_context`
 for that site. The cost record keeps a provenance pointer to the
 promotion proof instead of treating the rewrite as an authorized
 approximation.
+
+When multiple authorized approximations affect one extracted candidate,
+`cost_of().approximation` composes their terms by §15.6. The default is
+a conservative monotone bound; sharper composition requires stdlib,
+compiler, or provider evidence.
 
 `objective_terms(residual)` consumes a `ResidualSite` (§19.2) and
 returns named training-objective components, not a scalar. Fields cover
@@ -3708,7 +3713,9 @@ is a compile error.
 
 Blocks compose by nesting. Outside a block's `body`, the
 authorized rewrite does not fire. No global `approximate`
-scope exists; approximation is always explicitly chosen.
+scope exists; approximation is always explicitly chosen. Nested
+or otherwise stacked authorized approximation terms compose by
+§15.6.
 
 #### 15.2 Auto-Derived Lossiness (Four Sources)
 
@@ -3877,6 +3884,49 @@ site. Three cases exhaust the interaction:
   bound exceeds the user's declaration. The compiler emits a compile
   error naming both bounds and the rewrite in question. The user
   must either widen the `error_bound` or choose a different rewrite.
+
+#### 15.6 Approximation Composition
+
+**Summary.** Stacked approximations compose conservatively by default.
+The compiler never assumes cancellation or independence. Stdlib /
+compiler rules and evidence-graded provider facts may sharpen the bound;
+`hypha explain` reports every approximation term, composition rule, and
+looseness warning.
+
+Each authorized approximate rewrite emits an approximation term with:
+
+- rewrite id and source block;
+- tolerance class / envelope view (§16.4);
+- local certified error bound;
+- expression site and downstream expression it affects;
+- provenance, including any provider or stdlib evidence.
+
+For an extracted candidate, the compiler first propagates each local
+term to the candidate's requested tolerance view using named rules. It
+then composes terms in this order:
+
+1. **Exact-zero removal.** Terms from `promoted_exact_in_context`
+   rewrites contribute zero but remain visible in provenance.
+2. **Declared composition law.** A stdlib, compiler, or evidence-graded
+   provider law may compose terms more sharply. Examples include
+   Lipschitz propagation, dominance (`max(a, b)` when one bound subsumes
+   another), orthogonal / independent RMS composition when independence
+   is proven, or a closed-form law for a named approximation family.
+3. **Conservative monotone fallback.** If no law applies, comparable
+   terms compose by conservative summation in the same tolerance view.
+   The compiler never assumes cancellation, anticorrelation, or
+   independence from syntax alone.
+
+If terms cannot be converted to a common tolerance view, the composed
+`approximation` field remains a structured record rather than a scalar
+sum, and extraction diagnostics mark the candidate as carrying
+`uncomposed_approximation_terms`. This is still a valid plan when the
+workflow accepts the relevant fields, but `hypha explain` must surface
+the missing composition law.
+
+Provider-supplied composition laws are ordinary evidence-graded facts
+(§37.1). They may sharpen a run's `cost_of().approximation`, but they do
+not become global source-level theorems.
 
 ---
 
@@ -4429,7 +4479,8 @@ posture. A model compiles with zero authorized approximations if
 the modeler wrote none, and any lossy rewrite is traceable to a
 specific block. Default-off rewrites fire one-at-a-time, scoped
 to the block's `body`; they do not compose across blocks without
-explicit nesting.
+explicit nesting. When nesting creates stacked approximation terms,
+their costs compose by §15.6.
 
 Residual sites preserve their original relation names and obligation
 keys, so training-emission diagnostics (§25) can expose per-residual
@@ -4578,6 +4629,14 @@ policy treat the extracted expression as exact while `hypha explain`
 still shows that a normally default-off rewrite became exact only under
 the local envelope.
 
+Stacked approximation terms compose by §15.6. Extraction uses the
+composed approximation record for Pareto comparison and retains the
+term-level ledger for diagnostics. When the only available composition
+rule is conservative summation, the candidate remains valid but carries
+a loose-bound marker. When terms cannot be composed into one tolerance
+view, the `approximation` field remains structured and the extractor
+uses workflow policy to decide whether that candidate is admissible.
+
 Consequence: the same e-graph yields different residuals under
 different workflow policies. The residual graph is a projection
 *parameterized by cost preference*, not a canonical form.
@@ -4714,7 +4773,8 @@ bound. Scheduling and termination guarantees:
   `approximate` blocks and each within a block has an explicit
   error bound and a `where:` guard. Within a block, scheduling
   is round-robin over active rewrites up to the authorized
-  error budget.
+  error budget. Stacked authorized approximation terms compose
+  by §15.6.
 - **Promoted exact rewrites** are baseline default-off rewrites whose
   site-local envelope proves zero error (§17.6). They schedule with
   default-on rewrites for that site only, carry
@@ -5114,6 +5174,10 @@ The textual report includes:
 - Promoted exact rewrites: baseline partition, site, zero-error proof,
   envelope facts consumed, and resulting `cost_of().approximation = 0`
   entry (§15.3, §17.6, §19.1).
+- Stacked approximation composition: terms, propagated bounds,
+  composition rule (`conservative_sum`, declared law, or
+  `uncomposed_approximation_terms`), evidence source, and looseness
+  warning (§15.6, §19.1).
 - Regime boundaries and crossing-handler ledger entries: detected
   surfaces, continuity / derivative class, selected crossing policy,
   topology handler, and any workflow-authorized surrogate used by the
@@ -8629,16 +8693,15 @@ promotion trace instead of moving into the global default-on bucket.
 This preserves the bookkeeping trail for diagnostics while keeping
 faithfulness accounting exact (§19.1, §22).
 
-**Approximation cost composition.** Two lossy-model rewrites applied
-within the same extracted plan are not in general independent — they
-may reinforce, partially cancel, or compose non-linearly. Current
-§19.1 draft implicitly sums `approximation` contributions. Open
-whether conservative summation is the locked policy (sound but loose
-bound), whether a richer algebra is needed for cases where stdlib
-rewrites carry known non-independence annotations, or whether the
-extractor should surface a warning when multiple lossy rewrites stack
-on the same expression. Affects §17 rewrite-rule cost annotation
-schema and §19.1 extraction-cost accounting.
+**Approximation cost composition resolved.** Multiple authorized
+approximation terms compose conservatively by default (§15.6). The
+compiler never assumes cancellation or independence. Stdlib / compiler
+rules or evidence-graded provider facts may sharpen the composition
+(e.g., Lipschitz propagation, dominance, proven independent RMS, or
+family-specific closed form). Otherwise comparable terms use
+`conservative_sum`; incomparable tolerance views remain structured as
+`uncomposed_approximation_terms` and must be surfaced by `hypha explain`
+(§19.1, §22).
 
 **Condition cost representation for multi-output operations.** The
 `condition` field of `cost_of` is scalar-valued in O2.4. Matrix
