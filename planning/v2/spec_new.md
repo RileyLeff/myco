@@ -8942,7 +8942,9 @@ with the workflow API details around §24.
 language and compiler proper: CLI, dependency management, editor
 tooling, doc generation, agent/LLM integration. Some surfaces are
 committed at the vocabulary/API level (`hypha`, `hypha check`,
-`hypha explain`, `hypha doc`); detailed flags, schemas, and editor
+`hypha explain`, `hypha doc`); Cargo-style workspaces, rustdoc-style
+generated documentation, and agent-friendly spore documentation
+retrieval are explicit DX goals. Detailed flags, schemas, and editor
 behavior remain open.
 
 Outside the language and compiler proper, but on the roadmap. Listed
@@ -8966,7 +8968,9 @@ implementation detail. Committed subcommands:
 - `hypha explain` exposes textual plan reports and the
   machine-readable IR (§22).
 - `hypha fmt` formats source once the grammar is locked.
-- `hypha doc` generates documentation (§39).
+- `hypha doc` generates documentation; `hypha doc <spore>` resolves an
+  installed, workspace-local, or registry spore and emits / retrieves
+  human-readable and agent-friendly documentation (§39, §40).
 - Package-management subcommands operate on spores (§37).
 
 ### 37. Dependency Management and Package Registry
@@ -8975,7 +8979,8 @@ implementation detail. Committed subcommands:
 `myco.toml` manifests and `myco.lock` lockfiles. `hypha` manages
 compile/run/check/fmt/explain/doc and package-management subcommands.
 The package approach follows the Cargo + uv convention: explicit
-manifests, reproducible locks, and a registry story that remains open.
+manifests, Cargo-style workspaces, reproducible locks, and a registry
+story that remains open.
 
 Locked vocabulary:
 
@@ -8984,12 +8989,15 @@ Locked vocabulary:
 - **`myco.toml`.** Spore manifest.
 - **`myco.lock`.** Reproducibility lockfile.
 - **`hypha`.** User-facing CLI for language and package operations.
+- **Workspace.** A Cargo-style root that groups multiple local spores
+  under shared resolution, lockfile, docs, and tooling commands.
 
 Open package items: resolver semantics, version constraints, feature
 model, build scripts, workspace-Python interaction, registry layout,
-platform/backend metadata, and cross-spore export policy. The minimum
-scope is local path dependencies, manifest parsing, lockfile writing,
-and deterministic source resolution.
+workspace membership semantics, platform/backend metadata, and
+cross-spore export policy. The minimum scope is local path
+dependencies, workspace-local spores, manifest parsing, lockfile
+writing, and deterministic source resolution.
 
 #### 37.1 Realization Providers
 
@@ -9145,13 +9153,18 @@ CLI spellings route through §36.
 **Summary.** Docstring conventions, a doc generator for user-defined
 types, contracts, events, and universals, and a website layout
 covering language reference, tutorials, API docs, and examples.
+Generated documentation should feel rustdoc-like: source-linked,
+cross-referenced, navigable by item, and stable enough for humans and
+agents to consume.
 
 Docstring conventions. `hypha doc` generates documentation for
 user-defined types, contracts, events, universals, parameterized
-relations, and spores. Website layout: language reference, tutorials,
-API docs, examples. Generated docs may embed diagrams produced from
-the §22 machine-readable IR, but renderer targets remain optional
-tooling rather than a core spec commitment.
+relations, and spores. `hypha doc <spore>` retrieves or builds the
+documentation bundle for that spore, including an agent-friendly
+structured view intended for LLM/code-agent consumption. Website layout:
+language reference, tutorials, API docs, examples. Generated docs may
+embed diagrams produced from the §22 machine-readable IR, but renderer
+targets remain optional tooling rather than a core spec commitment.
 
 ### 40. Agent / LLM Integration
 
@@ -9163,7 +9176,9 @@ interpretation) so LLMs can reason about the language correctly.
 Agent skills for writing, reviewing, and validating `.myco` models.
 Harness support for running Myco-aware agents. Conventions so LLMs can
 reason about the language correctly (canonical examples, known
-anti-patterns, diagnostic interpretation).
+anti-patterns, diagnostic interpretation). `hypha doc <spore>` is the
+preferred retrieval path for agent-facing package documentation so
+agents consume the same source-linked docs humans inspect.
 
 ---
 
