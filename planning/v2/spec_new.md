@@ -196,7 +196,8 @@ Terms: `variable`, `bound variable`, `free variable`, `relation`,
 `observe`, `regime boundary`, `regime surface`, `crossing policy`,
 `relaxation`, `catalog`, `catalog entry`, `node path`, `facet path`,
 `selector`, `existence domain`, `adapter`, `residual site`,
-`residual realization`.
+`residual realization`, `selected handle`, `Selected<T>`,
+`SelectedSite`.
 
 ---
 
@@ -849,7 +850,7 @@ binding) or a runtime
 discriminant-tagged kernel (when dynamic). Enums compose with
 contracts; variant fields may themselves be contract-typed. Stdlib
 ships at least `Prior<S>` (fixed value or distribution over sample
-type S), `Maybe<T>`, and `Result<T, E>`. Event-triggered variant
+type S), `Option<T>`, and `Result<T, E>`. Event-triggered variant
 transitions use event-only `becomes` with full explicit construction
 of the next variant. Workflow enum binding uses dumb-data tagged
 records, with optional thin Python helpers that produce those records.
@@ -881,7 +882,7 @@ enum LifeStage {
     Mature { age: Scalar<days>, height: Scalar<m>, dbh: Scalar<cm> },
 }
 
-enum Maybe<T> {
+enum Option<T> {
     Some(T),
     None,
 }
@@ -1714,7 +1715,8 @@ case of `event`. Sources include:
   (§10.0).
 - Dynamic-topology changes that create, delete, or re-key tensor axes
   (§10, §21.4, §30).
-- Hard selections such as `min`, `max`, `argmin`, and `argmax`
+- Hard selections such as `min`, `max`, `argmin`, `argmax`,
+  `option_argmin`, `option_argmax`, `argmin_all`, and `argmax_all`
   (§12.2).
 - Geometry junctions and one-sided locus limits (§11.1, §11.8).
 - Compact-support kernels and kernel truncation surfaces (§28.5,
@@ -2704,8 +2706,9 @@ geometries ship via stdlib (§11.3), not via new keywords.
 **Summary.** Collections via `impl Contract` (heterogeneous element
 type, static monomorphization) and `some` (runtime sizing).
 Iteration patterns, aggregation primitives (`sum`, `product`, `max`,
-`min`, `any`, `all`, `count`, `argmin`, `argmax`), and narrowing with
-`where x is T`. Aggregations are stdlib-only.
+`min`, `any`, `all`, `count`) and selector primitives (`argmin`,
+`argmax`, `option_argmin`, `option_argmax`, `argmin_all`,
+`argmax_all`). Aggregations are stdlib-only.
 
 `impl Contract` (heterogeneous element type, static monomorphization)
 vs `some` (runtime sizing). Iteration patterns. Aggregation lowering.
@@ -2714,9 +2717,10 @@ Narrowing with `where x is T`.
 #### 12.1 Aggregation Primitives
 
 **Summary.** Named stdlib aggregations: `sum`, `product`, `max`,
-`min`, `any`, `all`, `count`, `argmin`, `argmax`. Units-aware and
-conservation-group-aware. Compose under stdlib-declared e-graph
-rewrites (linearity, distributivity, `sum(map(f, xs))` fusions). No
+`min`, `any`, `all`, `count`, plus the selection family `argmin`,
+`argmax`, `option_argmin`, `option_argmax`, `argmin_all`, and
+`argmax_all`. Units-aware and conservation-group-aware where
+applicable. Compose under stdlib-declared e-graph rewrites. No
 user-declared aggregation surface.
 
 Named stdlib aggregations over collections:
@@ -2733,57 +2737,170 @@ Named stdlib aggregations over collections:
   For event-time (`some`-sized) collections backed by a bitmask-
   liveness array, `count` sums the liveness bits, not the backing-
   array capacity (§12.4).
-- `argmin(xs)`, `argmax(xs)` — handle of the extremal element;
-  see §12.2 for the heterogeneous case.
+- `argmin(selector for x in xs)`, `argmax(selector for x in xs)` —
+  strict selected handle of the extremal element; require a nonempty
+  proof (§12.2).
+- `option_argmin(...)`, `option_argmax(...)` — optional selected handle;
+  empty input produces `None` (§12.2).
+- `argmin_all(...)`, `argmax_all(...)` — collection of all selected
+  handles tied at the extremum; empty input produces an empty
+  collection (§12.2).
 
 Aggregations compose under stdlib-declared e-graph rewrites
 (linearity, distributivity, `sum(map(f, xs))` fusions). There is
 no user-declared aggregation surface — new aggregations ship via
 stdlib, matching the `.myco`-has-no-annotation-surface stance.
-Soft and weighted variants (softmax, weighted_sum) are tracked
-in §35 Other Opens pending collection-aggregation syntax lock.
+Soft and weighted variants are value aggregations, not entity
+selectors. A smooth selector may return a weighted value such as a
+soft crown-area aggregate, but it does not fabricate a smooth
+`Selected<T>` entity handle. Exact ergonomic spelling for
+`weighted_sum` / softmax-style comprehensions remains in §35 pending
+collection-alignment syntax.
 
-#### 12.2 Tagged Handles for Heterogeneous `argmax`
+#### 12.2 Selected Handles and Selector Primitives
 
-**Summary.** `argmax` over `impl Contract` returns a tagged handle
-`(pool_identity, intra_pool_index)` since concrete types live in
-separate compile-time pools. `argmax` over homogeneous `some`
-returns a plain index. Surface syntax is the same in both cases.
+**Summary.** Element-selection primitives return `Selected<T>`, an
+opaque regime-local reference to an existing collection member. Strict
+selectors require nonempty proof; optional selectors return
+`Option<Selected<T>>`; all-tie selectors return `[Selected<T>; some]`.
+Selection provenance lives in Layer 3 adjacent keyed state, while field
+projections from a selected handle are ordinary graph expressions.
 
-`argmax` over an `impl Contract` collection returns a tagged
-handle, not a bare index. The handle carries `(pool_identity,
-intra_pool_index)` because different concrete types live in
-separate compile-time pools (§3.5, §12.5). Users match on the
-handle to recover the concrete type and reach type-specific
-fields. `argmax` over a homogeneous `some` collection returns a
-plain index.
+`Selected<T>` is a visible stdlib/compiler type constructor for selected
+references. Users may write it in relation signatures, but they cannot
+construct it manually. A `Selected<T>` is created only by compiler-owned
+selector primitives such as `argmax`, `argmin`, `option_argmax`,
+`option_argmin`, `argmax_all`, and `argmin_all`.
 
-The IR-level sum type for tagged handles is the compiler's
-internal machinery; surface syntax is the same `argmax` call in
-both cases. The type of the returned handle depends on the
-collection's static element-type structure.
+```myco
+contract TreeLike {
+    height: Scalar<m>
+    crown_area: Scalar<m2>
+}
 
-**Tie-break rule.** When two or more elements produce the same
-extremal value, `argmin` and `argmax` return the one with the
-earliest index in the canonical index order of the collection
-(deterministic, no runtime randomness).
+relation dominant_tree(trees: [impl TreeLike; some],
+                       out: Option<Selected<TreeLike>>):
+    out = option_argmax(t.height for t in trees)
+```
 
-**Differentiability class.** `argmin` and `argmax` are subgradient-
-differentiable. Gradient flows through the currently-selected
-element and is undefined at tie points (discontinuous switchover).
-This class drives A-group rewrite routing (§17) and is represented
-as a regime boundary at tie / switchover surfaces (§8.10). Callers
-requiring smooth selection should use a soft alternative (tracked
-§35).
+Selector return types:
+
+- `argmax(selector for x in xs) : Selected<T>` and
+  `argmin(...) : Selected<T>`. Strict; require the compiler to prove
+  the input collection nonempty in the active regime.
+- `option_argmax(...) : Option<Selected<T>>` and
+  `option_argmin(...) : Option<Selected<T>>`. Total; empty input
+  produces `None`.
+- `argmax_all(...) : [Selected<T>; some]` and
+  `argmin_all(...) : [Selected<T>; some]`. Total; empty input produces
+  an empty derived view collection containing all elements tied at the
+  extremum.
+
+Homogeneous and heterogeneous collections share the same surface. For
+`[Oak; some]`, `argmax(o.height for o in oaks)` returns
+`Selected<Oak>`, not an `Oak` record. For `[impl TreeLike; some]`, it
+returns `Selected<TreeLike>` whose direct field projection is limited to
+the contract-common surface:
+
+```myco
+let tallest = argmax(t.height for t in trees)
+
+dominant_height = tallest.height       // selector field; equals max height
+dominant_crown = tallest.crown_area    // crown area of the height-winner
+```
+
+Concrete-type-specific fields require explicit narrowing / matching.
+The compiler may lower a heterogeneous selected handle as an internal
+tagged reference `(pool_identity, intra_pool_index)`, but that tag is
+not source syntax and is not workflow-bindable. `match` on a selected
+handle is a type-narrowing match over the collection's static concrete
+member set, not enum dispatch; arms must cover every possible concrete
+type unless an enclosing narrowing context proves a smaller set:
+
+```myco
+match tallest {
+    Oak(o) => {
+        reproductive_load = o.acorn_load
+    }
+    Pine(p) => {
+        reproductive_load = p.cone_load
+    }
+}
+```
+
+`Option<Selected<T>>` is an ordinary enum value and must be narrowed
+before projection:
+
+```myco
+let tallest = option_argmax(t.height for t in trees)
+
+match tallest {
+    Some(t) => {
+        dominant_crown = t.crown_area
+    }
+    None => {
+        dominant_crown = no_tree_crown_area
+    }
+}
+```
+
+`argmax_all` / `argmin_all` return derived view collections over
+existing entities, not owned entity collections. They compose with
+ordinary aggregations:
+
+```myco
+let winners = argmax_all(t.height for t in trees)
+winner_count = count(winners)
+total_winner_crown = sum(w.crown_area for w in winners)
+```
+
+Selection facts are intentionally narrow. For `tallest =
+argmax(t.height for t in trees)`, the compiler records that `tallest`
+is a member of `trees`, that `tallest.height` is the maximum selector
+value, and that every live `t` has `tallest.height >= t.height`.
+It does **not** infer that `tallest.crown_area` is a maximum crown area,
+nor does it merge `tallest` with candidate entities in the e-graph.
+
+Layer placement:
+
+- Selection identity, input collection, selector expression, empty
+  behavior, tie policy, result contract, and existence domain are
+  `SelectedSite` records in Layer 3 adjacent keyed state (§16.1).
+- Field projections such as `tallest.crown_area` are ordinary Layer-1
+  expressions with provenance pointing back to the selected site.
+- `Selected<T>` equality is not ordinary relation `=`. Identity tests,
+  if needed, use an explicit stdlib predicate such as
+  `same_entity(a, b, out: Bool)`.
+
+Tie behavior is deterministic. `argmin` / `argmax` choose the earliest
+element in canonical collection order among tied extrema. `argmin_all`
+and `argmax_all` choose all tied extrema. Equality for all-tie selection
+is exact unless an explicit approximation / relaxation policy is
+selected elsewhere; no tolerance is hidden inside the selector.
+
+Differentiability and lifetime:
+
+- The selection family is hard-selection / subgradient-differentiable:
+  gradients flow through the currently selected element; winner
+  switchover, tie, and empty/nonempty surfaces are regime boundaries
+  (§8.10).
+- Smooth selection returns aggregate values, not `Selected<T>` handles.
+- `Selected<T>` is regime-local by default. Persisting
+  `Selected<T>` or `Option<Selected<T>>` across ticks or event
+  boundaries is legal only as state/history with an existence domain.
+  Later projection requires proof or guard that the referenced entity
+  still exists. Capturing a projected value, such as `tallest.height`,
+  creates an ordinary boundary-indexed equality claim, not an
+  imperative copy.
 
 #### 12.3 Empty-Collection Defaults
 
 **Summary.** Aggregations with identity elements use them on empty
 collections (`sum = 0`, `product = 1`, `all = true`, etc.). `max`
 returns `-inf` (properly-typed sentinel) and `min` returns `+inf` on
-empty collections. `argmin` and `argmax` have no identity, so
-empty-reachable calls are compile errors; callers must prove
-non-emptiness or guard.
+empty collections. Strict `argmin` / `argmax` require nonempty proof;
+`option_argmin` / `option_argmax` return `None` on empty input;
+`argmin_all` / `argmax_all` return an empty derived collection.
 
 Aggregations behave on empty collections as follows:
 
@@ -2795,15 +2912,20 @@ Aggregations behave on empty collections as follows:
   convention. These are the correct identity elements for max/min
   reductions and compose correctly with any subsequent `max`/`min`
   combining step.
-- `argmin(empty)`, `argmax(empty)` are a **compile error**.
+- `argmin(empty)`, `argmax(empty)` are a **compile error** unless
+  unreachable under the active guard.
+- `option_argmin(empty)`, `option_argmax(empty)` return `None`.
+- `argmin_all(empty)`, `argmax_all(empty)` return an empty collection.
 
 Identity-element defaults on `sum`/`product`/`any`/`all`/`count`
 enable algebraic rewrites without branch logic. `max` and `min`
 use `-inf`/`+inf` as their identity elements for the same reason.
-`argmin` and `argmax` have no identity element, so the compiler
+Strict `argmin` and `argmax` have no identity element, so the compiler
 rejects empty-reachable calls at compile time; the caller must
 statically prove non-emptiness or guard with a `count > 0`
-check that the compiler can refine against.
+check that the compiler can refine against. Library authors who cannot
+or do not want to require such proof should expose
+`Option<Selected<T>>` via `option_argmin` / `option_argmax` instead.
 
 **Sentinel injection for masked slots.** In collections that use
 bitmask-liveness lowering (the GPU-batched array-pool design for
@@ -2811,11 +2933,13 @@ event-time `some`-sized collections; §12.4, §21), aggregation
 kernels cannot skip inactive slots directly: on JAX and PyTorch,
 `jax.numpy.where`/`torch.where` evaluates both branches regardless
 of the condition. The backend emitter therefore injects sentinel
-values into inactive slots before reduction: `-inf` for `max` and
-`argmax` operations, `+inf` for `min` and `argmin` operations. This
-ensures the reduction produces the correct result over alive elements
-and never returns a value from a dead slot. Users observe only the
-alive-element semantics; the sentinels are a lowering artifact.
+values into inactive slots before reduction: `-inf` for `max`,
+`argmax`, `option_argmax`, and `argmax_all` operations, `+inf` for
+`min`, `argmin`, `option_argmin`, and `argmin_all` operations. The
+handle-returning selectors additionally mask dead slots during the
+winner / winner-set reconstruction step so they never return a dead
+slot. Users observe only the alive-element semantics; the sentinels are
+a lowering artifact.
 
 #### 12.4 Bind-Time vs Event-Time Dynamism
 
@@ -3720,10 +3844,11 @@ bindings, sampling traces, event-trigger flags).
 under monotonic merge, one per-run instance), envelope metadata
 (facts keyed by e-class narrowing without merging, including
 provenance and merge-edge annotations), adjacent keyed state
-(event firings, SCC decomposition results, provider bindings,
-sampling traces, event-trigger state). Merge sources write layer 1;
-contracts, observations, and backend emulation write layer 2;
-event firings and keyed identifiers index layer 3.
+(event firings, selected-handle sites, SCC decomposition results,
+provider bindings, sampling traces, event-trigger state). Merge
+sources write layer 1; contracts, observations, and backend emulation
+write layer 2; event firings, selector sites, and keyed identifiers
+index layer 3.
 
 The e-graph is structured as three concentric layers. Each layer
 has its own modification rules and its own consumers. Every
@@ -3750,13 +3875,16 @@ principle is restated in §0 as a structural commitment.
    retract).
 
 3. **Adjacent keyed state (layer 3).** Structures indexed by key
-   (event firing, identity tag, SCC identifier, draw ID, provider
-   handle) holding e-class references internally. Per-key updates
-   are independent; keys do not interact equationally except via
-   explicit relations. Content types:
+   (event firing, identity tag, selector site, SCC identifier, draw
+   ID, provider handle) holding e-class references internally. Per-key
+   updates are independent; keys do not interact equationally except
+   via explicit relations. Content types:
 
    - Per-event copies keyed on event firing (§10).
    - Identity-tagged instances of heterogeneous collections.
+   - `SelectedSite` records keyed on selector expression identity,
+     holding selected-handle provenance, empty behavior, tie policy,
+     result contract, existence domain, and lowering metadata (§12.2).
    - SCC decomposition results keyed on SCC identifier; carries
      the canonical four-way class assignment (static / dynamic /
      stochastic / training; §20) plus any lowering solver-strategy
@@ -4306,8 +4434,8 @@ Inventory boundary:
   structural certificates, and provenance.
 - **Adjacent keyed state:** runtime / keyed records that reference
   e-classes without asserting equality: events, geometry sites, SCC
-  records, provider handles, samples, dynamic collection identities,
-  and backend run records.
+  records, selected-handle sites, provider handles, samples, dynamic
+  collection identities, and backend run records.
 
 ### 19. Residual Graph (Projection)
 
@@ -4814,8 +4942,9 @@ proved, rewrote, approximated, lowered, or left unresolved.
 
 **Summary.** `hypha explain` emits a textual plan report and can emit
 the canonical machine-readable plan IR. It reports SCCs, symbolic
-resolutions, residuals, obligation-ledger status, fallbacks, execution
-order, temporal state, workflow bindings, and provenance.
+resolutions, residuals, selected-handle sites, obligation-ledger status,
+fallbacks, execution order, temporal state, workflow bindings, and
+provenance.
 
 The textual report includes:
 
@@ -4836,6 +4965,9 @@ The textual report includes:
 - Obligation ledger entries: keys, loci / events / guards, explicit
   fulfillments, selected package defaults, suppressed default
   candidates, unfulfilled obligations, and conflicts (§8.11).
+- Selected-handle sites: selector primitive, input collection, selector
+  expression, result type, empty behavior, tie policy, existence domain,
+  hard-selection regime boundaries, and lowering strategy (§12.2).
 
 `hypha explain --format ir` emits the canonical machine-readable IR.
 Renderer targets such as Mermaid, D2, Graphviz, or Cytoscape may be
@@ -4857,10 +4989,11 @@ reduction trace.
 
 Representative result fields:
 
-- `realization` — `explicit(expr)`, `implicit(residual_block)`, or
-  `opaque(provider)`, naming whether the path has a forward
-  expression, an implicit residual realization, or a provider-owned
-  value such as a `Controller` source.
+- `realization` — `explicit(expr)`, `implicit(residual_block)`,
+  `selected(handle_site)`, or `opaque(provider)`, naming whether the
+  path has a forward expression, an implicit residual realization, a
+  selected-reference provenance site, or a provider-owned value such as
+  a `Controller` source.
 - `expression` — canonical expression if the path reduces to one.
 - `free_variables` — workflow sources or unresolved symbols required
   to ground the expression.
@@ -5243,6 +5376,15 @@ An unqualified path such as `leaf.stage.height` is invalid unless
 `height` is common to every variant with the same type, unit, and
 existence domain. This mirrors the `.myco` rule: field access on
 enum-typed values requires narrowing.
+
+`Selected<T>` values produced by selector primitives (§12.2) are not
+bindable workflow inputs. Python cannot fabricate a selected handle by
+supplying a pool id, tag, or index; selected-handle identity and
+provenance are compiler-owned Layer-3 state. Workflows may query
+selected handles as outputs or diagnostics through catalog-backed
+result records, but feeding such a result into another run must go
+through ordinary model fields, observations, or source bindings rather
+than raw selected-reference identity.
 
 For generics, compiled concrete models expose specialized catalog
 entries wherever specialization is known. Reusable spore/interface
@@ -8119,13 +8261,14 @@ references.
 
 **Summary.** Catalog of smaller open items: general source-level
 retraction under monotonicity, envelope ownership, CC1 diagnostics,
-GPU-incompatibility of exact numeric types, chunk 04 carryovers
-(heterogeneous `argmax`, event-driven topology, spatial operator
-lowering), controller-interface affordances, Tier 2 family-catalog
-polish, and remaining Tier 3 non-parametric catalog / backend
-machinery. Obligation retraction is resolved by the
-`ObligationSite` / `fulfills` ledger (§8.11, §10.5). Residual-to-
-e-graph projection and per-residual objective identity are resolved by
+GPU-incompatibility of exact numeric types, remaining chunk 04
+carryovers (event-driven topology and spatial operator lowering),
+controller-interface affordances, Tier 2 family-catalog polish, and
+remaining Tier 3 non-parametric catalog / backend machinery. Obligation
+retraction is resolved by the `ObligationSite` / `fulfills` ledger
+(§8.11, §10.5). Heterogeneous selection is resolved by `Selected<T>` /
+`Option<Selected<T>>` selector semantics (§12.2). Residual-to-e-graph
+projection and per-residual objective identity are resolved by
 `ResidualSite` / `ResidualRealization` semantics (§19.2, §25).
 
 General source-level retraction remains out of the core language; if a
@@ -8139,11 +8282,11 @@ Rational termination caveat, §31.1 backend fallback modes). **Chunk
 O4.1 obligation retraction is resolved by the ledger design; W1 is no
 longer a rewrite group. O4.3 per-residual training emission is
 resolved: residual identities live on `ResidualSite`s while extraction
-may share `ResidualRealization`s (§19.2, §25).
+may share `ResidualRealization`s (§19.2, §25). O4.6 heterogeneous
+selection is resolved: selector provenance lives in `SelectedSite`
+Layer-3 records; projected fields are ordinary expressions (§12.2).
 
-O4.6 heterogeneous `argmax` tagged handles (closure-policy
-extensibility for collections with tagged alternatives). O4.7
-event-driven topology mutation (incremental saturation strategy
+O4.7 event-driven topology mutation (incremental saturation strategy
 when events add nodes, edges, or locus structure mid-run). O4.8
 spatial operator lowering (rewrite group P1 architectural call:
 e-graph rewrite versus pre-e-graph codegen; geometry chunk 01
@@ -8445,7 +8588,9 @@ pattern or pipe use).
 `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
 `sqrt`, `abs`, `real`, `imag`, `conj`, `phase`, `complex`, `sign`,
 `floor`, `ceil`, `round`, `min`, `max`, `sum`,
-`prod`, `mean`, `std`, `var`, `argmin`, `argmax`, `solve`,
+`prod`, `mean`, `std`, `var`, `argmin`, `argmax`,
+`option_argmin`, `option_argmax`, `argmin_all`, `argmax_all`,
+`same_entity`, `solve`,
 `solve_triangular`, `least_squares`, `cholesky`, `lu`, `qr`, `svd`,
 `eigen`, `inverse`, `det`, `trace`, `transpose`, `adjoint`, `norm`,
 `matrix_rank`, `gram`, `zeros`, `ones`, `identity`, `diag`,

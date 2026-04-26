@@ -1286,10 +1286,14 @@ intrinsic; Y4 consumes the algorithmic-conditioning mode
 (`compile_bound` on Levels I-II). Deferral closed. See O2.4 condition-
 number scope lock for the full design.
 
-**O4.6 — Heterogeneous `argmax` tagged handles.** v2.1 novel frontier;
-not in v1. The e-graph needs a story for heterogeneous e-class membership
-(different types claimed equal under a tagged-handle framing). **Section
-12 open.**
+**O4.6 — Heterogeneous selection / `Selected<T>`. RESOLVED
+(2026-04-26).** The old "heterogeneous e-class membership" framing is
+gone. Selector primitives (`argmax`, `option_argmax`, `argmax_all`, and
+their `argmin` twins) return `Selected<T>` handles. Selection identity and
+provenance live in Layer-3 `SelectedSite` records; projected fields are
+ordinary Layer-1 expressions. Homogeneous and heterogeneous collections
+share the same surface, and type-specific field access requires explicit
+match / narrowing.
 
 **O4.7 — Event-driven topology mutation.** Events add nodes, edges,
 equivalences. This is covered at the semantic level by Section 5 (events
@@ -1927,10 +1931,10 @@ surface.
    math, collections, continuous/discrete, functions/contracts, temporal,
    stochastic, inequalities, opaque callables, events, SCCs, learning
    targets).
-8. Phase 4 — remaining audit-specific items (O4.6 heterogeneous
-   `argmax` tagged handles, O4.7 incremental
+8. Phase 4 — remaining audit-specific items (O4.7 incremental
    saturation, O4.8 spatial operator lowering). O4.2 / O4.3 / O4.4 /
-   O4.5 already resolved; O4.1 resolved by the obligation ledger.
+   O4.5 already resolved; O4.1 resolved by the obligation ledger; O4.6
+   resolved by `Selected<T>` selector semantics.
 9. Phase 1 Q2 — structural partition of commitment section.
 10. Write the actual commitment section text into the spec (two
     placements).

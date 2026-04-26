@@ -169,7 +169,14 @@ gap-review stale list, subsequent design locks.
 | implicit same-name carryover in enum variant transitions | every next-variant field supplied explicitly | same field name does not prove same meaning, unit, or provenance |
 | enum variant transition outside `event` bodies | event-boundary `becomes` only | shape/discriminant changes are regime-boundary crossings, not mid-solve mutation |
 | tombstoned access to removed enum-variant fields | removed fields leave scope unless explicitly copied into the next variant or an event/history record | history is a model claim, not implicit storage |
+| stdlib `Maybe<T>` name | `Option<T>` | "maybe" reads epistemic in a language with explicit uncertainty machinery; `Option` names structural presence / absence |
+| implicit projection through `Option<T>` (`option_value.field`) | explicit `match` on `Some` / `None` | absence has no hidden default, NaN, mask, or projection semantics |
 | lifted arithmetic or `materialize(prior, out)` sugar for `Prior<S>` in v2.1 | explicit exhaustive `match` on `Prior<S>` | keeps `~` visible for the first compiler; sugar waits for real model pressure |
+| user-constructed or workflow-bound `Selected<T>` handles | compiler-owned selector primitives produce `Selected<T>`; workflow may query but not bind raw selected identity | Python must not smuggle pool/index/tag semantics into the world model |
+| partial or wildcard concrete-type matches on `Selected<Contract>` | exhaustive selected-handle `match`, or prior narrowing that proves a smaller concrete set | selectors must not hide impossible-to-typecheck concrete fields behind a catch-all arm |
+| ordinary relation `=` as selected-handle identity comparison | explicit stdlib predicate such as `same_entity(a, b, out)` | Myco equality is an acausal graph claim, not pointer/reference comparison |
+| punctuation selector sugar such as `argmax?` or `argmax*` in v2.1 | named primitives `option_argmax` and `argmax_all` | explicit names keep empty behavior and tie behavior visible in the first implementation |
+| smooth selected entity handles | hard selectors return `Selected<T>`; smooth selection returns aggregate values | a differentiable weighted average is not an existing entity reference |
 | ordinary-gradient-through-discontinuity semantics | regime-boundary records with explicit crossing policy | gradients flow inside regimes; crossings require one-sided, subgradient, saltation, estimator, relaxation, or strict rejection |
 | default auto-smoothing of nonsmooth source models | strict default plus workflow-selected relaxation handlers | smoothing is either a `.myco` model claim or an explicit workflow surrogate, never compiler housekeeping |
 | untracked relaxed training plans | relaxation ledger in `hypha explain` / plan IR | relaxed execution must be auditable against the hard source model |

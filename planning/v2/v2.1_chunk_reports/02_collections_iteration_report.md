@@ -279,59 +279,56 @@ let driest = argmin(t.water for t in trees)
 priority_species = driest.photo
 ```
 
-### 4.3 `argmin` / `argmax` semantics
+### 4.3 Selector semantics
 
-`argmax(expr for x in collection)` returns the element that maximizes `expr`.
+`argmax(expr for x in collection)` returns a `Selected<T>` handle: a
+regime-local reference to the existing element that maximizes `expr`.
+Homogeneous and heterogeneous collections share this surface. A homogeneous
+collection returns `Selected<ConcreteType>`; a heterogeneous
+`[impl Contract; some]` collection returns `Selected<Contract>`.
 
-- **Return type:** The element type. For heterogeneous collections, the
-  contract type (can narrow with `is` check).
-- **Ties:** Broken by index order (deterministic).
-- **Differentiability:** `subgradient`. Gradient flows through the
-  currently-selected element. Discontinuous at switchover points (same
-  class as `max(a, b)` at `a = b`). The compiler's existing
-  differentiability annotation system handles this — no new machinery.
-- **Empty collection:** Undefined. Must be guarded (see section 4.4).
+The v2.1 selector family is:
 
-**Lowering — homogeneous collections:** Standard GPU reduction. `argmax`
-returns an index into the (possibly masked) array.
+- `argmax(...)`, `argmin(...)` — strict selected handle; requires nonempty
+  proof.
+- `option_argmax(...)`, `option_argmin(...)` — `Option<Selected<T>>`;
+  empty input returns `None`.
+- `argmax_all(...)`, `argmin_all(...)` — `[Selected<T>; some]`; empty input
+  returns an empty derived view collection and ties return all winners.
 
-**Lowering — heterogeneous collections:** When `argmax` operates across a
-heterogeneous `[T<impl Contract>; some]` collection (desugared to per-type
-pools), the result is a **tagged handle** — internally a `(pool_id, index)`
-pair. Field access on the result emits a multiplexed gather across pools:
+For heterogeneous selections, contract-common fields project directly and
+concrete-type-specific fields require exhaustive `match` / narrowing over
+the selected handle's possible concrete types:
 
-```python
-# What the emitter generates for: tallest.crown_area
-# where tallest came from argmax over a heterogeneous collection:
-dominant_crown = jax.lax.switch(
-    tallest.pool_id, [
-        lambda: _trees_FarquharC3.crown_area[tallest.index],
-        lambda: _trees_C4Photo.crown_area[tallest.index],
-    ]
-)
+```myco
+let tallest = option_argmax(t.height for t in trees)
+
+match tallest {
+    Some(t) => {
+        dominant_crown = t.crown_area
+    }
+    None => {
+        dominant_crown = no_tree_crown_area
+    }
+}
 ```
 
-This is invisible to the user — `tallest.crown_area` looks like a normal
-field access. But the compiler team must emit multiplexed lookups for any
-field dereference on an element reference from a heterogeneous collection.
-The reduction itself (finding the max) is still a standard GPU reduction
-across all pools; the multiplexing only applies to subsequent field access.
+Internally the compiler may lower a heterogeneous `Selected<T>` as a tagged
+pool reference, but that identity is Layer-3 selected-site metadata, not a
+user-visible `(pool_id, index)` value. Field access emits multiplexed lookup
+or branch dispatch where needed; projected fields are ordinary graph
+expressions. `Selected<T>` identity is not e-graph equality and cannot be
+fabricated from Python.
 
-**Important: this introduces a new IR concept.** The v2.0 semantic story is
-"no runtime dispatch — everything monomorphizes before flattening." The
-tagged handle from heterogeneous `argmax` is a genuine IR-level tagged
-union — a runtime sum type that the emitter must dispatch on. This is NOT
-the same as the pre-monomorphization `impl` concept. It's a lightweight
-runtime concept that only arises from element-selecting aggregations over
-heterogeneous collections. The user never sees `pool_id` — the abstraction
-is sound — but the IR must represent it, and the compiler team must know
-it exists. Field access on a tagged handle is multiplexed dispatch, not
-free monomorphization.
+Selection facts are selector-specific: `argmax(t.height for t in trees)`
+proves the selected element's height is maximal; it does not prove anything
+maximal about crown area, biomass, or other projected fields.
 
 For smooth selection when the discontinuity hurts training, the user can
-write a weighted sum instead of hard selection. The exact syntax for this
-depends on aligned-vector / zip semantics for comprehensions (not yet
-designed). Conceptually:
+write a weighted aggregate value instead of hard selection. Smooth selection
+does not return a `Selected<T>` handle. The exact syntax depends on
+aligned-vector / zip semantics for comprehensions (not yet designed).
+Conceptually:
 
 ```myco
 // Hard selection (subgradient):
@@ -353,8 +350,10 @@ See open question 7.4 (`softmax` as a primitive) for status.
 | `any(...)` | `false` |
 | `all(...)` | `true` (vacuous truth) |
 | `count(...)` | `0` |
-| `min(...)` / `max(...)` | undefined — requires guard |
-| `argmin(...)` / `argmax(...)` | undefined — requires guard |
+| `min(...)` / `max(...)` | `+inf` / `-inf` typed sentinels |
+| `argmin(...)` / `argmax(...)` | undefined — requires nonempty proof or guard |
+| `option_argmin(...)` / `option_argmax(...)` | `None` |
+| `argmin_all(...)` / `argmax_all(...)` | empty selected-handle collection |
 
 **Guard syntax:** Use inline `if/else` (already settled in the language):
 
@@ -363,9 +362,16 @@ let max_h = if count(trees) > 0
     then max(t.height for t in trees)
     else 0.0 m
 
-let tallest_crown = if count(trees) > 0
-    then argmax(t.height for t in trees).crown_area
-    else 0.0 m2
+let tallest = option_argmax(t.height for t in trees)
+
+match tallest {
+    Some(t) => {
+        tallest_crown = t.crown_area
+    }
+    None => {
+        tallest_crown = no_tree_crown_area
+    }
+}
 ```
 
 **Dependency note:** Runtime guards and `where` filtering on `some`-sized
@@ -377,10 +383,12 @@ explicitly confirmed during spec integration.
 
 **Lowering note:** On JAX/PyTorch, `jax.numpy.where` / `torch.where`
 evaluates both branches regardless of the condition. The `max()` or
-`argmax()` still executes on the padded array even when the collection is
+`argmax()` may still execute on the padded array even when the collection is
 logically empty. The backend emitter must inject safe sentinels into invalid
-mask slots: `-inf` for `max`/`argmax`, `+inf` for `min`/`argmin`. This
-ensures the reduction produces a valid (but unused) result rather than NaN.
+mask slots: `-inf` for `max` / `argmax` / `option_argmax` / `argmax_all`,
+`+inf` for `min` / `argmin` / `option_argmin` / `argmin_all`. Handle
+reconstruction must also mask dead slots so selectors never return inactive
+entities.
 
 ### 4.5 `count` semantics
 

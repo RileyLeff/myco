@@ -11,7 +11,7 @@ flat exhaustive `match`, explicit narrowing before variant-field
 access, static/dynamic discriminant lowering, contract composition,
 event-only `becomes` variant transitions, workflow tagged-record
 binding, explicit-match-only `Prior<S>`, and stdlib `Prior<S>` /
-`Maybe<T>` / `Result<T, E>` are committed. Extended pattern sugar,
+`Option<T>` / `Result<T, E>` are committed. Extended pattern sugar,
 diagnostics, and implementation-level lowering details remain open.**
 
 ## Why enums
@@ -38,7 +38,7 @@ sum types.
    variant transitions.
 
 4. **Option / Result at the workflow boundary.** A workflow-supplied
-   value that may be absent; a conversion that may fail. `Maybe<T>`,
+   value that may be absent; a conversion that may fail. `Option<T>`,
    `Result<T, E>` are ordinary enums in every other language.
 
 Contracts alone cannot cover these. Contracts give **behavioral
@@ -97,7 +97,7 @@ enum LifeStage {
     Mature { height: Scalar<m>, dbh: Scalar<cm>, crown_area: Scalar<m2> },
 }
 
-enum Maybe<T> {
+enum Option<T> {
     Some(T),
     None,
 }
@@ -288,10 +288,10 @@ The number-or-distribution case. Used as a parameter type when a
 model wants to be deterministic or probabilistic based on
 materialization.
 
-### `Maybe<T>`
+### `Option<T>`
 
 ```myco
-enum Maybe<T> {
+enum Option<T> {
     Some(T),
     None,
 }
@@ -317,7 +317,7 @@ side validation.
 
 Open what else ships. Candidates: `Either<L, R>`, `NonEmpty<T>`,
 `OrderedPair<T>`. All of these can be added post-v2.1; only `Prior`,
-`Maybe`, `Result` look load-bearing for the core story.
+`Option`, `Result` look load-bearing for the core story.
 
 ## Workflow binding
 
@@ -395,7 +395,7 @@ to justify a new surface.
   handle structural polymorphism.
 - Workflow binding uses dumb-data tagged records; Python helpers are
   optional record constructors, not generated enum classes.
-- Stdlib ships `Prior<S>`, `Maybe<T>`, `Result<T, E>` at minimum.
+- Stdlib ships `Prior<S>`, `Option<T>`, `Result<T, E>` at minimum.
 - `Prior<S>` is explicit-match-only in v2.1; no lifted arithmetic and
   no `materialize(prior, out)` sugar.
 
@@ -450,7 +450,7 @@ to justify a new surface.
 
 - Declaration syntax for unit, positional, struct-like variants
 - Exhaustive match with flat patterns and named-field destructuring
-- Stdlib `Prior<S>`, `Maybe<T>`, `Result<T, E>`
+- Stdlib `Prior<S>`, `Option<T>`, `Result<T, E>`
 - Compile-time specialization when discriminant is static
 - Runtime discriminant-tagged kernels when dynamic
 - Contract-typed variant fields
@@ -474,6 +474,6 @@ variants, flat exhaustive `match`, no wildcard/default arm, no
 implicit enum-field projection, static/dynamic lowering, composition
 with contracts, event-only `becomes` transitions, workflow tagged
 records, explicit-match-only `Prior<S>`, stdlib `Prior<S>` /
-`Maybe<T>` / `Result<T, E>`). Extended pattern sugar, diagnostics,
+`Option<T>` / `Result<T, E>`). Extended pattern sugar, diagnostics,
 exact workflow helper names, and implementation-level lowering
 details remain open.
