@@ -89,6 +89,7 @@ gap-review stale list, subsequent design locks.
 | conversion legality as execution-cost choice | type graph owns semantic conversion edges; extraction / lowering owns realization cost | cheap or convenient does not make an illegal conversion legal; legal conversions may still be expensive or unsupported on a backend |
 | compiler auto-emitted admissibility projections | workflow picks projection flavor (`hard_clip` / `sigmoid` / `soft_clip`) | projection-free-compiler principle |
 | compiler auto-selected solver | workflow selects | same principle |
+| exact-in-context default-off rewrites disappearing into the global default-on bucket | site-local `promoted_exact_in_context` with zero `cost_of().approximation` and preserved provenance | exactness in one envelope does not change the rewrite's baseline class; diagnostics must show why it fired |
 | controller as `.myco` construct | workflow-only concept | strict `.myco` / Python split |
 | generated Python mirror classes for `.myco` models, entities, generics, or enums | catalog-backed `NodePath` / `FacetPath` handles, catalog-validated tagged records, plus optional thin data helpers | Python remains a dumb workflow layer; the catalog owns validation and type interpretation |
 | string-only workflow ABI as the canonical address model | catalog-backed handles with canonical string serialization | strings are useful for configs and CLIs, but complex types, generics, axes, and existence domains need catalog metadata |

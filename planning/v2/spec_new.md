@@ -200,7 +200,7 @@ Terms: `variable`, `bound variable`, `free variable`, `relation`,
 `SelectedSite`, `TopologyDelta`, `TopologyVersion`, `capability profile`,
 `resolved run lock`, `SpatialOperatorSite`, `WeakFormSite`,
 `ResidualFormSite`, `TransferSite`, `DiscreteOperatorSite`,
-`realization provider`, `evidence grade`.
+`realization provider`, `evidence grade`, `promoted_exact_in_context`.
 
 ---
 
@@ -3544,6 +3544,12 @@ faithfulness / numerical-quality economics. Extraction (§19.1) uses
 the full record. Approximation diagnostics may project only the
 faithfulness fields.
 
+If a baseline default-off rewrite is `promoted_exact_in_context`
+(§15.3, §17.6), its contribution to `cost_of().approximation` is zero
+for that site. The cost record keeps a provenance pointer to the
+promotion proof instead of treating the rewrite as an authorized
+approximation.
+
 `objective_terms(residual)` consumes a `ResidualSite` (§19.2) and
 returns named training-objective components, not a scalar. Fields cover
 the site's training sources:
@@ -3779,10 +3785,13 @@ effective error class in context. A rewrite that is normally
 lossy-tolerance becomes lossless-in-context when the envelope
 proves the error bound collapses to zero, for example when an
 admissibility bound collapses under a refinement. In that case,
-a block that is default-off (requires an explicit `approximate`
-declaration) becomes default-on for the narrowed context. The
-mechanism is canonical here; §17.6 carries the corresponding
-corollary for the rewrite-predicate language.
+a rewrite that is normally default-off may fire without an explicit
+`approximate` declaration, but its baseline partition does not change.
+The rewrite trace records `promoted_exact_in_context` with the zero
+error-bound proof. It contributes zero to `cost_of().approximation`
+while remaining visible to diagnostics. The mechanism is canonical
+here; §17.6 carries the corresponding corollary for the rewrite-
+predicate language.
 
 #### 15.4 Five-Layer Lossiness Accounting
 
@@ -4427,12 +4436,13 @@ keys, so training-emission diagnostics (§25) can expose per-residual
 objective terms while extracted realizations still share simplified
 compute.
 
-Envelope-narrowing corollary. A default-off rewrite is promoted
-to default-on at sites where envelope metadata (§16.1 Layer 2)
-collapses its certified error bound to zero. The mechanism is
-canonical in §15.3; this partition treats such a site as
-effectively default-on for the narrowed context without requiring
-an explicit `approximate` declaration.
+Envelope-narrowing corollary. A default-off rewrite is
+`promoted_exact_in_context` at sites where envelope metadata (§16.1
+Layer 2) proves its certified error bound is zero. The rewrite may fire
+without an explicit `approximate` declaration in that narrowed context,
+but it remains tagged with its baseline `default-off` partition and the
+promotion proof. Promotion is site-specific; it does not globally move
+the rewrite into the default-on bucket.
 
 ### 18. The Type Graph
 
@@ -4559,6 +4569,14 @@ workflow configuration selects a specific point
 default scalar weighting; the compiler does not assume one dimension
 dominates. Extraction policy is selected workflow-side (§24) via
 `run.config.extraction_policy`.
+
+Promoted exact rewrites contribute zero to the `approximation` axis but
+remain in the extraction trace with `promoted_exact_in_context`
+provenance. They are not hidden inside the default-on ledger and they do
+not consume an approximation budget. This lets a faithfulness-first
+policy treat the extracted expression as exact while `hypha explain`
+still shows that a normally default-off rewrite became exact only under
+the local envelope.
 
 Consequence: the same e-graph yields different residuals under
 different workflow policies. The residual graph is a projection
@@ -4697,6 +4715,11 @@ bound. Scheduling and termination guarantees:
   error bound and a `where:` guard. Within a block, scheduling
   is round-robin over active rewrites up to the authorized
   error budget.
+- **Promoted exact rewrites** are baseline default-off rewrites whose
+  site-local envelope proves zero error (§17.6). They schedule with
+  default-on rewrites for that site only, carry
+  `promoted_exact_in_context` provenance, and do not consume an
+  `approximate` block or error budget.
 - **Scheduling priority.** Merges from explicit relation `=`
   and `identify` (sources 1 and 4, §17.1) fire first;
   algebraic and unit-preserving rewrites next; conversion and
@@ -5088,6 +5111,9 @@ The textual report includes:
   plan.
 - Envelope facts: bounds, distributions, approximation tolerances,
   provenance, and rewrite traces (§16).
+- Promoted exact rewrites: baseline partition, site, zero-error proof,
+  envelope facts consumed, and resulting `cost_of().approximation = 0`
+  entry (§15.3, §17.6, §19.1).
 - Regime boundaries and crossing-handler ledger entries: detected
   surfaces, continuity / derivative class, selected crossing policy,
   topology handler, and any workflow-authorized surrogate used by the
@@ -8594,18 +8620,14 @@ be consulted for fields on another. Layer 3's role as dispatch
 table for per-key state (§16.1) extends cleanly to site-keyed
 records; no new layer mechanism introduced.
 
-**Envelope-narrowing promotion: partition labeling.** A default-off
-rewrite whose declared `error_bound` evaluates to zero over the
-e-class envelope is promoted to default-on for that class (§16.3,
-§17.6). Open: for cost accounting and diagnostics, does the promoted
-rewrite move into the default-on bucket (so its
-`cost_of().approximation` contribution drops to zero and it
-disappears from the approximation-class ledger), or does it stay in
-the default-off bucket with a fire-unconditionally-in-this-context
-flag? The first is cleaner algebraically; the second preserves the
-bookkeeping trail for a reader looking up a `Float64 -> Float32`
-conversion in the approximation ledger. Affects §19.1 extraction-
-cost accounting and §22 `explain` surfaces.
+**Envelope-narrowing promotion resolved.** A baseline default-off
+rewrite whose declared `error_bound` is proven zero by the local
+envelope is marked `promoted_exact_in_context` (§15.3, §17.6). It may
+fire without an explicit `approximate` block for that site, contributes
+zero to `cost_of().approximation`, and stays visible in the rewrite /
+promotion trace instead of moving into the global default-on bucket.
+This preserves the bookkeeping trail for diagnostics while keeping
+faithfulness accounting exact (§19.1, §22).
 
 **Approximation cost composition.** Two lossy-model rewrites applied
 within the same extracted plan are not in general independent — they
