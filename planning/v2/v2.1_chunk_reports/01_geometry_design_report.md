@@ -143,8 +143,8 @@ The domain type provides:
 - **Geometry coefficient bindings** via parentheses on the geometry
 - **Fields** that vary continuously over the domain
 - **Relations** including spatial operators
-- **Locus-scoped relations** that provide or override junction/boundary
-  conditions
+- **Locus-scoped relations** that provide junction/boundary conditions
+  or fulfill compiler/package obligations
 
 ```myco
 type FruitSurface : Domain<G = Sphere(radius = radius)>
@@ -213,11 +213,11 @@ type HydraulicTree : Domain<G = BranchingManifold>
     field junction_pressure on junction: WaterPotential
 
     // Dynamics of the vertex storage tank:
-    relation tank_dynamics on junction replaces balance(axial_flux):
+    relation tank_dynamics on junction fulfills flux_condition(axial_flux):
         d(junction_volume) = sum(e in incident_edges,
-            orientation(e) * trace(axial_flux, edge = e))
+            orientation(e) * limit_from(axial_flux, junction, e))
         for e in incident_edges:
-            trace(pressure, edge = e) = junction_pressure
+            limit_from(pressure, junction, e) = junction_pressure
 }
 ```
 
@@ -237,12 +237,12 @@ locus terminal where degree = 1
 ```
 
 Loci serve two purposes:
-1. **Default condition generation:** The compiler generates default flux
-   balance at graph junctions when triggered by `diverg()` usage (see
-   section 3.2).
-2. **User condition and override targets:** The user writes locus-scoped
-   relations for continuity, boundary conditions, and overrides of generated
-   defaults (see section 2.6).
+1. **Obligation emission:** The compiler emits flux-condition
+   obligations at graph junctions when triggered by `diverg()` usage
+   (see section 3.2).
+2. **User condition and fulfillment targets:** The user writes
+   locus-scoped relations for continuity, boundary conditions, and
+   explicit obligation fulfillments (see section 2.6).
 
 Not all geometries have loci. `Euclidean<Dim = 2>` has none — nothing
 structurally special happens anywhere in a flat rectangle. `BranchingManifold`
@@ -320,19 +320,18 @@ from any locus) is a compile error.
 ### 2.6 `relation name on locus_name:` — locus-scoped relation
 
 A relation can be scoped to a specific locus using `on locus_name:`. This
-either provides a condition where no default exists, or overrides a
-compiler-generated default.
+either provides a condition where no default exists, or satisfies a
+compiler/package obligation.
 
-**Overrides use explicit `replaces` targeting with obligation keys.** When a
-locus-scoped relation replaces a compiler-generated default, it names the
-obligation it replaces using a stable semantic key — not a user-chosen
-relation name:
+**Fulfillments use explicit obligation keys.** When a locus-scoped relation
+satisfies a compiler/package obligation, it names the obligation using a
+stable semantic key — not a user-chosen relation name:
 
 ```myco
-// Override the auto-generated balance(axial_flux) with a leaky junction:
-relation leaky_junction on junction replaces balance(axial_flux):
+// Fulfill the junction flux condition with a leaky junction law:
+relation leaky_junction on junction fulfills flux_condition(axial_flux):
     sum(e in incident_edges,
-        orientation(e) * trace(axial_flux, edge = e)) = leak_rate
+        orientation(e) * limit_from(axial_flux, junction, e)) = leak_rate
 
 // Provide a new condition — not replacing anything:
 relation pressure_continuity on junction:
@@ -340,10 +339,11 @@ relation pressure_continuity on junction:
 ```
 
 Obligation keys are the stable identifiers that the compiler uses for
-generated defaults (e.g., `balance(axial_flux)`) and recognized patterns
-(e.g., `continuous(pressure)`). Using obligation keys rather than relation
-names ensures that `replaces` targets are unambiguous and that plan
-inspection can clearly show which default was replaced by which user relation.
+compiler/package obligations (e.g., `flux_condition(axial_flux)`) and
+recognized patterns (e.g., `continuous(pressure)`). Using obligation keys
+rather than relation names ensures that fulfillment targets are unambiguous
+and that plan inspection can clearly show explicit fulfillments, selected
+defaults, and suppressed default candidates.
 
 Locus-scoped relations can include `where` predicates that reference topology
 metadata and structural facts:
@@ -490,9 +490,10 @@ relation (e.g., inferring pressure continuity because Darcy's law mentions
 
 When the compiler sees `diverg(flux_field)` in any conservation-form
 equation (temporal `d(x) = diverg(f) + ...` OR steady-state
-`0 = diverg(f) + ...`), it synthesizes at unhandled graph junctions:
+`0 = diverg(f) + ...`), it emits at graph junctions:
 
-- **`balance(flux_field)`** — sum of oriented traces = 0 (Kirchhoff)
+- **`flux_condition(flux_field)`** — obligation site for junction flux
+  accounting, with stdlib default candidate `balance_zero(flux_field)`
 
 That's it. No continuity inference. If the user wants pressure continuity,
 they write it:
@@ -504,17 +505,17 @@ relation pressure_continuous on junction:
 
 // Or the stdlib helper for the standard Kirchhoff pair:
 relation standard_junction on junction:
-    kirchhoff(pressure, axial_flux)     // continuity + balance as a bundle
+    kirchhoff(pressure, axial_flux)     // continuity + balance_zero bundle
 ```
 
 `continuous(field)` and `kirchhoff(potential, flux)` are stdlib convenience
 functions, not compiler magic. The user can always write the full trace
 equations instead.
 
-**Generated defaults are inspectable** via the plan inspection artifact
+**Obligation defaults are inspectable** via the plan inspection artifact
 (same mechanism as SCC decomposition and solver strategy inspection). The
-plan shows `GENERATED: balance(axial_flux) at junctions` and lists all
-user-provided locus relations.
+plan shows `OBLIGATION: flux_condition(axial_flux) at junctions`, selected
+fulfillments, and any suppressed default candidates.
 
 ### 3.3 Embedding is separate from intrinsic geometry
 
@@ -629,9 +630,9 @@ model.assume_topology("tree_42.hydraulics", tree_data)
 class **at the schema level**: structural correctness, data completeness,
 and unit consistency. Whether the resulting PDE/DAE is well-posed (enough
 boundary conditions, correct constraint counts) is a separate planner-stage
-check that depends on equations, generated defaults, user-provided
-conditions, and discretization. Validation failure is a runtime error with a
-clear diagnostic.
+check that depends on equations, obligation-ledger selections,
+user-provided conditions, and discretization. Validation failure is a
+runtime error with a clear diagnostic.
 
 ### 4.1 Topology data schema
 
@@ -749,8 +750,8 @@ v2.1 but the architecture should not prevent it.
 
 This example exercises the full geometry subsystem: geometry declaration,
 domain type with edge-interior and locus-scoped fields, bulk relations with
-spatial operators, balance-only default inference via `diverg()`, opt-in
-continuity, pit membrane override, and `where`-predicated terminal
+spatial operators, flux-condition obligations via `diverg()`, opt-in
+continuity, pit membrane condition, and `where`-predicated terminal
 conditions.
 
 ```myco
@@ -774,12 +775,13 @@ type HydraulicTree : Domain<G = BranchingManifold>
     relation darcy:
         axial_flux = -axial_conductivity * grad(pressure)
 
-    // Conservation equation — diverg() triggers balance default at junctions
+    // Conservation equation — diverg() triggers flux_condition obligations
     temporal water_balance:
         d(water_content) = diverg(axial_flux)
 
-    // Compiler generates at junctions:
-    //   GENERATED: balance(axial_flux)
+    // Compiler ledger at junctions:
+    //   OBLIGATION: flux_condition(axial_flux)
+    //   DEFAULT CANDIDATE: balance_zero(axial_flux)
     // No continuity generated. User provides all other junction conditions.
 
     // Pit membrane pressure drop at junctions.
@@ -812,13 +814,13 @@ design (see section 8.2).
    per-edge discretization, exposes `parent`/`children`/`incident_edges`
 2. Derives `grad(pressure)` as `dp/ds` along each edge (from the `[[1]]`
    metric)
-3. Sees `diverg(axial_flux)` in `water_balance` — generates
-   `balance(axial_flux)` at junctions
+3. Sees `diverg(axial_flux)` in `water_balance` — emits
+   `flux_condition(axial_flux)` obligations at junctions with
+   `balance_zero(axial_flux)` default candidates
 4. Sees `pit_drop on junction` — registers as user-provided junction
-   condition for pressure (no default to replace, since continuity is not
-   auto-generated)
-5. At junctions: `balance(axial_flux)` (generated) + `pit_drop` (user) =
-   two junction conditions. Plan inspection shows both.
+   condition for pressure (no continuity obligation is generated)
+5. At junctions: selected `balance_zero(axial_flux)` fulfillment +
+   `pit_drop` (user) = two junction conditions. Plan inspection shows both.
 6. Sees `leaf_outflow` and `root_boundary` at terminals — no auto-generation
    at terminals
 7. After `assume_topology` provides the actual graph with vertex tags,
@@ -827,14 +829,13 @@ design (see section 8.2).
    unique solution given the topology, discretization, and equation structure
 9. Sizes the system from the graph and emits the solver
 
-**Replacing a generated default:** If the user needs to override the
-auto-generated balance law (e.g., for a leaky junction), they use `replaces`
-with the obligation key:
+**Fulfilling an obligation explicitly:** If the user needs a nonzero junction
+law (e.g., for a leaky junction), they use `fulfills` with the obligation key:
 
 ```myco
-relation leaky_junction on junction replaces balance(axial_flux):
+relation leaky_junction on junction fulfills flux_condition(axial_flux):
     sum(e in incident_edges,                                 // (*)
-        orientation(e) * trace(axial_flux, edge = e)) = leak_rate
+        orientation(e) * limit_from(axial_flux, junction, e)) = leak_rate
 ```
 
 **Note on flow direction:** `parent`/`children` are anatomical labels (which

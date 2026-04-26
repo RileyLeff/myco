@@ -178,8 +178,8 @@ Rules:
 - Removed old fields leave scope in the next regime.
 - Historical values must be copied into the next variant or into an
   event/history record if the model needs them.
-- `replaces` is only for named obligation retraction; ordinary
-  variant transition does not imply `replaces`.
+- `fulfills` is only for explicitly satisfying a named obligation;
+  ordinary variant transition does not imply obligation fulfillment.
 
 This keeps dynamic shape change explicit without making users model
 backend masks by hand. A JAX-style backend may lower dynamic enums

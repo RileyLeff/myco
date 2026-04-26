@@ -22,7 +22,8 @@ The v2.1 work-in-progress inherited this absence.
 This is a regression, not a design pivot. The unified-machinery direction for
 kernels (see `03_kernels_in_progress.md` §7) explicitly assumes an e-graph
 substrate, and multiple v2.1 surfaces (closure policies, function inverses,
-named-type conversions, `identify`, `replaces`, events) assume it implicitly.
+named-type conversions, `identify`, obligation fulfillment, events) assume it
+implicitly.
 
 This chunk report captures the foundational design decisions that the v2.1
 commitment section will be built from. It is **not** the commitment text
@@ -200,10 +201,9 @@ retraction does not exist; events add facts (including end-of-existence
 facts), and the graph's interpretation at any timestep is determined by
 which facts reference which entities at that time.
 
-**Still-open question (Section 13):** obligation retraction (`replaces`)
-is a real case where the spec currently demands removal semantics. The
-referential-truth framing may or may not fully cover this; needs its own
-resolution.
+**Resolved follow-up:** the old obligation-retraction framing is replaced by
+an adjacent obligation ledger. `fulfills <obligation_key>` selects candidate
+fulfillments before e-graph emission; no fact is retracted.
 
 ---
 
@@ -813,7 +813,7 @@ These ship in v2.1 with the commitment stating "activates when X resolves":
 | L2 | Smoothing-surface lock | `where` → sigmoid in user-written smooth form only |
 | N1 | Kernels chunk §6 | Numerical quadrature substitution; needs integration semantics |
 | P1 | Open-questions §B.3 item 9 | Mesh discretization stencils — architectural call: e-graph rewrite vs pre-e-graph codegen |
-| W1 | O4.1 | `replaces` obligation retraction; three options still open |
+| W1 | O4.1 | obligation fulfillment ledger; resolved in spec_new.md §8.11 / §10.5 |
 
 **O2.3 resolved (ship):** K1 (kernel compact-support truncation), M1
 (first-order Taylor), M2 (high-order drop), Z8 (delta method), Z9
@@ -1245,17 +1245,13 @@ semantics:
 
 ### Open — Phase 4 (audit-specific items)
 
-**O4.1 — Obligation retraction (`replaces`).** The `replaces` keyword
-demands deletion semantics; standard e-graph theory is monotonic. Options:
-- In-graph with versioning and rebuild on retraction (expensive).
-- Adjacent obligation-keyed metadata per v1 §6.2 (Layer 3).
-- Reframe `replaces` as "add a superseding fact, old fact stops being
-  selected by extraction" (a non-retraction framing analogous to the
-  referential-truth answer for events).
-
-The referential-truth framing (Section 5) may cover `replaces` the same way
-it covers ecosystem entities, but the specific semantics of `replaces` in
-the spec needs a pass to confirm. **Section 12 open.**
+**O4.1 — Obligation fulfillment ledger. RESOLVED (2026-04-26).** The
+deletion framing is gone. Compiler/package rules emit `ObligationSite`s;
+relations, temporal blocks, event effects, and package defaults provide
+candidate fulfillments. The ledger selects explicit/default candidates before
+layer-1 e-graph emission, retains suppressed defaults for diagnostics, and
+never retracts an already-emitted fact. Canonical text lives in
+`spec_new.md` §8.11 / §10.5.
 
 **O4.2 — Pole L'Hopital and `identify`-seam as structural-predicate-gated
 rewrites. RESOLVED (2026-04-20) via Section 12 CC5.** Resolved as
@@ -1332,7 +1328,7 @@ Deferred until above resolve. Once Phases 2-4 are locked:
 The rewrite-rule audit surfaced cross-cutting items that did not fit the
 strict/fuzzy/one-way taxonomy cleanly. Five (CC1–CC5) came directly from
 the audit synthesis (reproduced in the appendix below). Additional
-findings (directional absence, obligation retraction, `condition_weighted`
+findings (directional absence, obligation fulfillment, `condition_weighted`
 deferral) are tracked via O4.x entries in Section 11.
 
 **Quick status:**
@@ -1348,7 +1344,7 @@ deferral) are tracked via O4.x entries in Section 11.
 Audit findings not in the CC1–CC5 numbering but still cross-cutting:
 
 - Directional rewrites absent from kernel-report three-tier cut — **resolved** in Section 7 (framing B).
-- Obligation retraction (`replaces`) — tracked as O4.1.
+- Obligation fulfillment ledger — O4.1 resolved in `spec_new.md` §8.11 / §10.5.
 - `condition_weighted` closure deferred — tracked as O4.5.
 
 ---
@@ -1931,10 +1927,10 @@ surface.
    math, collections, continuous/discrete, functions/contracts, temporal,
    stochastic, inequalities, opaque callables, events, SCCs, learning
    targets).
-8. Phase 4 — remaining audit-specific items (O4.1 `replaces`,
-   O4.6 heterogeneous `argmax` tagged handles, O4.7 incremental
+8. Phase 4 — remaining audit-specific items (O4.6 heterogeneous
+   `argmax` tagged handles, O4.7 incremental
    saturation, O4.8 spatial operator lowering). O4.2 / O4.3 / O4.4 /
-   O4.5 already resolved.
+   O4.5 already resolved; O4.1 resolved by the obligation ledger.
 9. Phase 1 Q2 — structural partition of commitment section.
 10. Write the actual commitment section text into the spec (two
     placements).
@@ -2081,9 +2077,9 @@ convo was getting compacted, here's the rewrite rule discussion that hasn't been
 
   - V1. observe(path, data) installs path = data as a forward observation factor; data doesn't get rewritten by inferred constraints
 
-  W. Obligation retraction — deletion, not rewrite. Needs O4.1 resolution.
+  W. Obligation fulfillment — ledger selection, not rewrite. O4.1 resolved.
 
-  - W1. relation X on locus replaces balance(axial_flux): ... retracts the compiler-generated balance(axial_flux) from the e-graph at the named locus and substitutes the user equation
+  - W1. relation X on locus fulfills flux_condition(axial_flux): ... satisfies the named obligation; generated defaults are candidate fulfillments and unselected defaults are not emitted as facts
 
   X. Structural-predicate-gated strict — the cross-cutting finding. Strict/lossless but gated on structural predicate, not value bounds.
 
@@ -2138,7 +2134,7 @@ convo was getting compacted, here's the rewrite rule discussion that hasn't been
 
   - Commit to v2.1 (baseline ≈ 40 rules): all of A, B, C, D, E, F, G, H, I, J, K1, L1, R, S, T, U, V, Y1, Y2, Y3, Y5. Covers everything mocks actually exercise plus the headline kernel truncation.
   - File Tier 1 open (≈ 10 rules): K2, K3, M1, M2, N1, O1, P1, Q1, Q2, Y6. Machinery-demanded but not load-bearing for v2.1 shipping.
-  - File Tier 0 open (≈ 6 rules blocked on other decisions): L2 (depends on smoothing surface lock), W1 (depends on O4.1), X1 (depends on O4.2 category), CC1-5.
+  - File Tier 0 open (remaining rules blocked on other decisions): L2 (depends on smoothing surface lock), X1 (depends on O4.2 category), CC1-5. W1 is resolved by O4.1's obligation ledger.
   - Defer to v2.2: Y4 condition_weighted (depends on O4.5 cost-model machinery), speculative kernel rewrites (K3 low-rank specifics).
 
   Want to accept the cuts as proposed, adjust batch-by-batch, or go rule-by-rule?

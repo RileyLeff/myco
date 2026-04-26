@@ -81,14 +81,14 @@ without restating it.
 compile-checked invariants that thread through types, relation
 equality (§8), event firings (§10), and residual classification
 (§20). A conserved group is a compiler property the compiler
-enforces. No user annotation suppresses the check; an explicit
-`constraint` declaration (§8.1) is required if a relation would
-otherwise violate the group.
+enforces. No user annotation suppresses the check; a model that would
+otherwise violate the group must satisfy the emitted obligation
+explicitly or state the relevant constraint (§8.1).
 
 **Referential truth.** Principle 5, expanded. The monotonicity
-machinery lives in §15 (the equational core), §10.5 (`replaces`
-semantics), and §16 (adjacent keyed state with its own monotonicity
-rules).
+machinery lives in §15 (the equational core), §8.11 / §10.5
+(obligation fulfillment), and §16 (adjacent keyed state with its own
+monotonicity rules).
 
 **Downward-only cross-scale visibility.** Composite types see their
 components. Components do not see their composite. A `Forest`
@@ -394,9 +394,8 @@ sites).
 **Summary.** `type Mass : Scalar<kg> { conserved }` marks a parent
 type whose named-type children share conservation semantics. Cross-
 sibling arithmetic is forbidden without explicit convert; destructive
-events must route conserved fields somewhere; the compiler auto-
-generates junction balance relations from `diverg()` on conserved
-flux fields.
+events must satisfy conservation-route obligations; `diverg()` on
+conserved flux fields emits junction flux-condition obligations.
 
 `type Mass : Scalar<kg> { conserved }` marks a parent type whose
 named-type children (e.g., `FishMass`, `DetritusMass`) share
@@ -406,16 +405,22 @@ conservation semantics. Consequences:
    exists.
 2. Bare `convert FishMass <-> DetritusMass` permitted between siblings
    (relabel only, no conversion body).
-3. Events that destroy instances must route conserved fields
-   somewhere; unaccounted mass is a compile error (§10).
-4. Compiler auto-generates junction balance relations from `diverg()`
-   usage on conserved flux fields (§11); overridable with
-   `replaces balance(flux_field)`.
+3. Events that create, destroy, split, merge, or move instances must
+   satisfy `event_conservation_route(<group>)` obligations for affected
+   conserved fields; unaccounted mass is a compile or workflow
+   composition error (§10.5).
+4. Compiler emits `flux_condition(flux_field)` obligation sites from
+   `diverg()` usage on conserved flux fields (§11). A package may
+   provide the default candidate `balance_zero(flux_field)`; users
+   write explicit `fulfills flux_condition(flux_field)` relations or
+   temporal blocks when the junction leaks, stores, or otherwise
+   follows a nonzero balance law.
 5. Bare-convert sibling merges create magnitude equivalence in the
    e-graph (§17 merge source — named-type conversion).
 
-Tier 2 sub-questions deferred: scoped conservation, boundary-flux
-interaction, field-level conservation.
+Tier 2 sub-questions deferred: scoped conservation and field-level
+conservation. Boundary and junction interactions use the obligation
+ledger (§8.11, §11.2, §11.8).
 
 #### 3.8 Scalar, Tensor, and Shape Expressions
 
@@ -954,9 +959,8 @@ provided, preserved fields must be copied explicitly, and same-name
 fields never carry over implicitly. Fields from the old variant that
 are not copied leave scope in the next regime. Historical values must
 be written explicitly into the new variant or into a separate event /
-history record. `replaces` remains only for named obligation
-retraction (§10.5); an ordinary variant transition does not imply
-`replaces`.
+history record. `becomes` does not satisfy conservation obligations by
+itself; ordinary variant transition is separate from `fulfills`.
 
 Workflow binding for enum-typed fields uses catalog-validated tagged
 records, not generated Python enum classes:
@@ -1773,23 +1777,75 @@ boundaries, classify them conservatively, preserve one-sided or
 within-regime information where valid, and refuse fake ordinary
 gradients.
 
-#### 8.11 Generated-Defaults and Obligation Keys
+#### 8.11 Obligation Sites, Default Candidates, and Fulfillments
 
-**Summary.** Compiler-generated relations (junction balance, boundary
-condition stubs, conservation synthesis) carry named obligation keys
-like `balance(axial_flux)`. Modelers override with
-`replaces balance(axial_flux): <body>` for targeted overrides
-without disabling generation globally.
+**Summary.** Compiler and package rules emit named `ObligationSite`s.
+Modelers satisfy them with `fulfills <obligation_key>` on relations,
+temporal blocks, event effects, or package default candidates. Defaults
+are visible candidate fulfillments, not hidden facts; explicit
+fulfillments suppress default selection without retracting anything.
 
-When the compiler auto-generates a relation (e.g., junction balance
-from `diverg()` on a conserved flux field, §3.7; boundary condition
-stubs from geometry, §11), the generated relation carries a named
-obligation key like `balance(axial_flux)`. The modeler overrides
-the default by writing `replaces balance(axial_flux): <body>` in
-the type body. Gives users a targeted hook to override compiler
-decisions without disabling generation globally. Primary consumers:
-junction balance, boundary conditions, auto-synthesized
-conservation relations.
+An `ObligationSite` is adjacent keyed state owned by the compiler's
+plan ledger, not an e-graph equality. It records:
+
+- **Key.** Stable semantic name, such as `flux_condition(axial_flux)`,
+  `boundary_condition(pressure)`, or
+  `event_conservation_route(Carbon)`.
+- **Kind / cardinality.** `exactly_one` for boundary conditions and
+  ordinary junction flux laws; `accumulative` for event routes whose
+  pieces are summed and checked.
+- **Locus / event / guard.** The place where the obligation applies,
+  including topology predicates and event guards.
+- **Candidates.** Explicit user fulfillments and package-provided
+  default candidates.
+- **Status.** `unfulfilled`, `fulfilled_explicitly`,
+  `fulfilled_by_default`, `suppressed_default`, `conflicting`, or
+  `inactive_guard`.
+
+User source names the obligation it satisfies:
+
+```myco
+relation leaky_junction on junction
+  fulfills flux_condition(axial_flux):
+    sum(e in incident_edges,
+        orientation(e) * limit_from(axial_flux, junction, e)) = leak_flux
+
+relation root_pressure on terminal where role is Root
+  fulfills boundary_condition(pressure):
+    limit_from(pressure, terminal) = soil_water_potential
+```
+
+For an exactly-one obligation, overlapping explicit fulfillments are a
+compile or workflow-composition error; disjoint guards are valid. If no
+explicit fulfillment applies, a package default candidate may be
+selected only when the workflow policy permits default fulfillments.
+If no explicit or permitted default fulfillment applies, the obligation
+is unfulfilled and extraction fails before pretending a model exists.
+
+Package defaults are ordinary candidate fulfillments shipped by
+stdlib / imported packages, not workflow magic. The canonical junction
+default is `balance_zero(flux)` as a candidate for
+`flux_condition(flux)`. Boundary conditions have no silent default.
+Event conservation routes are accumulative: several event effects may
+fulfill the same `event_conservation_route(group)` obligation, and the
+ledger checks that the routed total matches the conserved quantity
+leaving or entering the source regime.
+
+Package authors mark a candidate as default by prefixing the fulfillment
+declaration with `default`. `default` is only legal on a declaration
+that also names `fulfills`; it changes ledger priority, not the body
+semantics:
+
+```myco
+default relation balance_zero(flux) on junction
+  fulfills flux_condition(flux):
+    sum(e in incident_edges,
+        orientation(e) * limit_from(flux, junction, e)) = zero_like(flux)
+```
+
+`zero_like(x)` is a stdlib additive-identity constructor for the
+shape/unit/type of `x`; it is not a numeric literal value supplied by
+the modeler.
 
 ### 9. State and Time
 
@@ -1964,7 +2020,7 @@ structure. Referential-truth semantics: entities do not know they are
 dead, events add facts, no tombstoning, no retraction. Enum variant
 transitions use event-only `becomes` with explicit next-regime
 construction. Firing order, generic expansion, cross-container
-events, and `replaces` / monotonicity live here.
+events, event-route fulfillments, and monotonicity live here.
 
 `event` declarations for topology change. Referential-truth semantics:
 things do not know they are dead. Events add facts; no tombstoning, no
@@ -2114,24 +2170,52 @@ across different event types is §10.1; within a single type,
 parallelism is the default and the three cases above cover every
 outcome.
 
-#### 10.5 `replaces` and Monotonicity
+#### 10.5 Fulfillment Ledger and Monotonicity
 
-**Summary.** `replaces <obligation_key>` overrides a compiler-
-generated default by suppressing its emission, not by retracting a
-fact. The e-graph never contains both the default and the override
-simultaneously, preserving monotonicity. User-written retraction of
-prior user claims remains open (tracked in §35).
+**Summary.** `fulfills <obligation_key>` satisfies an obligation site;
+it does not retract or mutate another source statement. Default
+candidates are selected or suppressed in the obligation ledger before
+residual extraction. The e-graph only receives the selected fulfillment
+facts, preserving monotonicity.
 
-A `replaces <obligation_key>` declaration (§8.11) overrides a
-compiler-generated default relation by suppressing its emission,
-not by retracting a fact after the fact. The e-graph never
-contains both the default and the override simultaneously. This
-preserves the monotonicity invariant.
+A fulfillment declaration (§8.11) answers an `ObligationSite`. For
+exactly-one obligations, the ledger selects one active fulfillment:
+an explicit user fulfillment if exactly one applies, otherwise a
+permitted package default if exactly one applies, otherwise an
+unfulfilled or conflicting status. Suppressed defaults remain
+inspectable ledger candidates but are not emitted as layer-1 facts.
 
-The harder case of a user-written `event` that logically retracts
-a prior user claim remains open and is tracked in §35 Other
-Opens. Events only add facts; `replaces` applies only
-to compiler-generated defaults, not arbitrary prior claims.
+For accumulative obligations such as
+`event_conservation_route(Carbon)`, every active fulfillment contributes
+to the ledger total. The compiler checks the aggregate route against
+the conserved quantity crossing the event boundary. This supports
+split, merge, shedding, storage, and source/sink-style event models
+without pretending the event happened in a fixed statement order.
+
+Inside an event body, a named effect block may carry `fulfills`. The
+block name is provenance, not ordering:
+
+```myco
+event leaf_shed(l: Leaf, d: DetritusPool, a: Atmosphere) {
+    l.stage becomes Shed
+
+    route_to_detritus fulfills event_conservation_route(Carbon):
+        d.carbon += l.carbon * detritus_fraction
+
+    route_to_atmosphere fulfills event_conservation_route(Carbon):
+        a.carbon += l.carbon * respired_fraction
+}
+```
+
+The two route blocks are accumulated by obligation key. The ledger
+checks routed carbon against the carbon removed from `l` by the event
+transition; it does not impose a statement-order interpretation.
+
+The harder case of a user-written event that logically retracts a
+prior user claim remains out of the core source language and is tracked
+in §35 Other Opens. Events add facts; obligation fulfillment selects
+which candidate answers a compiler/package obligation, not whether
+arbitrary prior claims are deleted.
 
 #### 10.6 Enum Variant Transitions
 
@@ -2168,8 +2252,9 @@ Rules:
   transition.
 - Historical values are available only if the model writes them into
   the new variant or a separate event/history record.
-- `becomes` does not retract relations and does not imply `replaces`;
-  `replaces` is still only for named obligation retraction (§10.5).
+- `becomes` does not retract relations and does not satisfy obligations
+  implicitly; use `fulfills` when an event effect answers an
+  obligation (§10.5).
 
 Lowering may represent a dynamic enum with tags, branches, masks, or
 regime-specific plans depending on backend capability, but the Myco
@@ -2233,7 +2318,7 @@ coordinate units and a mismatch is a compile error.
 **Summary.** Stdlib-recognized spatial operators on locus-scoped
 fields: `grad`, `diverg`, `laplacian`, `curl`, `normal_grad`,
 `trace`, `limit_from`. `diverg` on a conserved flux field drives
-auto-synthesized junction balance. Operators are stdlib axioms with
+`flux_condition` obligations at junctions. Operators are stdlib axioms with
 capability contracts; users do not annotate them. Dimension-
 dependent signatures (e.g., `curl`) dispatch at the axiom level via
 case-on-val-generic in the return type.
@@ -2243,8 +2328,8 @@ Compiler-recognized operators on locus-scoped fields:
 - `grad(f)` — gradient of a scalar field; yields a vector field
   on the same locus.
 - `diverg(v)` — divergence of a vector field; yields a scalar.
-  `diverg` on a conserved flux field drives auto-synthesized
-  junction balance (§3.7, §11.8).
+  `diverg` on a conserved flux field emits `flux_condition(v)`
+  obligation sites at junctions (§3.7, §11.8).
 - `laplacian(f)` — Laplace operator; `diverg(grad(f))`.
 - `curl(F)` — dimension-dependent signature:
   `Vec<U> over Domain<G>` with `G.dim == 2` yields
@@ -2282,11 +2367,12 @@ type level touch the same family of concerns).
 
 #### 11.2 Boundary Conditions
 
-**Summary.** Boundary conditions are `requires` blocks on boundary
-sub-loci. Three standard forms (Dirichlet, Neumann, Robin) lower to
-projection, elimination, or residual constraints based on
-workflow-selected solver path. No defaults: a boundary without
-`requires` is underdetermined.
+**Summary.** Boundary conditions are `requires` blocks or relations
+that fulfill `boundary_condition(field)` on boundary sub-loci. Three
+standard forms (Dirichlet, Neumann, Robin) lower to projection,
+elimination, or residual constraints based on workflow-selected solver
+path. No defaults: a boundary without a fulfillment is
+underdetermined.
 
 Boundary conditions are `requires` blocks on boundary sub-loci.
 Three standard forms:
@@ -2297,11 +2383,12 @@ Three standard forms:
 - **Robin** — `requires: a * f + b * normal_grad(f) = g`. Linear
   combination.
 
-Each `requires` block lowers to a projection, elimination, or
-residual constraint depending on the solver path selected at
-workflow composition (§25). A locus with boundary geometry and
-no `requires` blocks is underdetermined; the compiler emits no
-default boundary condition (silence is not a free Neumann zero).
+Each `requires` block fulfills the corresponding
+`boundary_condition(field)` obligation and lowers to a projection,
+elimination, or residual constraint depending on the solver path
+selected at workflow composition (§25). A locus with boundary geometry
+and no fulfillment is underdetermined; the compiler emits no default
+boundary condition (silence is not a free Neumann zero).
 
 #### 11.3 Stdlib Geometries
 
@@ -2496,52 +2583,64 @@ operate in the subspace spanned by the declared coordinates; applying
 Multiple coordinates may be listed to form a multi-dimensional
 sub-field (`over (x, y)` in a 3D domain, for instance).
 
-#### 11.8 Default Junction Conditions
+#### 11.8 Junction Flux Conditions
 
-**Summary.** Junction default is balance only: conserved-flux sums
-to zero, auto-synthesized from `diverg()`. Continuity of non-flux
-fields is not assumed; modelers opt in with explicit
-`requires: left.f = right.f`. Conservation forces balance for free;
-continuity is a modeling choice.
+**Summary.** `diverg()` on a conserved flux emits a
+`flux_condition(flux)` obligation at junctions. The stdlib default
+candidate is `balance_zero(flux)`: oriented conserved-flux sums equal
+zero. Users write `fulfills flux_condition(flux)` for leaks, storage,
+or other nonzero junction laws. Continuity of non-flux fields is not
+assumed; modelers opt in with explicit `requires: left.f = right.f`.
 
-Where edges meet at a junction, the default condition is
-**balance only**: the sum of conserved fluxes across the
-junction equals zero (§3.7 consequence 4, auto-synthesized from
-`diverg()` on a conserved flux field). Continuity of non-flux
-fields is **not** assumed by default. Different edges at a
-junction may carry different scalar values unless the modeler
-writes an explicit `requires: left.f = right.f`.
+Where edges meet at a junction, conservation emits a
+`flux_condition(flux)` obligation (§3.7 consequence 4). The stdlib may
+provide `balance_zero(flux)` as a default candidate: the sum of
+conserved fluxes across the junction equals zero. Continuity of
+non-flux fields is **not** assumed by default. Different edges at a
+junction may carry different scalar values unless the modeler writes an
+explicit `requires: left.f = right.f`.
 
-Rationale. What conservation forces (balance) is free; what
-modeling choice imposes (continuity) is opt-in. This matches
-the conservation-first posture throughout the language and
-prevents silent assumptions about field matching across
+Rationale. What conservation requires is an accounting obligation, not
+always a zero-balance equation. The zero-balance law is the common
+candidate fulfillment; leak, storage, or source/sink junctions are
+equally valid explicit fulfillments. Continuity remains a modeling
+choice, which prevents silent assumptions about field matching across
 junctions.
 
-**Locus-scoped relations with `replaces` obligation keys.** When a
-locus-scoped relation replaces a compiler-generated default, it names
-the obligation it replaces using a stable semantic obligation key, not a
-user-chosen relation name. The obligation key is the same canonical
-identifier the compiler uses in plan inspection output. Example:
-`relation leaky_junction on junction replaces balance(axial_flux): ...`
-names `balance(axial_flux)` as the obligation key. The key form is
-`verb(field_name)` where the verb is drawn from the compiler's
-recognized default-generation vocabulary (`balance` for flux-sum-zero).
-Using a stable obligation key ensures `replaces` targets are
-unambiguous across refactoring: renaming the user relation does not
-affect which default it suppresses. Obligation-key semantics are defined
-in §8.11; the `replaces` monotonicity rule (suppression, not retraction)
-is in §10.5.
+**Locus-scoped fulfillments with obligation keys.** When a locus-scoped
+relation or temporal block satisfies a compiler/package obligation, it
+names the stable semantic key, not a user-chosen relation name:
+
+```myco
+relation leaky_junction on junction
+  fulfills flux_condition(axial_flux):
+    sum(e in incident_edges,
+        orientation(e) * limit_from(axial_flux, junction, e)) = leak_flux
+
+temporal junction_storage on junction
+  fulfills flux_condition(axial_flux):
+    d(junction_water) =
+      sum(e in incident_edges,
+          orientation(e) * limit_from(axial_flux, junction, e))
+```
+
+The key form is `verb(field_name)` where the verb is drawn from the
+compiler's obligation vocabulary (`flux_condition`,
+`boundary_condition`, `event_conservation_route`). Using stable keys
+ensures fulfillment targets are unambiguous across refactoring:
+renaming the user relation does not affect which obligation it answers.
+Obligation-key semantics are defined in §8.11; monotonicity is in
+§10.5.
 
 **Stdlib junction helpers.** `continuous(field)` and
 `kirchhoff(potential, flux)` are stdlib convenience functions, not
 compiler magic. `continuous(f)` expands to a `requires: left.f = right.f`
 continuity condition across all incident edges at a junction.
-`kirchhoff(potential, flux)` bundles `continuous(potential)` with the
-auto-generated `balance(flux)`, expressing the standard Kirchhoff pair
-for a potential-driven network. Users may always write the explicit trace
-equations instead; the stdlib helpers are opt-in shorthand for the common
-case.
+`kirchhoff(potential, flux)` bundles `continuous(potential)` with a
+`balance_zero(flux)` fulfillment candidate, expressing the standard
+Kirchhoff pair for a potential-driven network. Users may always write
+the explicit trace equations instead; the stdlib helpers are opt-in
+shorthand for the common case.
 
 Locus-scoped `temporal name on locus:` blocks follow the same
 `on locus:` clause symmetry as locus-scoped relations; they are covered
@@ -3682,9 +3781,10 @@ diagnostics surface which layer a fact lives on (§22).
 
 **Summary.** Append-only. Merged e-classes stay merged; attached
 envelope facts stay attached. No retraction, tombstoning, or
-rollback. `replaces` suppresses default generation, not emitted
-facts. Events add facts; dead entities continue to exist
-equationally. Compilation is a left-to-right accumulation.
+rollback. Obligation fulfillment selects candidates before e-graph
+emission; it does not retract emitted facts. Events add facts; dead
+entities continue to exist equationally. Compilation is a left-to-right
+accumulation.
 
 The equational core is append-only. Once two e-classes merge,
 they stay merged; once an envelope fact attaches, it stays
@@ -3694,10 +3794,10 @@ the substrate-level version of referential truth (§0 principle
 
 Consequences:
 
-- `replaces` (§8.11, §10.5) suppresses default generation; it
-  does not retract an already-emitted fact. Broader retraction
-  semantics (whether `replaces` should admit full fact-level
-  retraction) are tracked as open item O4.1 in §35.
+- Obligation fulfillment (§8.11, §10.5) selects explicit or default
+  candidates before layer-1 emission. Suppressed defaults remain
+  inspectable ledger candidates; they are not already-emitted facts
+  being retracted.
 - Events add facts; they do not remove prior e-classes. Dead
   entities continue to exist equationally; their absence from
   subsequent ticks is a layer-3 keyed-state fact, not a
@@ -3943,10 +4043,9 @@ structural shape, type identity, name coincidence, or any signal
 outside the enumerated authorizations. Every merge is traceable
 to a source tag.
 
-`replaces` (§8.11, §10.5) suppresses the default-generation merge
-at the declaration site; it does not retract merges already emitted
-before the declaration was processed. Broader retraction semantics
-are tracked as §35 O4.1.
+Obligation fulfillment (§8.11, §10.5) selects explicit or default
+candidates before a layer-1 merge is emitted. A suppressed default is
+not a retracted merge; it is an unselected ledger candidate.
 
 #### 17.2 `identify` vs Relation `=`
 
@@ -4261,13 +4360,13 @@ The compiler records a `ResidualSite` for each workflow-visible claim
 that can produce a residual:
 
 - user relation equations and constraint obligations;
-- compiler-generated default obligations such as balance laws;
+- obligation sites and fulfillment candidates, including package
+  defaults such as `balance_zero(flux)`;
 - observation / evidence residuals introduced by `observe`;
 - training-mode consistency residuals for conditionally inconsistent
   or overconstrained relations;
 - provider / topology validation residuals that survive composition;
-- replacement candidates, including generated defaults later
-  suppressed by `replaces` (§10.5).
+- suppressed default candidates retained for diagnostics (§10.5).
 
 A `ResidualSite` carries stable identity and provenance:
 
@@ -4277,7 +4376,7 @@ A `ResidualSite` carries stable identity and provenance:
   a stable key, it emits a diagnostic and may require an explicit
   disambiguation in a future surface.
 - **Source provenance.** Relation name, obligation key, source span,
-  generated-default origin, workflow evidence origin, or provider origin.
+  default-candidate origin, workflow evidence origin, or provider origin.
 - **E-class anchors.** The lhs / rhs / argument e-classes that the site
   constrains or scores.
 - **Semantic payload.** Units, axes, shape facts, refinements,
@@ -4715,8 +4814,8 @@ proved, rewrote, approximated, lowered, or left unresolved.
 
 **Summary.** `hypha explain` emits a textual plan report and can emit
 the canonical machine-readable plan IR. It reports SCCs, symbolic
-resolutions, residuals, fallbacks, execution order, temporal state,
-workflow bindings, and provenance.
+resolutions, residuals, obligation-ledger status, fallbacks, execution
+order, temporal state, workflow bindings, and provenance.
 
 The textual report includes:
 
@@ -4734,6 +4833,9 @@ The textual report includes:
 - Regime boundaries and relaxation ledger entries: detected surfaces,
   continuity / derivative class, selected crossing policy, and any
   workflow-authorized surrogate used by the run (§8.10, §24.6).
+- Obligation ledger entries: keys, loci / events / guards, explicit
+  fulfillments, selected package defaults, suppressed default
+  candidates, unfulfilled obligations, and conflicts (§8.11).
 
 `hypha explain --format ir` emits the canonical machine-readable IR.
 Renderer targets such as Mermaid, D2, Graphviz, or Cytoscape may be
@@ -5331,8 +5433,8 @@ materializes a specific instance.
 
 **Summary.** Run-config is the non-binding configuration the
 workflow supplies at composition: seed, backend, verbosity, dt
-(when used), profile hints, gradient regime, relaxation policy, and
-fallback policy.
+(when used), profile hints, gradient regime, relaxation policy,
+default-fulfillment policy, and fallback policy.
 Distinct from source binding since run-config does not bind model
 values; it configures how the
 compiled plan executes. Different runs of one plan can use
@@ -5358,6 +5460,10 @@ Representative fields:
   `full_BPTT`, `truncated_BPTT(k)`, or `checkpointed`.
 - `run.config.relaxations`. Crossing / surrogate policy for regime
   boundaries (§8.10, §24.6). Default is `strict`.
+- `run.config.default_fulfillments`. Obligation-ledger policy for
+  package-provided default candidates (§8.11): `allow`, `warn`, or
+  `error`. Default is `allow`; audit workflows can require explicit
+  user fulfillments by setting `error`.
 - `run.config.extraction_policy`. Preference over
   `cost_of` fields: compute-first, memory-first, faithfulness-first,
   or weighted (§19.1).
@@ -8011,29 +8117,29 @@ references.
 
 ### 35. Other Opens
 
-**Summary.** Catalog of smaller open items: `replaces` obligation
+**Summary.** Catalog of smaller open items: general source-level
 retraction under monotonicity, envelope ownership, CC1 diagnostics,
 GPU-incompatibility of exact numeric types, chunk 04 carryovers
 (heterogeneous `argmax`, event-driven topology, spatial operator
 lowering), controller-interface affordances, Tier 2 family-catalog
 polish, and remaining Tier 3 non-parametric catalog / backend
-machinery. Residual-to-e-graph projection and per-residual objective
-identity are resolved by `ResidualSite` / `ResidualRealization`
-semantics (§19.2, §25).
+machinery. Obligation retraction is resolved by the
+`ObligationSite` / `fulfills` ledger (§8.11, §10.5). Residual-to-
+e-graph projection and per-residual objective identity are resolved by
+`ResidualSite` / `ResidualRealization` semantics (§19.2, §25).
 
-`replaces` obligation retraction (monotonicity tension with the
-e-graph; cross-refs §8.11 declaration, §10.5 semantics, §15
-equational-core monotonicity, §16 adjacent-keyed-state monotonicity).
-Tier 0 Phase 2 Q4 (envelope ownership). Literal-constants diagnostic
+General source-level retraction remains out of the core language; if a
+future feature admits it, it must preserve the monotonicity invariant
+or live entirely in adjacent keyed state. Tier 0 Phase 2 Q4 (envelope
+ownership). Literal-constants diagnostic
 surface (CC1 enforcement messages; shape in §4.1). GPU-incompatibility
 of BigFloat and Rational (cross-refs §26.1 numeric table, §26.3
 Rational termination caveat, §31.1 backend fallback modes). **Chunk
 04 carryovers:**
-O4.1 `replaces` obligation
-retraction (rewrite group W1 in Appendix C; three candidate
-semantics still open). O4.3 per-residual training emission is resolved:
-residual identities live on `ResidualSite`s while extraction may share
-`ResidualRealization`s (§19.2, §25).
+O4.1 obligation retraction is resolved by the ledger design; W1 is no
+longer a rewrite group. O4.3 per-residual training emission is
+resolved: residual identities live on `ResidualSite`s while extraction
+may share `ResidualRealization`s (§19.2, §25).
 
 O4.6 heterogeneous `argmax` tagged handles (closure-policy
 extensibility for collections with tagged alternatives). O4.7
@@ -8316,8 +8422,9 @@ if encountered in identifier position.
 `Collection`, `impl`, `some`, `val`, `where`.
 
 **Body-form keywords.** `let`, `if`, `else`, `for`, `in`, `is`,
-`match`, `trace`, `requires`, `replaces`, `conserved`, `approximate`,
-`initial`, `temporal`, `when`, `becomes`, `as`, `on`, `field`.
+`match`, `trace`, `requires`, `fulfills`, `default`, `conserved`,
+`approximate`, `initial`, `temporal`, `when`, `becomes`, `as`, `on`,
+`field`.
 
 **Stochastic operator.** `~` (distribution-binding operator;
 stochastic relation). SDE families carry integration-convention type
@@ -8630,12 +8737,13 @@ LOCKED.
   in layer 1, and the same `path` elsewhere remains stochastic. Data
   is never rewritten by inferred constraints.
 
-**W. Obligation retraction.** Deletion, not rewrite. OPEN (chunk 04
-O4.1, cross-ref §8.11, §10.5, §15, §16, §35).
+**W. Obligation fulfillment.** Ledger selection, not rewrite.
+RESOLVED (O4.1 resolved by §8.11, §10.5, §16).
 
-- W1. `relation X on locus replaces balance(axial_flux): ...` retracts
-  the compiler-generated `balance(axial_flux)` at the named locus and
-  substitutes the user equation
+- W1. `relation X on locus fulfills flux_condition(axial_flux): ...`
+  satisfies the named obligation. Generated defaults are candidate
+  fulfillments; unselected defaults remain inspectable ledger entries
+  and are not emitted as facts.
 
 **X. Site-gated strict.** Strict/lossless but gated on a site or
 geometric predicate, not value bounds. LOCKED (O4.2 resolved
