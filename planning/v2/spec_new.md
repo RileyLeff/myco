@@ -4987,14 +4987,24 @@ The committed topology handlers are `runtime_bounded`,
 Invalidation is provenance-driven. At minimum, a topology delta can
 invalidate collection membership, extracted tensor axes, shape and
 sparsity facts, obligation-ledger entries, SCC decomposition, selected
-handle sites, residual sites, spatial lowering products, and backend
+handle sites, residual sites, spatial realization artifacts, and backend
 plan caches. Incremental e-graph resaturation during a run is an
 implementation target, not required for semantic correctness: any
 incremental strategy must be equivalent to full replanning from the
-source bundle, workflow intent config, and event history. Mesh
-discretization lowering likewise remains an architectural open item
-(Appendix C P1): whether spatial operators become e-graph rewrites or
-pre-e-graph codegen is not yet locked.
+source bundle, workflow intent config, and event history.
+
+Mesh discretization lowering is resolved as site / provider artifact
+lowering (Appendix C P1; §37.1). Source-level spatial operators, weak
+forms, residual forms, and transfer statements remain semantic graph
+content. Stdlib identities over those forms may still fire as ordinary
+e-graph rewrites, but discretization itself is not an e-graph equality.
+Layer-3 `SpatialOperatorSite`, `WeakFormSite`, `ResidualFormSite`, and
+`TransferSite` records feed built-in or spore-shipped realization
+providers, which return `DiscreteOperatorSite` execution artifacts with
+provenance and evidence-graded facts. Pre-e-graph numerical replacement
+of semantic operators with stencil / FEM / FV / backend code is
+forbidden; pre-e-graph work may only parse, resolve, desugar, and create
+semantic site records while preserving source provenance.
 
 #### 21.4 N-max Slots and Alive Masks
 
@@ -8475,14 +8485,14 @@ references.
 
 **Summary.** Catalog of smaller open items: general source-level
 retraction under monotonicity, envelope ownership, CC1 diagnostics,
-GPU-incompatibility of exact numeric types, remaining chunk 04
-carryover (spatial operator lowering), controller-interface affordances,
-Tier 2 family-catalog polish, and remaining Tier 3 non-parametric
-catalog / backend machinery. Obligation retraction is resolved by the
-`ObligationSite` / `fulfills` ledger (§8.11, §10.5). Heterogeneous
-selection is resolved by `Selected<T>` / `Option<Selected<T>>` selector
-semantics (§12.2). Event-driven topology mutation is resolved by
-versioned topology, explicit topology handlers, and backend capability
+GPU-incompatibility of exact numeric types, controller-interface
+affordances, Tier 2 family-catalog polish, and remaining Tier 3
+non-parametric catalog / backend machinery. Obligation retraction is
+resolved by the `ObligationSite` / `fulfills` ledger (§8.11, §10.5).
+Heterogeneous selection is resolved by `Selected<T>` /
+`Option<Selected<T>>` selector semantics (§12.2). Event-driven topology
+mutation is resolved by versioned topology, explicit topology handlers,
+and backend capability
 negotiation (§3.8, §21.3, §24.5, §31.1). Residual-to-e-graph projection
 and per-residual objective identity are resolved by `ResidualSite` /
 `ResidualRealization` semantics (§19.2, §25).
@@ -8507,11 +8517,17 @@ boundaries; execution uses explicit `CapacityMask`, `EventReplan`, or
 `DynamicKeyed` handlers selected through workflow intent and backend /
 device capability facts (§3.8, §21.3, §24.5, §31.1).
 
-O4.8 spatial operator lowering (rewrite group P1 architectural call):
-source weak / residual forms and realization-provider home are locked
-(§11.1, §14.3, §37.1), but the remaining architectural call is exact
-lowering placement — e-graph rewrite versus site/provider lowering
-artifact versus pre-e-graph codegen — with geometry chunk 01 cross-ref.
+O4.8 spatial operator lowering is resolved: source weak / residual
+forms and spatial operators stay in source-level semantic graph content
+(§11.1, §14.3), while discretization lowers through Layer-3 semantic
+site records and realization-provider execution artifacts (§21.3,
+§37.1; Appendix C P1). E-graph rewrites may express exact stdlib
+identities between semantic forms, but a stencil, FEM / DG action,
+finite-volume flux action, remap operator, or matrix-free backend handle
+is not an equality with the continuous source expression. Pre-e-graph
+numerical codegen is out; pre-e-graph canonicalization may only create
+semantic site records and preserve provenance.
+
 Macros (dropped from the current surface; revisit if concrete
 boilerplate pain emerges). `softmax` and weighted-sum
 aggregation surface (stdlib primitive vs user-composed from `exp` +
@@ -9179,12 +9195,22 @@ consumed (§25).
   `(lhs - rhs)²`. The compiler exposes the term; workflow policy
   supplies weights and aggregation.
 
-**P. Mesh discretization (continuous → discrete).** Tolerance-gated by
-mesh resolution `h`. OPEN (geometry chunk 01 P1; architectural call
-between e-graph rewrite and pre-e-graph codegen).
+**P. Mesh discretization (continuous → discrete).** LOCKED as site /
+provider artifact lowering, not as an e-graph rewrite and not as
+pre-e-graph numerical codegen (§21.3, §37.1). Mesh resolution `h`,
+basis, quadrature, stencil shape, flux form, sparse layout, solver, and
+backend kernel are realization choices with provenance and, when
+approximate, `cost_of().discretization` / error-ledger accounting.
 
-- P1. `grad(field) → fd_stencil`, `laplacian(field) → 5-point or 9-point
-  stencil`, etc.
+- P1. A semantic `SpatialOperatorSite`, `WeakFormSite`,
+  `ResidualFormSite`, or `TransferSite` may realize as an assembled
+  sparse matrix, stencil bundle, FEM / DG weak-form action,
+  finite-volume flux action, remap operator, matrix-free callable, or
+  provider-owned handle. The returned `DiscreteOperatorSite` is an
+  execution artifact with evidence-graded facts such as
+  `stencil_pattern`, `row_sum_zero`, `conservative_transfer`, or
+  `discretization_order`; it is not a source-level theorem that replaces
+  the continuous expression.
 
 **Q. Probabilistic truncation / marginalization.** Interacts with `~`
 (§13). LOCKED via CC4 / chunk 04.
@@ -9346,12 +9372,12 @@ GEV). The enumeration is closed for v2.1.
 | Strict | ~25 (A1-10, B1-2, C1-4, D1-3, E1-2, F1, G1-3, H1-2, I1, K2 exact) | ~5 (D4-5, K1 exact support, X1, X2) | ~30 |
 | Distribution-family | ~3 (Z1, Z5, Z10) | ~1 (Z11) | ~4 |
 | Fuzzy-model | — | ~2 (L1-2) | 2 |
-| Fuzzy-tolerance | ~4 (K3 approximate forms, M1, Q1-2) | ~6 (K3 approximate forms, K4, M2, N1, O1, P1) | ~10 |
+| Fuzzy-tolerance | ~4 (K3 approximate forms, M1, Q1-2) | ~5 (K3 approximate forms, K4, M2, N1, O1) | ~9 |
 | One-way (lossless uni) | — | ~11 (R1-3, S1-2, T1, U1-3, V1, W1) | ~11 |
 | N-way extraction | — | ~6 (Y1-6) | 6 |
 | Forbidden | 1 (J1 temporal) | — | 1 |
 
-Grand total approximately 62 rules, depending on sub-rule counting
+Grand total approximately 61 rules, depending on sub-rule counting
 and on how many Z-slots (Z2-Z4, Z6-Z9) the v2.1 conjugate-posterior
 enumeration ultimately occupies.
 
