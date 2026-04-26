@@ -1665,9 +1665,11 @@ block at workflow composition time.
 User-facing handlers for redundant overdetermination. Selected per
 residual block at workflow composition time. Variants:
 
-- **Y1 `weighted_average(c₁, …, c_N)`** — arithmetic mean.
+- **Y1 `weighted_average(candidates)`** — closure-policy shorthand for
+  arithmetic mean, semantically equivalent to the uniform-weight case of
+  stdlib `weighted_average(values, weights)`.
 - **Y2 `soft_select(preference_list, sharpness)`** — differentiable
-  soft-pick.
+  soft-pick implemented with stdlib `softmax` + `weighted_sum`.
 - **Y3 `hard_select(preference_list)`** — deterministic
   non-differentiable pick.
 - **Y4 `condition_weighted`** — weights candidates by numerical
@@ -2778,9 +2780,10 @@ geometries ship via stdlib (§11.3), not via new keywords.
 **Summary.** Collections via `impl Contract` (heterogeneous element
 type, static monomorphization) and `some` (runtime sizing).
 Iteration patterns, aggregation primitives (`sum`, `product`, `max`,
-`min`, `any`, `all`, `count`) and selector primitives (`argmin`,
-`argmax`, `option_argmin`, `option_argmax`, `argmin_all`,
-`argmax_all`). Aggregations are stdlib-only.
+`min`, `any`, `all`, `count`, `softmax`, `weighted_sum`,
+`weighted_average`) and selector primitives (`argmin`, `argmax`,
+`option_argmin`, `option_argmax`, `argmin_all`, `argmax_all`).
+Aggregations are stdlib-only.
 
 `impl Contract` (heterogeneous element type, static monomorphization)
 vs `some` (runtime sizing). Iteration patterns. Aggregation lowering.
@@ -2789,11 +2792,12 @@ Narrowing with `where x is T`.
 #### 12.1 Aggregation Primitives
 
 **Summary.** Named stdlib aggregations: `sum`, `product`, `max`,
-`min`, `any`, `all`, `count`, plus the selection family `argmin`,
-`argmax`, `option_argmin`, `option_argmax`, `argmin_all`, and
-`argmax_all`. Units-aware and conservation-group-aware where
-applicable. Compose under stdlib-declared e-graph rewrites. No
-user-declared aggregation surface.
+`min`, `any`, `all`, `count`, `softmax`, `weighted_sum`,
+`weighted_average`, plus the selection family `argmin`, `argmax`,
+`option_argmin`, `option_argmax`, `argmin_all`, and `argmax_all`.
+Units-aware and conservation-group-aware where applicable. Compose
+under stdlib-declared e-graph rewrites. No user-declared aggregation
+surface.
 
 Named stdlib aggregations over collections:
 
@@ -2809,6 +2813,22 @@ Named stdlib aggregations over collections:
   For event-time (`some`-sized) collections backed by a bitmask-
   liveness array, `count` sums the liveness bits, not the backing-
   array capacity (§12.4).
+- `softmax(scores, temperature)` — numerically stable softmax over an
+  aligned finite collection of scalar scores. `temperature > 0` is an
+  obligation; `score / temperature` must be dimensionless. The result is
+  a dimensionless weight collection aligned with `scores`, with
+  nonnegative weights whose sum is 1 for nonempty input. Empty input
+  returns an empty weight collection.
+- `weighted_sum(values, weights)` — sum of aligned value / weight pairs.
+  `weights` must be dimensionless and aligned with `values` by the same
+  collection axis or an explicit shared key. The result has the same
+  unit and value shape as each element of `values`; empty input returns
+  the unit-correct zero value.
+- `weighted_average(values, weights)` — normalized weighted value
+  aggregation, equivalent to `weighted_sum(values, weights) /
+  sum(weights)` when the denominator is nonzero. The compiler emits a
+  nonzero-denominator obligation unless normalization is proven (for
+  example, weights produced by `softmax`).
 - `argmin(selector for x in xs)`, `argmax(selector for x in xs)` —
   strict selected handle of the extremal element; require a nonempty
   proof (§12.2).
@@ -2825,9 +2845,28 @@ stdlib, matching the `.myco`-has-no-annotation-surface stance.
 Soft and weighted variants are value aggregations, not entity
 selectors. A smooth selector may return a weighted value such as a
 soft crown-area aggregate, but it does not fabricate a smooth
-`Selected<T>` entity handle. Exact ergonomic spelling for
-`weighted_sum` / softmax-style comprehensions remains in §35 pending
-collection-alignment syntax.
+`Selected<T>` entity handle.
+
+Alignment for weighted aggregation is semantic, not positional
+convenience. Values and weights must share the same finite axis,
+collection identity, or explicit key relation. The compiler rejects
+implicit index-order matching between unrelated collections. For
+event-time collections, alignment respects the same existence-domain /
+mask / ragged policy as the collection itself (§12.4, §24.6).
+
+```myco
+soft_crown =
+    weighted_sum(
+        t.crown_area for t in trees,
+        weights = softmax(t.height for t in trees, temperature = tau)
+    )
+```
+
+`softmax` is a stdlib atom with stable log-sum-exp lowering. It may
+rewrite to the mathematical `exp(score / temperature) /
+sum(exp(...))` form only when the chosen realization preserves the
+declared numerical facts; users should not need to hand-roll stable
+softmax from `exp` and `sum`.
 
 #### 12.2 Selected Handles and Selector Primitives
 
@@ -8625,7 +8664,7 @@ lowering details after the core sum-type lock. Chunks 05, 06, 07, 08,
 **Summary.** Catalog of smaller remaining items: source-level retraction
 if ever admitted, exact-numeric GPU portability, vector / tensor seam
 transforms, rational-denominator termination beyond the rewrite cap,
-softmax / weighted aggregation spelling, Y6 blowup-threshold diagnostics,
+Y6 blowup-threshold diagnostics,
 controller-interface affordances, stdlib inventory, Tier 2
 family-catalog polish, remaining Tier 3 non-parametric machinery,
 package dependencies, and event-scheduling policy API. Obligation
@@ -8674,11 +8713,10 @@ numerical codegen is out; pre-e-graph canonicalization may only create
 semantic site records and preserve provenance.
 
 Macros (dropped from the current surface; revisit if concrete
-boilerplate pain emerges). `softmax` and weighted-sum
-aggregation surface (stdlib primitive vs user-composed from `exp` +
-`sum`; collection-aggregation syntax pending zip/alignment semantics
-lock; Y2 `soft_select` already uses softmax internally in §8.7, so
-the shape is known but the ergonomic surface is not).
+boilerplate pain emerges). Softmax / weighted aggregation spelling is
+resolved as stdlib value aggregations: `softmax`, `weighted_sum`, and
+`weighted_average` (§12.1). They use explicit semantic alignment and
+never fabricate `Selected<T>` handles.
 
 Vector / tensor seam transforms remain outside the v2.1 scalar-field
 `identify` guarantee (§11.1, Appendix C F): component remapping,
@@ -9109,7 +9147,7 @@ pattern or pipe use).
 **Stdlib-reserved identifiers.** The stdlib atom namespace reserves
 `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
 `sqrt`, `abs`, `real`, `imag`, `conj`, `phase`, `complex`, `sign`,
-`floor`, `ceil`, `round`, `min`, `max`, `sum`,
+`floor`, `ceil`, `round`, `min`, `max`, `sum`, `softmax`,
 `prod`, `mean`, `std`, `var`, `argmin`, `argmax`,
 `option_argmin`, `option_argmax`, `argmin_all`, `argmax_all`,
 `same_entity`, `solve`,
@@ -9122,7 +9160,8 @@ pattern or pipe use).
 `laplacian`, `curl`, `normal_grad`, `trace_from`, `limit_from`,
 `jump`, `average`, `normal`, `normal_traction`, `test_space`, `smooth_max`,
 `smooth_abs`, `smooth_step`, `soft_select`, `hard_select`,
-`weighted_average`, `condition_weighted`, `soft_clip`, `hard_clip`,
+`weighted_sum`, `weighted_average`, `condition_weighted`,
+`soft_clip`, `hard_clip`,
 `sigmoid`, plus the distribution-
 family names enumerated in §27. The stdlib universal namespace
 reserves `pi`, `e`, and the parametric family `integer<N: val>`
@@ -9455,10 +9494,13 @@ time).**
 multiple equally-valid evaluators (§8.7). User picks via closure
 config.
 
-- Y1. `weighted_average(c1,...,cN) → mean` (arithmetic mean of candidate
-  outputs). LOCKED.
-- Y2. `soft_select(preference_list, sharpness) → Σ softmax(rank_i /
-  sharpness) * candidate_i`. LOCKED.
+- Y1. `weighted_average(candidates) → mean` (closure-policy shorthand
+  for arithmetic mean of candidate outputs, semantically equivalent to
+  the uniform-weight case of stdlib `weighted_average(values, weights)`).
+  LOCKED.
+- Y2. `soft_select(preference_list, sharpness) → weighted_sum(candidates,
+  softmax(ranks, temperature = sharpness))`. LOCKED. This is a value
+  aggregation, not a selected-handle producer.
 - Y3. `hard_select(preference_list)` picks highest-ranked by name;
   non-differentiable (rejected in train mode unless discarded paths
   have no learned parameters upstream). LOCKED.
