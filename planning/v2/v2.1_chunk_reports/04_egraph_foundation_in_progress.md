@@ -604,8 +604,8 @@ predicates (CC5 locked), or surfaces already locked in v2.1:
 - **J1** — temporal anti-rewrite (non-rewrite invariant, resolved in
   Section 5)
 - **L1** — `smooth_min` → `min` forward-only
-- **O1** — train-mode consistency-loss substitution (shape-only; per-
-  residual detail tracked in O4.3)
+- **O1** — train-mode consistency-objective substitution (residual
+  identity resolved by `ResidualSite`)
 - **Q1-Q2** — probabilistic truncation/marginalization (unblocked by CC4)
 - **R1-R3** — lossy-function simplification (`abs`, `max`/`min`, `floor`/
   `relu`/`clamp` forward-only under envelope)
@@ -1167,16 +1167,23 @@ incomplete; the named-field generalization supersedes it. Section 10
 will be updated during spec-writing to reflect the multi-dimensional
 framing.
 
-### Open — Phase 2, Q3 (residual ↔ e-graph relationship) — not yet started
+### Resolved — Phase 2, Q3 (residual ↔ e-graph relationship)
 
-Specific items the spec must pin down:
-- How extraction policy determines what the residual graph looks like at
-  any moment.
-- Which diagnostics reference the residual graph versus the e-graph.
-- How `mycoc explain` navigates between the two views.
-- How user-facing error messages reference equivalence classes.
-- Round-trip for diagnostics: given a residual-graph node, how to
-  materialize the full e-class it came from.
+Resolved in `spec_new.md` §19.2 and §25 by separating residual identity
+from residual computation.
+
+- `ResidualSite` records the user-facing claim / obligation identity:
+  relation name, obligation key, source / workflow provenance, units,
+  axes, e-class anchors, status, and objective-term kind.
+- `ResidualRealization` records the extracted executable expression or
+  block selected under `cost_of`.
+- Extraction may share realizations through algebraic simplification
+  and CSE, but must not merge site identities.
+- Diagnostics expose both views: by site for source claims and by
+  realization for executable compute / cost / backend lowering.
+- Workflow objective aggregation consumes residual sites, and fit /
+  inference / score composition errors on unhandled active residuals
+  rather than inventing a hidden least-squares objective.
 
 ### Open — Phase 2, Q4 (knowledge envelope ownership) — not yet started
 
@@ -1259,11 +1266,14 @@ envelope facts as one more predicate source. Extensible to future fact
 sources (SCC role, temporal index, event state, refinement type) without
 taxonomic sprawl.
 
-**O4.3 — Per-residual exposure for training emission.** Overconstrained
-relations need to survive extraction with their *original relation names*
-so the training emission can per-residual-expose them. Standard CSE-style
-canonicalization would collapse them. The e-graph can hold both forms; the
-extraction policy must be aware. **Section 12 open.**
+**O4.3 — Per-residual exposure for training emission. RESOLVED.**
+Overconstrained relations survive extraction as `ResidualSite`
+identities. Standard CSE-style canonicalization may still share the
+chosen `ResidualRealization`, but the source relation name / obligation
+key remains on the site and is what `objective_terms(residual)` consumes.
+Workflow composition errors on active residual sites that are not handled
+by objective, exact, projection, inference, provider-check, or explicit
+ignore policy.
 
 **O4.4 — Stochastic `~` as a rewrite blank. RESOLVED (2026-04-20) via
 Section 12 CC4.** `~` is distributional metadata at Layer 2, never
@@ -1331,7 +1341,7 @@ deferral) are tracked via O4.x entries in Section 11.
 |----|-------|--------|
 | CC1 | Hard-coded constants in `.myco` | **LOCKED** — workflow-bound; three structural exceptions |
 | CC2 | `#[verified_externally]` annotation | **ELIMINATED** — consequence of O2.1 |
-| CC3 | Per-residual exposure for training | **TRACKED** as O4.3 (no change) |
+| CC3 | Per-residual exposure for training | **LOCKED** — `ResidualSite` identity + shared `ResidualRealization` |
 | CC4 | Stochastic `~` edges | **LOCKED** — envelope + propagation + capability contracts |
 | CC5 | Pole L'Hopital / `identify`-seam gating | **LOCKED** — option 2 (site-scoped rewrite predicates) |
 
@@ -1403,13 +1413,13 @@ Annotation is gone. No syntax surface for it.
 
 ---
 
-### CC3 — Per-residual exposure for training emission. TRACKED (O4.3).
+### CC3 — Per-residual exposure for training emission. RESOLVED.
 
-Overconstrained relations must survive extraction with their *original
-relation names* so training emission can expose them per-residual. Standard
-CSE-style canonicalization would collapse them. The e-graph can hold both
-forms; the extraction policy must be aware. Resolution lands in the Phase 4
-audit pass. No change from the audit finding.
+Overconstrained relations survive extraction with their *original
+relation names* as `ResidualSite` identities. The extractor may choose a
+shared `ResidualRealization`; site identity is not keyed by the extracted
+expression. This resolves the CSE/canonicalization tension without
+blocking optimization.
 
 ---
 
@@ -1914,16 +1924,17 @@ surface.
    mesh discretization architectural call (e-graph rewrite vs.
    pre-e-graph codegen). (O2.1, O2.3, O2.4, Y4 un-defer, and
    Z-group stdlib scope all resolved 2026-04-20.)
-5. Phase 2 Q3 — residual ↔ e-graph relationship.
+5. Phase 2 Q3 — residual ↔ e-graph relationship. RESOLVED via
+   `ResidualSite` / `ResidualRealization`.
 6. Phase 2 Q4 — envelope ownership.
 7. Phase 3 — topic list pass (units, types, over/underdetermined, symbolic
    math, collections, continuous/discrete, functions/contracts, temporal,
    stochastic, inequalities, opaque callables, events, SCCs, learning
    targets).
 8. Phase 4 — remaining audit-specific items (O4.1 `replaces`,
-   O4.3 per-residual training emission, O4.6 heterogeneous `argmax`
-   tagged handles, O4.7 incremental saturation, O4.8 spatial
-   operator lowering). O4.2 / O4.4 / O4.5 already resolved.
+   O4.6 heterogeneous `argmax` tagged handles, O4.7 incremental
+   saturation, O4.8 spatial operator lowering). O4.2 / O4.3 / O4.4 /
+   O4.5 already resolved.
 9. Phase 1 Q2 — structural partition of commitment section.
 10. Write the actual commitment section text into the spec (two
     placements).
@@ -2097,8 +2108,7 @@ convo was getting compacted, here's the rewrite rule discussion that hasn't been
   - CC1. Universal-as-binding ambiguity. assume_constant("R", 8.314) — does this install a strict rewrite R → 8.314 in the e-graph, or pin R in adjacent metadata per v1 §6.2? Cost-driven extraction
   wants to see the constant; scoping principle wants it adjacent. Needs resolution.
   - CC2. Sanity-only inverses. convert <-> where the inverse is #[verified_externally] (sanity-check only) — strict or fuzzy/tolerance-gated? Currently ambiguous.
-  - CC3. Per-residual training emission vs CSE canonicalization. Overconstrained relations must survive extraction with original relation names so training can expose them per-residual. Strict algebraic
-   rewrites would collapse them. E-graph can hold both; extraction policy must be aware. (Tracked as O4.3.)
+  - CC3. Per-residual training emission vs CSE canonicalization. RESOLVED by `ResidualSite` identity plus separately shared `ResidualRealization`.
   - CC4. Stochastic ~ edges. No rewrites can fire across a ~ edge until the stochastic semantic invariant is stated. Full blocker for rewriting any stochastic quantity's parameters. (Tracked as O4.4.)
   - CC5. Pole L'Hopital / identify-seam category. Strict but structural-predicate-gated. Fifth category or sub-flavor of strict? (Tracked as O4.2.)
 
@@ -2189,10 +2199,9 @@ convo was getting compacted, here's the rewrite rule discussion that hasn't been
   I'll note this in the chunk report under O2.1's resolution so we don't forget.
 
   ---
-  CC3 — tracked
+  CC3 — resolved
 
-  Already recorded as O4.3. Nothing to decide further now; the extraction policy will need to respect "keep overconstrained equations distinct for training-time per-residual exposure" when we write that
-   part of the spec.
+  Resolved by `ResidualSite` identity plus separately shared `ResidualRealization`.
 
   ---
   CC4 — Stochastic ~ edges
@@ -2262,7 +2271,7 @@ convo was getting compacted, here's the rewrite rule discussion that hasn't been
 
   - CC1. Confirm constants-via-workflow and my proposed three structural exceptions (unit defs, conversion bodies, π/e). Should I update the report?
   - CC2. Accepting as resolved-by-O2.1-consequence. Just updating the report to note #[verified_externally] is out.
-  - CC3. No action; tracked.
+  - CC3. Resolved by residual sites.
   - CC4. Want option (c) — distributional fact as layer-2 envelope metadata, not an e-graph edge? Or push for (a) or (b)?
   - CC5. Option 2 (site-scoped rewrite predicates) or option 1 (new category)?
 

@@ -195,7 +195,8 @@ Terms: `variable`, `bound variable`, `free variable`, `relation`,
 `~` (distribution operator), `impl`, `some`, `` `approximate` `` block,
 `observe`, `regime boundary`, `regime surface`, `crossing policy`,
 `relaxation`, `catalog`, `catalog entry`, `node path`, `facet path`,
-`selector`, `existence domain`, `adapter`.
+`selector`, `existence domain`, `adapter`, `residual site`,
+`residual realization`.
 
 ---
 
@@ -3249,9 +3250,9 @@ faithfulness / numerical-quality economics. Extraction (§19.1) uses
 the full record. Approximation diagnostics may project only the
 faithfulness fields.
 
-`objective_terms(residual)` returns named training-objective
-components, not a scalar. Fields cover the residual's training
-sources:
+`objective_terms(residual)` consumes a `ResidualSite` (§19.2) and
+returns named training-objective components, not a scalar. Fields cover
+the site's training sources:
 
 - `data_fit` — likelihood / observation mismatch terms.
 - `constraint_violation` — projection/penalty terms from
@@ -4106,10 +4107,10 @@ specific block. Default-off rewrites fire one-at-a-time, scoped
 to the block's `body`; they do not compose across blocks without
 explicit nesting.
 
-Extracted residuals preserve their original relation names under
-the CC3 / O4.3 constraint, so training-emission diagnostics
-(§25) can expose per-residual objective terms; §35 O4.3
-tracks the open tension with strict algebraic collapse.
+Residual sites preserve their original relation names and obligation
+keys, so training-emission diagnostics (§25) can expose per-residual
+objective terms while extracted realizations still share simplified
+compute.
 
 Envelope-narrowing corollary. A default-off rewrite is promoted
 to default-on at sites where envelope metadata (§16.1 Layer 2)
@@ -4249,34 +4250,88 @@ different workflow policies. The residual graph is a projection
 
 #### 19.2 Residual ↔ E-Graph Projection Mechanics
 
-**Summary.** The extractor walks the e-graph top-down, choosing one
-representative term per e-class under the `cost_of` record. The broad
-mechanism (root set from workflow-bound variables and observed
-quantities, share-always preference, envelope propagation) is stable;
-specific heuristics remain open under Tier 0 Phase 2 work.
+**Summary.** Residual identity and residual computation are separate.
+A `ResidualSite` records the source claim / obligation that must remain
+visible to diagnostics and training. A `ResidualRealization` records
+the executable expression or block selected by `cost_of`-guided
+extraction. Extraction may share realizations aggressively, but it must
+not merge residual identities.
 
-The extractor walks the e-graph top-down, choosing one
-representative term per e-class subject to the `cost_of` record
-(§19.1). Open items tracked in §35 (Tier 0 Phase 2 Q3):
+The compiler records a `ResidualSite` for each workflow-visible claim
+that can produce a residual:
 
-- **Root set.** How the extractor identifies which e-classes
-  anchor the residual (variables the workflow binds plus
-  output quantities referenced by `observe`).
-- **Sharing policy.** When two paths through the e-graph reach
-  the same e-class, the extractor must decide whether to emit
-  one shared binding or inline the term twice. Currently leans
-  share-always; the performance tradeoff pends backend
-  codegen decisions.
-- **Envelope carriage.** Which layer-2 facts propagate into the
-  residual as runtime assertions, which stay compile-time-only.
-- **Name preservation.** Extracted residuals carry their original
-  relation names (CC3 / O4.3); training emission (§25) depends on
-  per-residual identity for objective-term exposure. Aggressive algebraic
-  collapse that erases relation names is forbidden in the extractor.
-  Open tracking in §35.
+- user relation equations and constraint obligations;
+- compiler-generated default obligations such as balance laws;
+- observation / evidence residuals introduced by `observe`;
+- training-mode consistency residuals for conditionally inconsistent
+  or overconstrained relations;
+- provider / topology validation residuals that survive composition;
+- replacement candidates, including generated defaults later
+  suppressed by `replaces` (§10.5).
 
-The mechanism is stable in broad strokes; the specific
-heuristics are chunk 04 Tier 0 Phase 2 work and remain open.
+A `ResidualSite` carries stable identity and provenance:
+
+- **Site id.** A stable semantic key derived from relation name,
+  obligation key, lhs / field path, locus, event phase, and axes. Source
+  line number is provenance, not identity. If the compiler cannot derive
+  a stable key, it emits a diagnostic and may require an explicit
+  disambiguation in a future surface.
+- **Source provenance.** Relation name, obligation key, source span,
+  generated-default origin, workflow evidence origin, or provider origin.
+- **E-class anchors.** The lhs / rhs / argument e-classes that the site
+  constrains or scores.
+- **Semantic payload.** Units, axes, shape facts, refinements,
+  contracts, SCC id, overdetermination classification, and kind
+  (`constraint_violation`, `data_fit`, `regularization`,
+  `provider_check`, etc.).
+- **Activation status.** `active`, `suppressed`, `inactive`, or
+  `candidate_default`, with provenance for the decision.
+- **Realization links.** Chosen realization id plus alternative
+  realizations on the extraction Pareto frontier when available.
+
+The extractor then chooses a `ResidualRealization` for each active site
+under `cost_of` (§19.1). A realization may be an explicit expression,
+an implicit solve block, an opaque backend/PPL block, a projection
+check, or a provider-owned validation. Multiple residual sites may
+share one realization after algebraic simplification or CSE. This is
+legal and desirable:
+
+```text
+ResidualSite(leaf.hydraulic_drop.flow_balance)
+ResidualSite(leaf.measured_drop.flow_balance)
+    -> shared ResidualRealization(R17)
+```
+
+The rule is: **extraction may share residual realizations, but it must
+not merge residual identities.** Relation names, generated obligation
+keys, observation ids, and workflow-visible residual names live on
+`ResidualSite`s, not on extracted expressions. `objective_terms` (§14.2)
+and training emission (§25) consume residual sites.
+
+Root selection is site-driven. The residual graph's roots are the
+active `ResidualSite`s relevant to the requested mode plus any
+workflow-requested output query frontiers needed for diagnostics. A run
+that merely simulates need not score observations. A fit, inference, or
+score run activates the corresponding observation / objective /
+inference sites and must handle them explicitly (§25).
+
+Diagnostics expose both views:
+
+- **By site.** The user-facing claims: source relation, obligation key,
+  observation, unit, axes, status, and objective terms.
+- **By realization.** The executable computations: expression/block,
+  cost, backend lowering, shared users, and alternatives.
+
+Duplicate or equivalent active sites are legal because they may encode
+different scientific claims, but they are a common weighting footgun.
+The compiler emits a warning when two active sites over the same axes,
+units, and e-class anchors appear equivalent. Workflow objective
+aggregation emits a second warning if it counts multiple sites sharing
+the same realization without an explicit weight policy. Provably
+inconsistent duplicates remain hard compile errors under §8.6.
+
+This closes the CC3 / O4.3 name-preservation issue: aggressive algebraic
+collapse is allowed for realizations, forbidden for site identity.
 
 #### 19.3 Residual Classification
 
@@ -5451,8 +5506,7 @@ How the compiler emits gradient-trainable code for SCCs classified as
 training (§20). Training emission has three products:
 
 - A differentiable forward computation for each training SCC.
-- A workflow-visible residual catalog preserving original relation
-  names (§19.2).
+- A workflow-visible residual catalog of active `ResidualSite`s (§19.2).
 - `objective_terms(residual)` hooks that workflow code can aggregate
   into a scalar objective (§14.2).
 
@@ -5478,12 +5532,15 @@ anti_spec.md). Refinement bounds and constraint metadata are exposed
 so the workflow can choose deliberately.
 
 **Per-residual exposure.** `model.residuals` is the workflow-visible
-list of named residuals produced by extraction. A representative
-`Residual` carries: original relation name, path / obligation key,
-SCC id, units, shape, refinement bounds, current realization
-(`explicit`, `implicit`, or `opaque`), and provenance. The exact
-Python object shape is workflow-library API, but these fields are the
-semantic payload.
+catalog of active residual sites produced by projection (§19.2). A
+representative `Residual` carries: stable site id, original relation
+name or generated obligation key, source / workflow provenance, SCC id,
+units, axes, shape, refinement bounds, residual kind, activation
+status, chosen realization (`explicit`, `implicit`, `opaque`,
+`projection`, `provider_check`), shared-realization id when applicable,
+and alternatives on the extraction Pareto frontier when available. The
+exact Python object shape is workflow-library API, but these fields are
+the semantic payload.
 
 **Stdlib objective helpers.** The workflow library ships helpers that
 consume the residual catalog:
@@ -5501,10 +5558,38 @@ Both helpers consume `objective_terms(residual)` values. They may
 choose only `constraint_violation`, combine it with `data_fit`, or
 add `regularization`; the compiler does not privilege a combination.
 
+**Unhandled residual policy.** Mismatched data is not an error by
+itself; unhandled mismatch is an error. In fit, inference,
+conditioning, or score modes, every active residual site that produces
+an objective, likelihood, projection, exact-conditioning, or
+provider-check obligation must be consumed by an explicit workflow
+policy before composition succeeds. Valid handling includes:
+
+- observation noise / likelihood, for example
+  `observe(path, data, noise=Normal(...))`;
+- exact observation or exact conditioning, where the workflow chooses
+  a hard evidence policy;
+- objective aggregation through `objective_terms(residual)`,
+  `soft_penalty`, or `augmented_lagrangian`;
+- exact solve / implicit-block handling for hard model equations whose
+  residuals are enforced by the selected realization;
+- runtime projection with a workflow-selected projection flavor;
+- inference factorization / PPL handoff for stochastic SCCs;
+- explicit ignore / diagnostic-only handling when a workflow library
+  exposes such a policy with provenance.
+
+If a workflow binds mismatched data or activates overconstrained physics
+without selecting one of these paths, workflow composition fails with an
+unhandled-residual diagnostic. The compiler does not silently invent
+least-squares, measurement noise, penalty weights, projection, or a
+gradient stop. In ordinary simulation mode, observations are inert
+unless the workflow asks to condition, fit, infer, or score against
+them.
+
 **What the compiler does not auto-emit.** The compiler does not pick a
 projection flavor, aggregate objective terms, update dual variables,
-or choose annealing / penalty schedules. Each of those is a workflow
-policy.
+choose annealing / penalty schedules, or convert observations into a
+least-squares objective. Each of those is a workflow policy.
 
 **Constraint discharge regimes.** Constraints discharge in three
 ways:
@@ -5520,8 +5605,9 @@ ways:
 Training-mode consistency-objective substitution is the O-group rule:
 an overconstrained relation `lhs = rhs` may expose a residual term
 proportional to `(lhs - rhs)^2` in training mode (Appendix C O1).
-The e-graph still keeps the relation name so diagnostics and training
-surfaces can refer to the original model claim.
+The `ResidualSite` keeps the relation identity so diagnostics and
+training surfaces can refer to the original model claim even when the
+chosen realization is shared or algebraically simplified.
 
 **PINN-style pattern.** A workflow can bind observed trajectories or
 trainable trajectories with `Series` / `Trainable(trajectory=...)`
@@ -7926,27 +8012,29 @@ references.
 ### 35. Other Opens
 
 **Summary.** Catalog of smaller open items: `replaces` obligation
-retraction under monotonicity, residual-to-e-graph mechanics, CC1
-diagnostics, GPU-incompatibility of exact numeric types, chunk 04
-carryovers (per-residual objective exposure, heterogeneous `argmax`,
-event-driven topology, spatial operator lowering), controller-interface
-affordances, Tier 2 family-catalog polish, and remaining Tier 3
-non-parametric catalog / backend machinery.
+retraction under monotonicity, envelope ownership, CC1 diagnostics,
+GPU-incompatibility of exact numeric types, chunk 04 carryovers
+(heterogeneous `argmax`, event-driven topology, spatial operator
+lowering), controller-interface affordances, Tier 2 family-catalog
+polish, and remaining Tier 3 non-parametric catalog / backend
+machinery. Residual-to-e-graph projection and per-residual objective
+identity are resolved by `ResidualSite` / `ResidualRealization`
+semantics (§19.2, §25).
 
 `replaces` obligation retraction (monotonicity tension with the
 e-graph; cross-refs §8.11 declaration, §10.5 semantics, §15
 equational-core monotonicity, §16 adjacent-keyed-state monotonicity).
-Tier 0 Phase 2 Q3 (residual ↔ e-graph relationship) and Q4 (envelope
-ownership). Literal-constants diagnostic surface (CC1 enforcement
-messages; shape in §4.1). GPU-incompatibility of BigFloat and
-Rational (cross-refs §26.1 numeric table, §26.3 Rational termination
-caveat, §31.1 backend fallback modes). **Chunk 04 carryovers:**
+Tier 0 Phase 2 Q4 (envelope ownership). Literal-constants diagnostic
+surface (CC1 enforcement messages; shape in §4.1). GPU-incompatibility
+of BigFloat and Rational (cross-refs §26.1 numeric table, §26.3
+Rational termination caveat, §31.1 backend fallback modes). **Chunk
+04 carryovers:**
 O4.1 `replaces` obligation
 retraction (rewrite group W1 in Appendix C; three candidate
-semantics still open). O4.3 per-residual training emission (CC3
-cross-cut: overconstrained relations must survive extraction with
-original names so training can expose per-residual objective terms;
-tension with strict algebraic collapse; §19 extraction policy).
+semantics still open). O4.3 per-residual training emission is resolved:
+residual identities live on `ResidualSite`s while extraction may share
+`ResidualRealization`s (§19.2, §25).
+
 O4.6 heterogeneous `argmax` tagged handles (closure-policy
 extensibility for collections with tagged alternatives). O4.7
 event-driven topology mutation (incremental saturation strategy
@@ -8469,10 +8557,14 @@ silently replaced by finite compute. Lowering policy remains OPEN
   error / relaxation ledger facts unless exactness is proven.
 
 **O. Training-time consistency-objective substitution.** Mode-conditional.
-OPEN (§35, chunk 04 O4.3 per-residual training emission).
+Residual identity is preserved by `ResidualSite` semantics (§19.2);
+workflow objective policy decides whether and how the exposed term is
+consumed (§25).
 
-- O1. In train mode, overconstrained `lhs = rhs` becomes `objective += w *
-  (lhs - rhs)²`
+- O1. In train mode, overconstrained `lhs = rhs` may expose
+  `objective_terms(residual).constraint_violation` proportional to
+  `(lhs - rhs)²`. The compiler exposes the term; workflow policy
+  supplies weights and aggregation.
 
 **P. Mesh discretization (continuous → discrete).** Tolerance-gated by
 mesh resolution `h`. OPEN (geometry chunk 01 P1; architectural call
@@ -8649,12 +8741,12 @@ Grand total approximately 62 rules, depending on sub-rule counting
 and on how many Z-slots (Z2-Z4, Z6-Z9) the v2.1 conjugate-posterior
 enumeration ultimately occupies.
 
-**Cross-cutting items (flags, not rewrites).** CC1, CC2, CC4, and
+**Cross-cutting items (flags, not rewrites).** CC1, CC2, CC3, CC4, and
 CC5 are absorbed into normative spec text: CC1 literal-numerics (§4,
-§4.1), CC2 sanity inverses (§5.2 round-trip), CC4 stochastic `~`
-rewrite blank (§13.8), and CC5 site-gated strict rewrites (§17,
-Appendix C X). CC3 per-residual training emission remains tracked as
-O4.3 (§35). CC5 category and data path are X1 pole L'Hopital
+§4.1), CC2 sanity inverses (§5.2 round-trip), CC3 residual-site
+identity (§19.2, §25), CC4 stochastic `~` rewrite blank (§13.8), and
+CC5 site-gated strict rewrites (§17, Appendix C X). CC5 category and
+data path are X1 pole L'Hopital
 (removable-singularity operator substitution) and X2 identify
 (quotient-induced value equality), site-indexed via Layer-3 adjacent
 keyed state with provenance tagging; cross-geometry pollution

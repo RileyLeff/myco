@@ -9,8 +9,8 @@ Myco keeps two separate surfaces:
 - `cost_of(expr)` is compiler/planner economics. It is consumed by
   extraction (§19.1), diagnostics, and approximate-block reporting.
 - `objective_terms(residual)` is workflow-facing training-objective
-  decomposition. It is consumed by training emission (§25) and
-  workflow objective helpers.
+  decomposition over a residual site. It is consumed by training
+  emission (§25) and workflow objective helpers.
 
 The retired spelling is `loss_of(residual)`. The word "loss" was doing
 too much: likelihood contribution, training objective, planner cost,
