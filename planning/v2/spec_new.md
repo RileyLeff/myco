@@ -1657,10 +1657,12 @@ emit a runtime assertion.
 
 #### 8.7 Closure Policies Y1-Y6
 
-**Summary.** Six user-facing handlers for redundant overdetermination:
-`weighted_average`, `soft_select`, `hard_select`, `condition_weighted`,
-user-defined (Y5), and `C(N,M)` enumeration. Selected per residual
-block at workflow composition time.
+**Summary.** Six exact user-facing handlers for redundant
+overdetermination: `weighted_average`, `soft_select`, `hard_select`,
+`condition_weighted`, user-defined (Y5), and exact `C(N,M)`
+enumeration. Selected per residual block at workflow composition time.
+Workflow-authorized guided subsystem search is an approximate
+extraction strategy, not exact Y6.
 
 User-facing handlers for redundant overdetermination. Selected per
 residual block at workflow composition time. Variants:
@@ -1675,10 +1677,37 @@ residual block at workflow composition time. Variants:
 - **Y4 `condition_weighted`** — weights candidates by numerical
   conditioning; backed by `condition_of` Levels I-III (§14).
 - **Y5** — user-defined policy (§8.8).
-- **Y6 `C(N,M)` enumeration** — combinatorial case for N > M+1.
-  Compiler enumerates C(N,M) maximal square subsystems, solves
-  each, checks consistency across solutions. Warns on
-  combinatorial blowup threshold.
+- **Y6 `C(N,M)` exact enumeration** — combinatorial case for N > M+1.
+  The exact semantics are exhaustive over all relevant maximal square
+  subsystems: the compiler solves each subsystem and checks consistency
+  across the solution set.
+
+Y6 implementations may use graph-derived certified reductions before
+enumeration when they preserve the same exhaustive semantics. Examples:
+collapsing e-graph-equivalent claims while preserving provenance,
+decomposing independent residual blocks, proving rank consistency for a
+linear or locally-linear block, marking implied claims as dependent, or
+compressing symmetric subsystem orbits. Each reduction emits proof /
+provenance in the plan trace. If a reduction is not proven equivalent to
+exhaustive Y6, it is not an exact Y6 reduction.
+
+Y6 must be costed before enumeration. The compiler records the raw
+`choose(N,M)` count, certified reductions, reduced exact count, and
+active workflow budget. If the reduced exact count exceeds the active
+budget, workflow composition fails unless the workflow explicitly raises
+the budget or chooses a different policy. For dynamic collections whose
+`N` depends on workflow data or events, Y6 requires a static upper bound
+or an emitted runtime guard before expansion.
+
+Workflow-authorized guided subsystem search is separate from exact Y6.
+It may use graph priors (conditioning, uncertainty envelopes,
+provenance quality, topology locality, symmetry representatives, stale
+event state, or other compiler-visible facts) to prioritize promising
+subsystems and may terminate early only under explicit workflow budgets
+and acceptance criteria. Such a plan is extraction-layer approximation:
+it attaches to the relevant `ResidualSite`, contributes to
+`cost_of().approximation`, and is surfaced by diagnostics and run
+records. It must not be reported as exact Y6.
 
 #### 8.8 Y5: User-Defined Closure Policies
 
@@ -3590,7 +3619,8 @@ expression or residual candidate. The canonical fields are:
   and backend-kernel availability as a lowering-time resource cost.
 - `memory` — peak allocation and intermediate-buffer pressure.
 - `approximation` — contribution from authorized approximate rewrites
-  (§15, §15.6, Appendix C).
+  and workflow-authorized extraction approximations such as guided
+  closure search (§8.7, §15, §15.6, Appendix C).
 - `condition` — structured `ConditionRecord` consumed from
   `condition_of` Levels I/II where available (§14.1).
 - `truncation` — finite-support, quadrature, iteration, or finite-
@@ -3613,6 +3643,13 @@ When multiple authorized approximations affect one extracted candidate,
 `cost_of().approximation` composes their terms by §15.6. The default is
 a conservative monotone bound; sharper composition requires stdlib,
 compiler, or provider evidence.
+
+Guided closure search records its approximation term in
+`cost_of().approximation` rather than adding a new canonical cost field.
+Its compute and memory effects still contribute to `compute` and
+`memory`; its acceptance criteria, searched subsystem count, total
+subsystem bound, ordering facts, and `ResidualSite` provenance remain
+inside the structured approximation record for diagnostics.
 
 `cost_of().condition` is not a scalar field. It is a `ConditionRecord`
 with `entrywise`, `norm`, `spectral`, `structural`, and optional
@@ -3711,10 +3748,10 @@ atoms.
 
 **Summary.** `approximate` blocks authorize specific lossy rewrites
 for a named scope with declared tolerance class and error bound. The
-compiler derives expression lossiness from four cumulative sources
+compiler derives expression lossiness from five cumulative sources
 (atom contracts, approximation declarations, numeric types, backend
-emulation) and cuts it into three tiers: lossless, lossy-model,
-lossy-tolerance.
+emulation, and workflow-authorized extraction approximations) and cuts
+it into three tiers: lossless, lossy-model, lossy-tolerance.
 
 Approximation flavors organize along two orthogonal axes: a
 faithfulness axis (strict / approximate / fuzzy) and an orientation
@@ -3783,14 +3820,15 @@ scope exists; approximation is always explicitly chosen. Nested
 or otherwise stacked authorized approximation terms compose by
 §15.6.
 
-#### 15.2 Auto-Derived Lossiness (Four Sources)
+#### 15.2 Auto-Derived Lossiness (Five Sources)
 
-**Summary.** Expression lossiness is a lattice join over four
+**Summary.** Expression lossiness is a lattice join over five
 sources: stdlib atom contracts, approximation-block declarations,
-numeric type choices, and backend emulation paths. The compiler
-reports the aggregate via inspection surfaces.
+numeric type choices, backend emulation paths, and workflow-authorized
+extraction approximations. The compiler reports the aggregate via
+inspection surfaces.
 
-The compiler derives an expression's lossiness from four
+The compiler derives an expression's lossiness from five
 cumulative sources:
 
 1. **Stdlib atom contracts.** `log(exp(x)) = x` is lossless via
@@ -3807,9 +3845,15 @@ cumulative sources:
    (capability-advertising, §31) and the workflow permits
    emulation fallback, emulation's error class enters the
    derivation.
+5. **Workflow-authorized extraction approximations.** If the workflow
+   accepts a non-exhaustive extraction strategy such as guided subsystem
+   search (§8.7), the accepted search policy, budget, and acceptance
+   criteria enter the approximation record. This source is booked at
+   Layer 4 (§15.4); it is not a source-language `approximate` block and
+   not an exact Y6 reduction.
 
 The compiler reports the aggregate lossiness per expression
-via inspection surfaces (§22). The four sources are
+via inspection surfaces (§22). The five sources are
 independent contributions; lossiness is a lattice join over
 them, not a single authoritative source. Sampling parameters
 used to empirically estimate error bounds (sample count, seed,
@@ -3817,19 +3861,19 @@ stratification) live workflow-side per CC1; the `.myco`
 `approximate` block names the rewrite and bound, and the
 workflow's `run.config` surfaces the numerical parameters (§24).
 
-The four sources are the *origin* axis of lossiness; the
+The five sources are the *origin* axis of lossiness; the
 *accounting* axis — where in the compile stack the lossiness
 is quantified — is the five-layer stack in §15.4. The two axes
-are orthogonal: a single rewrite carries both a source label
-(one of four) and a layer label (one of five).
+are orthogonal: a single rewrite or extraction action carries both a
+source label (one of five) and a layer label (one of five).
 
 #### 15.3 Three-Tier Lossiness Cut
 
 **Summary.** Lossiness groups into three tiers for diagnostics and
 Tier B dispatch: lossless (equational rewrites only), lossy-model
-(modeler-chosen approximations), and lossy-tolerance (numerical
-tolerance intrinsic to the solve). Each tier is surfaced distinctly
-in diagnostics.
+(modeler-chosen approximations), and lossy-tolerance (run-level
+numerical or search tolerance). Each tier is surfaced distinctly in
+diagnostics.
 
 For diagnostics and Tier B dispatch (§13.2), lossiness groups
 into three tiers:
@@ -3841,17 +3885,18 @@ into three tiers:
   helpers (§8.9), closed-form statistical approximations
   (Delta method, CLT, Fenton-Wilkinson). The model itself is
   an approximation; the compiler surfaces which one.
-- **Lossy-tolerance.** Numerical tolerance intrinsic to the
-  solve: floating-point rounding, quadrature truncation,
-  iteration-convergence tolerance. Independent of modeler
-  intent; bounded by the backend and the residual's
-  conditioning.
+- **Lossy-tolerance.** Numerical or search tolerance intrinsic to the
+  run's chosen execution / extraction strategy: floating-point rounding,
+  quadrature truncation, iteration-convergence tolerance, or
+  workflow-authorized guided closure search. Independent of source
+  model intent; bounded by the backend, residual conditioning, and
+  explicit workflow acceptance criteria.
 
 The cut lets diagnostics say "this output is exact modulo
 floating-point" vs "this output uses a Delta-method
 linearization the modeler authorized" vs "this output is
-a tolerance-gated iterative solve." Three different trust
-postures, surfaced distinctly.
+a tolerance-gated iterative solve or workflow-budgeted guided
+closure search." Three different trust postures, surfaced distinctly.
 
 Envelope metadata (§16, Layer 2) can narrow a rewrite's
 effective error class in context. A rewrite that is normally
@@ -3871,9 +3916,9 @@ predicate language.
 **Summary.** Lossiness is quantified at five layers of the
 compile stack: syntactic, distributional-envelope, structural-
 identification, seam-state, and extraction-cost. Orthogonal to
-the four-source origin taxonomy (§15.2); each rewrite carries
-both a source label and a layer label. The layer axis tells
-diagnostics *where the distortion is booked*; the source axis
+the five-source origin taxonomy (§15.2); each rewrite or extraction
+action carries both a source label and a layer label. The layer axis
+tells diagnostics *where the distortion is booked*; the source axis
 tells them *why it happened*.
 
 Lossiness accounting layers:
@@ -3904,10 +3949,13 @@ Lossiness accounting layers:
 - **Layer 4 — Extraction cost.** Distortions that manifest
   only at residual-projection time: `cost_of`-guided
   extraction picks one among multiple valid representations
-  (Y-group closure policies, cost-struct tradeoffs §19.1).
-  The rewrite itself is layer-1 or layer-2 lossless; the
-  *choice* among equivalents carries accounting only when
-  extraction commits to one.
+  (Y-group closure policies, cost-struct tradeoffs §19.1) or a
+  workflow-authorized bounded search accepts a non-exhaustive closure
+  result (§8.7). Exact Y6 with certified reductions is lossless; guided
+  subsystem search that terminates without an exhaustive proof is booked
+  here. Underlying rewrites may still be layer-1 or layer-2 lossless;
+  the extraction commitment carries accounting when extraction commits
+  to one representative, budget, or accepted approximate search result.
 
 **Worked example.** `hard_clip(x, 0, inf)` at a positivity
 bound. Source axis (§15.2): source-1 projection (pre/post-
@@ -4708,6 +4756,9 @@ rule is conservative summation, the candidate remains valid but carries
 a loose-bound marker. When terms cannot be composed into one tolerance
 view, the `approximation` field remains structured and the extractor
 uses workflow policy to decide whether that candidate is admissible.
+Guided closure search is one such structured term: it names the
+`ResidualSite`, raw and reduced subsystem counts, searched count,
+ordering facts, acceptance criteria, and result status.
 
 Condition costs remain structured by default. A candidate may carry
 entrywise, norm, spectral, and structural condition entries with
@@ -5237,6 +5288,10 @@ The textual report includes:
 
 - SCC classification and lowering target (§20, §21).
 - Symbolic resolutions, closure-policy choices, and rewrite groups.
+- Exact Y6 and guided closure details: raw subsystem count, certified
+  reductions, reduced exact count, active workflow budget, searched
+  subsystem count when approximate, acceptance criteria, result status,
+  and `ResidualSite` attachment (§8.7, §19.2).
 - Residual graph nodes, original relation names, and extraction costs
   (§19).
 - Numerical fallbacks, backend / device capability requirements,
@@ -5928,6 +5983,11 @@ Representative fields:
 - `run.config.extraction_policy`. Preference over
   `cost_of` fields: compute-first, memory-first, faithfulness-first,
   or weighted (§19.1).
+- `run.config.closure_policy`. Per-residual-block closure-policy
+  selection and budgets. Exact Y6 entries may set enumeration budgets
+  and escalation behavior; guided subsystem search entries must set an
+  explicit subsystem budget, acceptance criteria, and `on_unmet`
+  behavior (§8.7).
 - `run.config.objective_policy`. Workflow-side scalarization of
   `objective_terms` across residuals and studies (§25).
 - `run.config.approximation_estimation`. Sampling parameters used to
@@ -5937,9 +5997,9 @@ Representative fields:
 - `run.config.profile`. Execution-profile hints (batch
   size, memory budget).
 - `run.config.capability_overrides`. Explicit workflow authorizations
-  such as accepting large closure-policy enumerations, choosing an
-  inference backend, or enabling approximate-inference switches. The
-  compiler never assumes these silently.
+  such as raising exact Y6 enumeration budgets, choosing an inference
+  backend, or enabling approximate-inference switches. The compiler
+  never assumes these silently.
 
 `run.config.topology_handlers` is the coarse allow-list for dynamic
 topology execution in the run. `run.config.crossing_handlers` is the
@@ -8664,7 +8724,6 @@ lowering details after the core sum-type lock. Chunks 05, 06, 07, 08,
 **Summary.** Catalog of smaller remaining items: source-level retraction
 if ever admitted, exact-numeric GPU portability, vector / tensor seam
 transforms, rational-denominator termination beyond the rewrite cap,
-Y6 blowup-threshold diagnostics,
 controller-interface affordances, stdlib inventory, Tier 2
 family-catalog polish, remaining Tier 3 non-parametric machinery,
 package dependencies, and event-scheduling policy API. Obligation
@@ -8721,9 +8780,15 @@ never fabricate `Selected<T>` handles.
 Vector / tensor seam transforms remain outside the v2.1 scalar-field
 `identify` guarantee (§11.1, Appendix C F): component remapping,
 orientation flips, and non-orientable-surface cases need a future
-geometry pass. Y6 `C(N,M)` enumeration is committed, but the concrete
-combinatorial-blowup warning threshold remains open (§8.7, Appendix C
-Y6).
+geometry pass.
+
+Y6 blowup-threshold diagnostics are resolved by workflow-budgeted exact
+enumeration (§8.7, Appendix C Y6). There is no magic language-wide
+threshold. Exact Y6 computes raw and reduced subsystem counts, applies
+only certified graph reductions, then obeys the active workflow budget.
+Guided subsystem search is workflow-authorized extraction approximation,
+not exact Y6, and records a Layer-4 approximation term on the relevant
+`ResidualSite`.
 
 **Controller-interface affordances in the Python layer.** General-
 system question: what hooks does Myco need to expose so workflows
@@ -9510,10 +9575,13 @@ config.
 - Y5. User-defined custom policy: any parameterized relation taking
   candidates plus hyperparameters and writing a forward output slot.
   Extensibility surface. LOCKED.
-- Y6. General `C(N,M)` enumeration for overconstrained blocks
-  (`N > M+1`): planner enumerates all maximal square subsystems; policy
-  receives the set. OPEN (combinatorial-blowup warning threshold
-  pending; §8.7, §35).
+- Y6. General exact `C(N,M)` enumeration for overconstrained blocks
+  (`N > M+1`): planner enumerates all relevant maximal square
+  subsystems after certified graph reductions; policy receives the
+  exact solution set. Raw count, reduced count, reduction proofs, and
+  active workflow budget are diagnostic facts. Guided subsystem search
+  is workflow-authorized extraction approximation, not exact Y6.
+  LOCKED.
 
 ---
 
