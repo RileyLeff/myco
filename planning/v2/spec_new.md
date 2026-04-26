@@ -8488,13 +8488,16 @@ capabilities.
 
 ## Part VI — Known Open Items
 
-**Summary.** Part VI enumerates remaining open design items and the
-resolved blocker ledger carried forward explicitly so they are not
-silently recommitted during consolidation. Covers kernel work, sum
-types / enums, residual-graph mechanics, Tier 2 family-catalog polish,
-and smaller opens. The B-tagged blockers, matrix heterogeneous-unit
-resolution, backend abstraction, the type-graph / e-graph bridge, and
-Complex numeric semantics are closed.
+**Summary.** Part VI enumerates remaining open design / catalog /
+tooling items and the resolved blocker ledger carried forward
+explicitly so they are not silently recommitted during consolidation.
+Open items now cluster around stdlib inventory, package / workflow API
+details, controller affordances, exact-numeric portability, selected
+geometry polish, Tier 2 / Tier 3 family catalogs, and implementation /
+cost-calibration work. The B-tagged blockers, matrix heterogeneous-unit
+resolution, backend abstraction, the type-graph / e-graph bridge,
+Complex numeric semantics, O4 carryovers, and cost-field cluster are
+closed.
 
 Carried forward explicitly so they are not silently committed during
 consolidation.
@@ -8536,10 +8539,11 @@ canonical spec.
 
 ### 34. Chunk-Slotted Work
 
-**Summary.** Outstanding design chunks: chunk 03 kernels (resumes
-after substrate lock) and chunk 11 sum types / enums. Chunks 05, 06,
-07, 08, 09, 12, and 13 are resolved and kept here as completed
-references.
+**Summary.** Remaining chunk-tracked work is now narrow: chunk 03 has
+implementation / backend / cost-calibration follow-through after the
+kernel semantics lock, and chunk 11 has enum polish / diagnostics /
+lowering details after the core sum-type lock. Chunks 05, 06, 07, 08,
+09, 12, and 13 are resolved and kept here as completed references.
 
 - **Chunk 05.** RESOLVED: matrix details. Heterogeneous-unit type
   mechanics are resolved by matrix facts (§3.9); shape expressions,
@@ -8589,7 +8593,7 @@ references.
   provenance are locked. Low-rank / feature approximation semantics
   and process-prior / GP-HSGP consumer semantics are locked. Concrete
   sparse / low-rank / process-inference backend implementations and
-  cost calibration remain open.
+  cost calibration remain implementation / catalog work.
 - **Chunk 11.** Sum types / enums. Core surface locked (§3.10):
   `enum`, flat exhaustive `match`, unit / positional / struct-like
   variants, no wildcard/default arm, explicit narrowing before field
@@ -8618,28 +8622,34 @@ references.
 
 ### 35. Other Opens
 
-**Summary.** Catalog of smaller open items: general source-level
-retraction under monotonicity, envelope ownership, CC1 diagnostics,
-GPU-incompatibility of exact numeric types, controller-interface
-affordances, Tier 2 family-catalog polish, and remaining Tier 3
-non-parametric catalog / backend machinery. Obligation retraction is
-resolved by the `ObligationSite` / `fulfills` ledger (§8.11, §10.5).
+**Summary.** Catalog of smaller remaining items: source-level retraction
+if ever admitted, exact-numeric GPU portability, vector / tensor seam
+transforms, rational-denominator termination beyond the rewrite cap,
+softmax / weighted aggregation spelling, Y6 blowup-threshold diagnostics,
+controller-interface affordances, stdlib inventory, Tier 2
+family-catalog polish, remaining Tier 3 non-parametric machinery,
+package dependencies, and event-scheduling policy API. Obligation
+retraction is resolved by the `ObligationSite` / `fulfills` ledger
+(§8.11, §10.5).
 Heterogeneous selection is resolved by `Selected<T>` /
 `Option<Selected<T>>` selector semantics (§12.2). Event-driven topology
 mutation is resolved by versioned topology, explicit topology handlers,
-and backend capability
-negotiation (§3.8, §21.3, §24.5, §31.1). Residual-to-e-graph projection
-and per-residual objective identity are resolved by `ResidualSite` /
-`ResidualRealization` semantics (§19.2, §25).
+and backend capability negotiation (§3.8, §21.3, §24.5, §31.1).
+Residual-to-e-graph projection and per-residual objective identity are
+resolved by `ResidualSite` / `ResidualRealization` semantics (§19.2,
+§25). Envelope ownership is resolved by the four-writer / four-reader /
+no-invalidator model
+(§16.3). CC1 diagnostic shape is resolved in §4.1.
 
 General source-level retraction remains out of the core language; if a
 future feature admits it, it must preserve the monotonicity invariant
-or live entirely in adjacent keyed state. Tier 0 Phase 2 Q4 (envelope
-ownership). Literal-constants diagnostic
-surface (CC1 enforcement messages; shape in §4.1). GPU-incompatibility
-of BigFloat and Rational (cross-refs §26.1 numeric table, §26.3
-Rational termination caveat, §31.1 backend fallback modes). **Chunk
-04 carryovers:**
+or live entirely in adjacent keyed state. Exact numeric GPU portability
+remains a backend-capability issue: current GPU-targeted SCCs reject
+`Rational`, arbitrary-precision `Integer`, and `BigFloat` (§26.1,
+§26.3, §31.1); future support is advertised capability, not source
+semantics. Rational-denominator saturation currently uses the rewrite
+cap (§19.4, §26.3); a non-cap-based termination argument remains open.
+**Chunk 04 carryovers:**
 O4.1 obligation retraction is resolved by the ledger design; W1 is no
 longer a rewrite group. O4.3 per-residual training emission is
 resolved: residual identities live on `ResidualSite`s while extraction
@@ -8669,6 +8679,13 @@ aggregation surface (stdlib primitive vs user-composed from `exp` +
 `sum`; collection-aggregation syntax pending zip/alignment semantics
 lock; Y2 `soft_select` already uses softmax internally in §8.7, so
 the shape is known but the ergonomic surface is not).
+
+Vector / tensor seam transforms remain outside the v2.1 scalar-field
+`identify` guarantee (§11.1, Appendix C F): component remapping,
+orientation flips, and non-orientable-surface cases need a future
+geometry pass. Y6 `C(N,M)` enumeration is committed, but the concrete
+combinatorial-blowup warning threshold remains open (§8.7, Appendix C
+Y6).
 
 **Controller-interface affordances in the Python layer.** General-
 system question: what hooks does Myco need to expose so workflows
@@ -8770,7 +8787,7 @@ classification of distributions (`log_density` / backend sampling
 capability) and kernels.
 Cross-refs §6, §7, §13.8, §14, §28, §30.
 
-**Mode B: per-instance heterogeneous contract binding.** Chunk 08
+**Mode B resolved: per-instance heterogeneous contract binding.** Chunk 08
 pins three modes for pluggable behavior: Mode A (concrete type),
 Mode B (contract-typed field, heterogeneous across instances of a
 population), Mode C (generic type parameter, homogeneous within a
@@ -8798,9 +8815,9 @@ lockfile) and the overall shape follows Cargo + uv conventions
 (chunk 10). Resolver algorithm, version semantics (what counts as
 a breaking change for a parameterized relation, a contract, or a
 capability shift), feature model, build-script / codegen surface,
-workspace ↔ Python interaction, cross-spore export policy, registry story, and
-platform / backend metadata in the manifest are all open. None of
-this blocks the core language lock; full spec-level prose is
+workspace ↔ Python interaction, cross-spore export policy, registry
+story, and platform / backend metadata in the manifest are all open.
+None of this blocks the core language lock; full spec-level prose is
 deferred post-v2.1 per chunk 10. Cross-refs §2, §36, §37.
 
 **Event scheduling-policy Python API signature.** §10.1 commits to
@@ -9231,7 +9248,7 @@ registered inverse. LOCKED.
   `log(exp(x)) → x` (always)
 
 **F. Geometry-specific strict merge.** Scalar-field seam identification.
-LOCKED; vector/tensor seams OPEN (§35 geometry chunk 01).
+LOCKED; vector / tensor seam transforms remain OPEN (§11.1, §35).
 
 - F1. `identify phi=0 <-> phi=2*pi` merges scalar-field e-classes at
   the seam
@@ -9306,9 +9323,10 @@ truncation. LOCKED when authorized by an `approximate` block.
   below tolerance
 
 **N. Numerical quadrature substitution.** Every PDE passes through
-this. Source semantics locked in §28.4: continuous `integrate` is not
-silently replaced by finite compute. Lowering policy remains OPEN
-(§35, kernels chunk 03).
+this. Source semantics and approximation policy are locked: continuous
+`integrate` is not silently replaced by finite compute (§14.3, §28.4).
+Concrete quadrature / lowering catalogs remain implementation work
+(§35 stdlib inventory, chunk 03).
 
 - N1. `integrate(f, var, lo, hi) → quadrature_n(...)` only under
   workflow-selected approximation policy or an explicit `.myco`
@@ -9453,7 +9471,7 @@ config.
 - Y6. General `C(N,M)` enumeration for overconstrained blocks
   (`N > M+1`): planner enumerates all maximal square subsystems; policy
   receives the set. OPEN (combinatorial-blowup warning threshold
-  pending; §35).
+  pending; §8.7, §35).
 
 ---
 
