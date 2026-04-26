@@ -200,7 +200,8 @@ Terms: `variable`, `bound variable`, `free variable`, `relation`,
 `SelectedSite`, `TopologyDelta`, `TopologyVersion`, `capability profile`,
 `resolved run lock`, `SpatialOperatorSite`, `WeakFormSite`,
 `ResidualFormSite`, `TransferSite`, `DiscreteOperatorSite`,
-`realization provider`, `evidence grade`, `promoted_exact_in_context`.
+`realization provider`, `evidence grade`, `ConditionRecord`,
+`promoted_exact_in_context`.
 
 ---
 
@@ -3468,24 +3469,38 @@ the e-graph.
 
 #### 14.1 `condition_of` — Levels I, II, III
 
-**Summary.** `condition_of(expr)` returns a conditioning estimate at
-one of three levels: symbolic (Level I, problem-intrinsic), algorithmic
-(Level II, lowering-dependent), or runtime (Level III, numerically
-computed). The level is tagged on the return. Primary consumer: Y4
-`condition_weighted` closure policy.
+**Summary.** `condition_of(expr)` returns a structured
+`ConditionRecord` at one of three levels: symbolic (Level I,
+problem-intrinsic), algorithmic (Level II, lowering-dependent), or
+runtime (Level III, numerically computed). The level is tagged on the
+return. Primary consumer: Y4 `condition_weighted` closure policy.
 
-`condition_of(expr)` returns a conditioning estimate for an
-expression. Three levels of evaluation, tagged in the return
-type so downstream code can distinguish:
+`condition_of(expr)` returns a `ConditionRecord` for an expression. The
+record has view slots matching the envelope views (§16.4):
 
-- **Level I — Symbolic.** Closed-form condition number derived
-  from the e-graph's algebraic structure (e.g., condition of
-  a triangular solve against its diagonal). Available when the
-  expression's conditioning is itself a closed-form function
-  of the inputs.
-- **Level II — Algorithmic.** Condition number of a specific
-  algorithm realizing the expression (e.g., Gaussian
-  elimination's condition when applied to a given matrix),
+- `entrywise` — per-component sensitivity or amplification facts.
+- `norm` — normwise conditioning / perturbation amplification.
+- `spectral` — singular-value / eigenvalue conditioning facts.
+- `structural` — exact eligibility, scaling, rank, factorization, or
+  degeneracy facts that condition interpretation depends on.
+- `summary` — optional derived scalar or selected view used for ranking,
+  always with provenance naming which view / rule produced it.
+
+A scalar-only operation may populate a one-component `entrywise` record
+and a matching `summary`. A scalar summary is never the canonical
+condition representation for matrix, tensor, PDE, or multi-output
+operations.
+
+Three levels of evaluation are tagged in the return type so downstream
+code can distinguish:
+
+- **Level I — Symbolic.** Closed-form conditioning facts derived
+  from the e-graph's algebraic structure (e.g., triangular-solve
+  conditioning against its diagonal). Available when the expression's
+  conditioning is itself a closed-form function of the inputs.
+- **Level II — Algorithmic.** Conditioning facts for a specific
+  algorithm realizing the expression (e.g., Gaussian elimination's
+  pivot-dependent conditioning when applied to a given matrix),
   selected by the compiler's lowering decisions.
 - **Level III — Runtime.** Numerically computed at execution
   time. Fallback when neither symbolic nor algorithmic form
@@ -3516,6 +3531,11 @@ compiler chose: Gaussian elimination tracks pivot quality,
 QR tracks the Q factor. The distinction is inspectable at
 compile time without running the model.
 
+For a solve, the `ConditionRecord` may hold spectral facts about `A`,
+normwise residual-amplification facts for the chosen solve block, and
+structural facts such as `positive_definite(A)` or
+`used_factorization = cholesky`.
+
 #### 14.2 `cost_of` and `objective_terms`
 
 **Summary.** Chunk 12 resolves the cost/loss naming split:
@@ -3532,8 +3552,8 @@ expression or residual candidate. The canonical fields are:
 - `memory` — peak allocation and intermediate-buffer pressure.
 - `approximation` — contribution from authorized approximate rewrites
   (§15, §15.6, Appendix C).
-- `condition` — conditioning estimate consumed from `condition_of`
-  Levels I/II where available (§14.1).
+- `condition` — structured `ConditionRecord` consumed from
+  `condition_of` Levels I/II where available (§14.1).
 - `truncation` — finite-support, quadrature, iteration, or finite-
   horizon truncation contribution.
 - `discretization` — mesh, timestep, stencil, or sampling-grid
@@ -3554,6 +3574,13 @@ When multiple authorized approximations affect one extracted candidate,
 `cost_of().approximation` composes their terms by §15.6. The default is
 a conservative monotone bound; sharper composition requires stdlib,
 compiler, or provider evidence.
+
+`cost_of().condition` is not a scalar field. It is a `ConditionRecord`
+with `entrywise`, `norm`, `spectral`, `structural`, and optional
+`summary` slots (§14.1, §16.4). Extraction may use the `summary` slot
+for ranking only when a named rule explains how it was derived. If no
+summary is available, condition remains a structured cost dimension and
+workflow extraction policy decides whether the candidate is admissible.
 
 `objective_terms(residual)` consumes a `ResidualSite` (§19.2) and
 returns named training-objective components, not a scalar. Fields cover
@@ -4169,6 +4196,12 @@ bounds, several norm bounds, spectral intervals, and structural
 certificates simultaneously. There is no single canonical envelope
 representation into which the others must project.
 
+`ConditionRecord` (§14.1) reuses the same view vocabulary for
+conditioning costs. This keeps matrix solves, eigensystems, tensor
+operators, and PDE residuals from collapsing entry-wise sensitivity,
+normwise amplification, spectral conditioning, and structural
+eligibility into one canonical scalar.
+
 Merge and join behavior is per view:
 
 - Entry-wise joins intersect or widen compatible interval records
@@ -4636,6 +4669,14 @@ rule is conservative summation, the candidate remains valid but carries
 a loose-bound marker. When terms cannot be composed into one tolerance
 view, the `approximation` field remains structured and the extractor
 uses workflow policy to decide whether that candidate is admissible.
+
+Condition costs remain structured by default. A candidate may carry
+entrywise, norm, spectral, and structural condition entries with
+different evidence and levels (§14.1). Extraction may rank by
+`cost_of().condition.summary` when present, but the summary is a derived
+view, not the source of truth. If two candidates are incomparable across
+condition views, extraction keeps both on the Pareto front unless the
+workflow supplies a policy that selects between them.
 
 Consequence: the same e-graph yields different residuals under
 different workflow policies. The residual graph is a projection
@@ -5178,6 +5219,10 @@ The textual report includes:
   composition rule (`conservative_sum`, declared law, or
   `uncomposed_approximation_terms`), evidence source, and looseness
   warning (§15.6, §19.1).
+- Condition records: entrywise / norm / spectral / structural entries,
+  level (I / II / III), provenance, missing scaling or structural
+  obligations, and any derived scalar summary used for ranking (§14.1,
+  §19.1).
 - Regime boundaries and crossing-handler ledger entries: detected
   surfaces, continuity / derivative class, selected crossing policy,
   topology handler, and any workflow-authorized surrogate used by the
@@ -8012,7 +8057,7 @@ rank is `matrix_rank(A)` to avoid collision with shape rank
 | `transpose(A)` | `rank(A)=2` | swapped axes, transposed `entry_unit_law`, flipped upper/lower triangular facts, preserved applicable facts (§3.9) | Rank mismatch is a compile error or obligation depending on shape phase. |
 | `adjoint(A)` | `rank(A)=2`; real route where adjoint reduces to transpose, or Complex semantics / backend support where entries are complex | conjugate-transpose facts; Hermitian route facts when applicable | Missing Complex/backend support is a capability obligation. |
 | `norm(expr, kind)` | supported kind (`"1"`, `"2"`, `"fro"`, `"inf"`), unit / scaling policy where needed | norm envelope facts used by `condition_of` and approximation accounting | Heterogeneous units without scaling policy block interpretation. |
-| `condition_of(expr)` | expression shape, unit / axis comparability, and norm / scaling policy for matrix-valued expressions | `condition_estimate(expr)`, `condition_mode`, `condition_bound` when available | Heterogeneous units without a scaling policy make condition number interpretation unknown; the diagnostic asks for scaling evidence. |
+| `condition_of(expr)` | expression shape, unit / axis comparability, and norm / scaling policy for matrix-valued expressions | `ConditionRecord` entries, `condition_mode`, `condition_bound` / `condition_summary` when available | Heterogeneous units without a scaling policy make condition interpretation unknown; the diagnostic asks for scaling evidence. |
 | `matrix_rank(A)` | `rank(A)=2`, numeric entries, tolerance / scaling policy | `rank_value(A)`, full-rank / nullspace facts when classifiable | Missing tolerance / scaling policy reports an obligation. |
 | `kernel_matrix(k, xs, ys)` | kernel-domain compatibility for `k: A,B -> Scalar<U>`, finite axes for `xs: A` and `ys: B`, output-unit law | `kernel_matrix_of(W,k,xs,ys)`, row/col axes, entry-unit law, pairwise-evaluation provenance, zero-pattern facts when `zero_when` proves finite pairs are exact zeros | Does not emit symmetry, PSD, or covariance facts merely because it is kernel-shaped. Missing domain/axis/unit facts are obligations. |
 | `gram(k, points)` | same-domain kernel compatibility for `k: A,A -> Scalar<U>` and finite point axis; downstream covariance use requires the relevant kernel facts (`SymmetricKernel<A>`, `PositiveDefinite<A>`, `StrictPositiveDefinite<A>` plus `distinct(points)` for PD) | `gram_of(K,k,points)`, row/col axes, entry-unit law, pairwise-evaluation provenance, `symmetric(K)`, `positive_semidefinite(K)`, `positive_definite(K)`, and zero-pattern facts only when proven | PSD alone does not authorize ordinary Cholesky. If PD is required and unknown, report `positive_definite(K)` as unmet; the compiler does not silently add jitter, pivot, or opaque-handoff. |
@@ -8659,8 +8704,8 @@ opaque handlers for process laws that do not fit the GP finite-joint
 path.
 
 **Cost/objective vocabulary resolved.** Chunk 12 is no longer an open
-design item. `cost_of(expr)` owns extraction economics with
-`compute`, `memory`, `approximation`, `condition`, `truncation`, and
+design item. `cost_of(expr)` owns extraction economics with `compute`,
+`memory`, `approximation`, structured `condition`, `truncation`, and
 `discretization` fields (§14.2, §19.1). `objective_terms(residual)`
 owns training-objective decomposition (§14.2, §25). Peak allocation is
 therefore a first-class `memory` field of `cost_of`, not a separate
@@ -8703,16 +8748,16 @@ family-specific closed form). Otherwise comparable terms use
 `uncomposed_approximation_terms` and must be surfaced by `hypha explain`
 (§19.1, §22).
 
-**Condition cost representation for multi-output operations.** The
-`condition` field of `cost_of` is scalar-valued in O2.4. Matrix
-solves, eigenproblems, and other multi-output operations carry
-richer conditioning structure than a scalar captures — the §17.1
-tolerance classes (entry-wise, operator-norm, spectral, structural)
-are the right shape. Open whether `condition` stays scalar and the
-extra structure is recorded out-of-band, or becomes a sum-type over
-the tolerance classes, or splits into separate fields per class.
-Affects §14 `cost_of` signature and §19.1 extraction-cost
-accounting.
+**Condition cost representation resolved.** `cost_of().condition` is a
+structured `ConditionRecord`, not a scalar (§14.1, §14.2). It carries
+entrywise, norm, spectral, and structural condition entries plus an
+optional provenance-backed `summary` for extraction ranking. Scalar
+operations may populate a one-component entrywise record and summary,
+but matrix solves, eigensystems, tensor operators, PDE residuals, and
+other multi-output operations keep their view-specific conditioning
+visible. `hypha explain` reports the entries, levels, provenance,
+missing scaling / structural obligations, and summary rule (§19.1,
+§22).
 
 **Stdlib canonical inventory.** The set of stdlib expression atoms and
 stdlib-shipped parameterized relations is referenced throughout the
