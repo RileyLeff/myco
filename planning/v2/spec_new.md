@@ -198,7 +198,9 @@ Terms: `variable`, `bound variable`, `free variable`, `relation`,
 `selector`, `existence domain`, `adapter`, `residual site`,
 `residual realization`, `selected handle`, `Selected<T>`,
 `SelectedSite`, `TopologyDelta`, `TopologyVersion`, `capability profile`,
-`resolved run lock`.
+`resolved run lock`, `SpatialOperatorSite`, `WeakFormSite`,
+`ResidualFormSite`, `TransferSite`, `DiscreteOperatorSite`,
+`realization provider`, `evidence grade`.
 
 ---
 
@@ -2283,7 +2285,8 @@ entities located against that geometry. `bind_topology` supplies
 concrete meshes at workflow time. Standard locus vocabulary
 (`boundary`, `chart`, `metric`, `requires`), stdlib geometry catalog,
 spatial operators (`grad`, `diverg`, `laplacian`, `curl`,
-`normal_grad`, `trace`), and boundary conditions via `requires`.
+`normal_grad`, `trace`), weak / residual forms, and boundary
+conditions via `requires`.
 
 Horse/fly composition pattern for spatial frames. `bind_topology` at
 workflow time for concrete meshes. `on locus:` clause applies
@@ -2332,11 +2335,12 @@ coordinate units and a mismatch is a compile error.
 
 **Summary.** Stdlib-recognized spatial operators on locus-scoped
 fields: `grad`, `diverg`, `laplacian`, `curl`, `normal_grad`,
-`trace`, `limit_from`. `diverg` on a conserved flux field drives
-`flux_condition` obligations at junctions. Operators are stdlib axioms with
-capability contracts; users do not annotate them. Dimension-
-dependent signatures (e.g., `curl`) dispatch at the axiom level via
-case-on-val-generic in the return type.
+`trace`, `trace_from`, `limit_from`, `jump`, `average`, `normal`,
+`normal_traction`, and `test_space`. `diverg` on a conserved flux field
+drives `flux_condition` obligations at junctions. Operators are stdlib
+axioms with capability contracts; users do not annotate them.
+Dimension-dependent signatures (e.g., `curl`) dispatch at the axiom
+level via case-on-val-generic in the return type.
 
 Compiler-recognized operators on locus-scoped fields:
 
@@ -2356,15 +2360,69 @@ Compiler-recognized operators on locus-scoped fields:
 - `trace(f, boundary)` — manifold restriction: the value of
   field `f` restricted to the named boundary sub-locus.
   Standard PDE trace operator.
+- `trace_from(f, interface, side)` — sided restriction of `f` to a
+  codimension-1 interface. `side` must name a side exposed by the
+  interface / topology facts. This generalizes one-sided boundary and
+  fault / material-interface access beyond graph junctions.
 - `limit_from(f, junction, edge)` — one-sided directional limit:
   the value of `f` as the junction is approached along a
   specified incident edge. Defined on `MetricGraph` /
   `RootedTree` junctions where the field may be discontinuous
   across incident edges.
+- `jump(f, interface)` — difference between sided traces across an
+  interface, with orientation carried by the interface facts.
+- `average(f, interface)` — arithmetic or metric-weighted average of
+  sided traces across an interface, according to the interface's
+  measure / metric facts.
+- `normal(interface, side)` — oriented normal vector / covector exposed
+  by boundary or interface facts.
+- `normal_traction(stress, interface, side)` — stress contracted with
+  the oriented interface normal on the requested side.
+- `test_space<T>(locus)` — admissible semantic test functions for weak
+  / residual statements over a locus. A test space is part of the
+  source model's mathematical claim; it does not select a finite
+  element basis, quadrature rule, sparse layout, or solver.
 
 Operators are stdlib axioms with capability contracts (§7.2).
 Relations like `laplacian(f) = diverg(grad(f))` fire as e-graph
 rewrites from stdlib declarations; users never annotate them.
+
+Strong, weak, and interface forms are all source-level mathematics when
+written in `.myco`. Strong forms use pointwise spatial operators:
+
+```myco
+temporal heat on interior:
+    d(T) = diffusivity * laplacian(T) + source
+```
+
+Weak / variational forms use ordinary `integrate` plus semantic test
+spaces. They state residual claims over all admissible tests; they do
+not choose finite basis functions:
+
+```myco
+relation heat_weak on interior:
+    for test v in test_space<Scalar<dimensionless>>(interior):
+        integrate(v * d(T), x, interior)
+          = -integrate(dot(grad(v), diffusivity * grad(T)), x, interior)
+            + integrate(v * source, x, interior)
+```
+
+Interface laws use sided traces, jumps, averages, and normal traction:
+
+```myco
+relation fault_law on fault:
+    slip = jump(displacement, fault)
+    tau_plus = normal_traction(stress, fault, side = plus)
+    tau_minus = normal_traction(stress, fault, side = minus)
+    tau_plus + tau_minus = 0
+    tau_plus = friction_law(slip_rate, state)
+```
+
+These constructs let a model state the mathematics that serious PDE
+systems actually use: weak residuals, interface conditions, jump laws,
+and trace laws. Basis choice, quadrature, numerical flux, matrix-free
+action, preconditioner, sparse format, and hardware kernel selection are
+realization choices (§31.1, §37.1), not `.myco` source semantics.
 
 **Dimension dispatch in axiom return positions.** `curl` is the
 first operator whose return type depends on a val generic carried
@@ -3530,6 +3588,15 @@ collapse at compile time. Distinct from SDE stochastic integration.
 `integrate` is distinct from SDE-style stochastic integration
 (§13.4), which has its own Itô/Stratonovich convention.
 
+Weak and residual forms are ordinary integration statements. A `for test`
+loop over a `test_space<T>(locus)` is universal quantification over
+semantic test functions in the source model. It does not select a
+finite-dimensional basis or create a solver hint. Lowering may later
+choose finite basis functions, quadrature, matrix assembly, or
+matrix-free action through a realization provider (§37.1), with the
+chosen discretization recorded as a plan artifact and, when approximate,
+in `cost_of().discretization`.
+
 #### 14.4 `deriv` — Symbolic, Algorithmic, Runtime
 
 **Summary.** `deriv(f, x)` returns the derivative of `f` with
@@ -3848,8 +3915,8 @@ and ownership rules.
 
 The e-graph as the internal equality substrate. Three-layer split:
 (1) equational core, (2) envelope metadata attached to e-classes,
-(3) adjacent keyed state (event firings, SCC results, provider
-bindings, sampling traces, event-trigger flags).
+(3) adjacent keyed state (event firings, SCC results, semantic site
+records, provider bindings, sampling traces, event-trigger flags).
 
 #### 16.1 Three-Layer Scoping Split
 
@@ -3857,8 +3924,9 @@ bindings, sampling traces, event-trigger flags).
 under monotonic merge, one per-run instance), envelope metadata
 (facts keyed by e-class narrowing without merging, including
 provenance and merge-edge annotations), adjacent keyed state
-(event firings, selected-handle sites, SCC decomposition results,
-provider bindings, sampling traces, event-trigger state). Merge
+(event firings, selected-handle sites, spatial / weak / transfer
+site records, SCC decomposition results, provider bindings,
+sampling traces, event-trigger state). Merge
 sources write layer 1; contracts, observations, and backend emulation
 write layer 2; event firings, selector sites, and keyed identifiers
 index layer 3.
@@ -3898,6 +3966,13 @@ principle is restated in §0 as a structural commitment.
    - `SelectedSite` records keyed on selector expression identity,
      holding selected-handle provenance, empty behavior, tie policy,
      result contract, existence domain, and lowering metadata (§12.2).
+   - `SpatialOperatorSite`, `WeakFormSite`, `ResidualFormSite`, and
+     `TransferSite` records keyed on source expression identity and
+     topology version, holding locus, operator family, test-space /
+     interface metadata, and realization links (§11.1, §37.1).
+   - `DiscreteOperatorSite` records keyed on continuous site, topology
+     version, provider, backend, and artifact identity, holding realized
+     executable artifact facts and evidence grades (§28.6, §37.1).
    - SCC decomposition results keyed on SCC identifier; carries
      the canonical four-way class assignment (static / dynamic /
      stochastic / training; §20) plus any lowering solver-strategy
@@ -4446,9 +4521,10 @@ Inventory boundary:
   distributional metadata, matrix facts, observations, tolerance facts,
   structural certificates, and provenance.
 - **Adjacent keyed state:** runtime / keyed records that reference
-  e-classes without asserting equality: events, geometry sites, SCC
-  records, selected-handle sites, provider handles, samples, dynamic
-  collection identities, and backend run records.
+  e-classes without asserting equality: events, geometry sites, spatial
+  / weak / transfer sites, SCC records, selected-handle sites, provider
+  handles, samples, dynamic collection identities, and backend run
+  records.
 
 ### 19. Residual Graph (Projection)
 
@@ -4993,6 +5069,10 @@ The textual report includes:
 - Numerical fallbacks, backend / device capability requirements,
   selected topology handler, selected fallback policy, and resolved
   run-lock identity (§21.3, §31).
+- Realization-provider selections: matched semantic site, selected
+  provider and implementation API, emitted artifact ids, evidence
+  grades, validation results, rejected providers, and lockfile hashes
+  (§37.1).
 - Execution order and temporal state requirements.
 - Observation, source, and topology bindings that materialize the
   plan.
@@ -7160,8 +7240,8 @@ approximate:
 ```
 
 **Provider artifacts.** Workflow providers may supply sparse patterns,
-neighbor graphs, spatial indexes, and matrix-free query structures as
-validated artifacts:
+neighbor graphs, spatial indexes, matrix-free query structures, and
+realized discrete operator artifacts as validated artifacts:
 
 ```text
 csr_pattern_of(P, W)
@@ -7171,6 +7251,8 @@ pattern_phase(P) = bind_static
 depends_on(P, axes, radius)
 validated_by(P, exact_distance_check)
 validated_by(P, topology_adjacency_certificate)
+discrete_operator_of(D_h, spatial_operator_site)
+discretization_lowering_of(D_h, continuous_site, topology_version, scheme_id)
 ```
 
 Provider validation produces artifact-level facts for the current run.
@@ -7178,6 +7260,15 @@ It may satisfy obligations on a concrete `kernel_matrix` or operator
 lowering. It does not grant unchecked relation-level facts such as
 `support(k)` or `CompactSupport<A, B>(r)` unless the source relation
 or audited stdlib implementation already establishes them.
+
+A realized discrete operator artifact may emit structural and numerical
+facts such as `row_sum_zero`, `stencil_pattern`, `local_coupling`,
+`conservative_transfer`, `adjoint_pair`, `solver_residual_bound`,
+`quadrature_order`, or `discretization_order`. Each emitted fact carries
+an evidence grade (§37.1). The artifact can be an assembled sparse
+matrix, stencil bundle, finite-volume flux action, FEM/DG weak-form
+action, matrix-free callable, remap operator, or provider-owned handle.
+It is an execution artifact, not a second source of `.myco` truth.
 
 #### 28.7 Separability, Feature Expansions, and Low-Rank Approximation
 
@@ -7902,9 +7993,9 @@ plans against a trait surface rather than a specific runtime. The
 locked design is a small `CoreBackend` plus advertised capability
 profiles; hybrid Myco-owned / backend-owned AD; explicit capability
 mismatch policy; whole-SCC Tier C PPL handoff; opaque-callable runtime
-semantics; backend trait versioning; no primary backend; and a
-semantics-complete CPU reference backend as the first conformance
-target.
+semantics; realization-provider execution hooks; backend trait
+versioning; no primary backend; and a semantics-complete CPU reference
+backend as the first conformance target.
 
 ### 31. Backend Trait Surface
 
@@ -7933,8 +8024,9 @@ Scientific machinery beyond that core is capability-advertised, not
 mandatory. Cholesky, SVD, eigendecomposition, sparse kernels,
 iterative solvers, runtime AD modes, PPL inference modes,
 dynamic-keyed axes, complex arithmetic, complex linear algebra,
-complex runtime AD, host interop, and opaque-callable gradients are all
-backend capabilities. A backend may
+complex runtime AD, custom realization-provider execution, host
+interop, and opaque-callable gradients are all backend capabilities. A
+backend may
 also advertise a named **capability profile**, a composable bundle of
 capabilities with `requires`, `provides`, and `implies` rules. This
 is an implementation-surface vocabulary, not a `.myco` source
@@ -8005,6 +8097,11 @@ Backends advertise capabilities (e.g. `supports_complex`,
 `supports_event_replan`, `supports_event_replan_cache`,
 `supports_dynamic_keyed_axes`, `supports_dynamic_sparse_adjacency`,
 `supports_ragged_axes`, `supports_dynamic_output_shapes`,
+`supports_matrix_free_action`, `supports_weak_form_assembly`,
+`supports_unstructured_mesh_ops`, `supports_staggered_field_placement`,
+`supports_conservative_remap`, `supports_custom_realization_provider`,
+`supports_rust_realization_provider`,
+`supports_python_realization_provider`,
 `supports_host_execution`, `supports_hidden_fallback_detection`,
 `opaque_callable_runtime`, `opaque_callable_ad`) and capability
 profiles such as
@@ -8410,10 +8507,13 @@ boundaries; execution uses explicit `CapacityMask`, `EventReplan`, or
 `DynamicKeyed` handlers selected through workflow intent and backend /
 device capability facts (§3.8, §21.3, §24.5, §31.1).
 
-O4.8 spatial operator lowering (rewrite group P1 architectural call:
-e-graph rewrite versus pre-e-graph codegen; geometry chunk 01
-cross-ref). Macros (dropped from the current surface; revisit if
-concrete boilerplate pain emerges). `softmax` and weighted-sum
+O4.8 spatial operator lowering (rewrite group P1 architectural call):
+source weak / residual forms and realization-provider home are locked
+(§11.1, §14.3, §37.1), but the remaining architectural call is exact
+lowering placement — e-graph rewrite versus site/provider lowering
+artifact versus pre-e-graph codegen — with geometry chunk 01 cross-ref.
+Macros (dropped from the current surface; revisit if concrete
+boilerplate pain emerges). `softmax` and weighted-sum
 aggregation surface (stdlib primitive vs user-composed from `exp` +
 `sum`; collection-aggregation syntax pending zip/alignment semantics
 lock; Y2 `soft_select` already uses softmax internally in §8.7, so
@@ -8625,6 +8725,143 @@ platform/backend metadata, and cross-spore export policy. The minimum
 scope is local path dependencies, manifest parsing, lockfile writing,
 and deterministic source resolution.
 
+#### 37.1 Realization Providers
+
+**Summary.** A realization provider is a spore-shipped implementation
+that realizes semantic sites such as `SpatialOperatorSite`,
+`WeakFormSite`, `ResidualFormSite`, or `TransferSite` as executable
+artifacts. Providers are declared in TOML and implemented through
+versioned Python or Rust APIs. They may emit validated artifact-level
+facts, but they never override `.myco` source semantics or assert
+unchecked truth.
+
+Realization providers live in spores, outside ordinary `.myco` source:
+
+```text
+ocean99/
+  myco.toml
+  src/ocean99.myco
+  realizations/ocean99.toml
+  python/ocean99_realize.py
+  rust/ocean99_realize/
+  validation/
+```
+
+Users install them through the ordinary spore mechanism:
+
+```text
+hypha add ocean99
+hypha add ocean99 --features realizations,cuda
+```
+
+The TOML declaration is the public contract; Python / Rust code is the
+implementation:
+
+```toml
+[realization_provider.ocean99_cgrid]
+api = "myco.realization.v1"
+kind = "spatial_operator_provider"
+
+matches.sites = ["SpatialOperatorSite", "WeakFormSite", "ResidualFormSite", "TransferSite"]
+matches.operators = ["grad", "diverg", "pressure_solve", "weak_residual"]
+matches.geometry = ["SphericalShell", "CurvilinearGrid"]
+matches.discretization = ["finite_volume_c_grid"]
+
+requires = [
+  "field_placement:cell_face_edge",
+  "metric_factors",
+  "boundary_conditions",
+  "topology_handler:CapacityMask",
+  "backend:sparse_matvec"
+]
+
+claims = [
+  "discrete_operator_of:provider_validated",
+  "row_sum_zero:provider_validated",
+  "conservative_flux_pair:provider_validated",
+  "adjoint_pair:validated_if_enabled"
+]
+
+[realization_provider.ocean99_cgrid.impl.python]
+entrypoint = "ocean99_realize:CGridProvider"
+
+[realization_provider.ocean99_cgrid.impl.rust]
+crate = "ocean99_realize"
+symbol = "ocean99_cgrid_provider"
+```
+
+The implementation receives semantic site records and workflow /
+backend context, not raw source text. Python and Rust APIs share the
+same conceptual shape:
+
+```python
+class RealizationProvider:
+    def candidates(self, site, context): ...
+    def realize(self, candidate, context): ...
+```
+
+```rust
+trait RealizationProvider {
+    fn candidates(&self, site: &Site, ctx: &Context) -> Result<Vec<Candidate>>;
+    fn realize(&self, candidate: &Candidate, ctx: &Context) -> Result<Artifact>;
+}
+```
+
+Returned artifacts are recorded as `DiscreteOperatorSite` records keyed
+on the continuous semantic site, topology version, provider, backend,
+and artifact identity. They may be assembled matrices, stencil bundles,
+finite-volume flux actions, FEM / DG weak-form actions, remap
+operators, matrix-free callables, or provider-owned handles. Arbitrary
+provider code may produce executable artifacts; it may not produce
+trusted facts without evidence. Every emitted fact carries an evidence
+grade:
+
+- `compiler_proven`
+- `stdlib_derived`
+- `provider_validated`
+- `audited_package_certified`
+- `empirical_tested`
+- `unknown`
+
+Obligations specify which evidence grades can satisfy them. For
+example, a runtime conservation diagnostic may accept
+`row_sum_zero:provider_validated`, while an exact symbolic conservation
+proof may require `compiler_proven` or `stdlib_derived`. Facts with
+`unknown` evidence are visible diagnostics but do not discharge
+obligations.
+
+The lockfile / run record captures the concrete realization used:
+
+```toml
+[resolved_realization.ocean99_cgrid]
+provider = "ocean99"
+version = "1.4.2"
+api = "myco.realization.v1"
+impl = "rust"
+source_hash = "..."
+build_hash = "..."
+selected_candidate = "cgrid_fv_pressure_split"
+backend = "torch"
+device = "cuda"
+facts_emitted = ["row_sum_zero:provider_validated", "stencil_pattern:provider_validated"]
+fallbacks = []
+validation = ["constant_preserving:pass", "mass_conservation:pass"]
+```
+
+The invariant is:
+
+```text
+.myco source defines meaning.
+realization providers realize semantic sites.
+providers may add executable artifacts and evidence-graded facts.
+providers may not override source semantics.
+```
+
+If a provider drifts from the source model, it should stop matching,
+fail validation, or emit fewer / weaker facts. It may still run as an
+opaque provider only when the workflow explicitly allows that loss of
+compiler-visible guarantees.
+
 ### 38. Editor Tooling
 
 **Summary.** Editor-side surfaces: a language server (LSP), VS Code
@@ -8689,7 +8926,7 @@ if encountered in identifier position.
 **Body-form keywords.** `let`, `if`, `else`, `for`, `in`, `is`,
 `match`, `trace`, `requires`, `fulfills`, `default`, `conserved`,
 `approximate`, `initial`, `temporal`, `when`, `becomes`, `as`, `on`,
-`field`.
+`field`, `test`.
 
 **Stochastic operator.** `~` (distribution-binding operator;
 stochastic relation). SDE families carry integration-convention type
@@ -8715,10 +8952,12 @@ pattern or pipe use).
 `same_entity`, `solve`,
 `solve_triangular`, `least_squares`, `cholesky`, `lu`, `qr`, `svd`,
 `eigen`, `inverse`, `det`, `trace`, `transpose`, `adjoint`, `norm`,
+`dot`,
 `matrix_rank`, `gram`, `zeros`, `ones`, `identity`, `diag`,
 `diag_of`, `stack`, `hstack`, `vstack`, `deriv`, `integrate`,
 `condition_of`, `objective_terms`, `cost_of`, `value_in`, `grad`, `diverg`,
-`laplacian`, `curl`, `normal_grad`, `limit_from`, `smooth_max`,
+`laplacian`, `curl`, `normal_grad`, `trace_from`, `limit_from`,
+`jump`, `average`, `normal`, `normal_traction`, `test_space`, `smooth_max`,
 `smooth_abs`, `smooth_step`, `soft_select`, `hard_select`,
 `weighted_average`, `condition_weighted`, `soft_clip`, `hard_clip`,
 `sigmoid`, plus the distribution-
