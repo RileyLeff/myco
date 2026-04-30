@@ -225,6 +225,20 @@ File-as-module convention. Path-based imports
 (`use path::to::symbol`). Scope resolution rules for names, types,
 universals, contracts, events.
 
+Import aliases use `as`:
+
+```myco
+use hydraulics::relations::arrhenius as hydraulic_arrhenius
+```
+
+Unqualified same-name collisions in one module scope are hard errors.
+Authors resolve them by using a qualified path or an explicit alias at
+the import site. Myco does not silently shadow imports, stdlib names,
+universals, fields, contracts, or relation names. Parentheses
+disambiguate relation invocation from field access: `x.foo` is field
+access, while `foo(x, out)` or `x.foo(out)` is a parameterized-relation
+invocation (§6.2).
+
 Re-export. A module that imports a symbol may re-expose it under its
 own path; downstream imports resolve against the importing module's
 path, not the source. Re-exports make a module's external surface
@@ -240,7 +254,7 @@ other way around.
 
 Package-level dependencies (cross-spore imports, version resolution,
 workspace layout) are a separate concern from file-as-module scoping
-and are covered in `v2.1_chunk_reports/10_package_dependencies.md`.
+and are covered in §37.
 Within a `.myco` file, `use hydraulics::...` resolves to whatever
 spore the enclosing `myco.toml` declares as `hydraulics`; the `use`
 form itself does not change between intra-spore and cross-spore
@@ -1345,6 +1359,13 @@ instantiation at each call site where `U` is concretized. The body is
 type-checked against the declared contract bound; calls that cannot
 satisfy `U: Unit` are compile errors.
 
+Parameterized-relation bodies do not capture caller scope. A body may
+reference its formal parameters, `let` bindings declared inside the
+body, imported names, declared universals, declared types / contracts /
+relations, and stdlib expression atoms. Any other free variable is a
+compile error. Call sites pass every value they want the relation to
+constrain through explicit slots.
+
 #### 6.2 Invocation and Method-Style Sugar
 
 **Summary.** A parameterized relation invocation is a statement that
@@ -1362,6 +1383,12 @@ Rules:
 
 This keeps graph growth explicit: relation calls add constraints,
 whereas stdlib functions inside expressions build expression terms.
+
+Direct and indirect recursion through parameterized-relation invocations
+is rejected in v2.1. Legitimate feedback belongs in ordinary graph
+relations, algebraic cycles, `d(...)` / `step(...)` temporal dynamics,
+or event topology; syntactic unfolding recursion would duplicate graph
+structure without a termination discipline.
 
 #### 6.3 Compiler Roles
 
@@ -1496,6 +1523,10 @@ uniquely named.
 parameterized relation. The default applies only when the implementing
 type does not supply its own. A type-supplied definition always takes
 precedence; defaults never override a type-provided obligation.
+
+In contract-required relations, the implementor instance is structurally
+the first parameter typed `Self`. The parameter name `self` is the
+recommended convention, not special syntax in relation bodies.
 
 A contract obligation may carry a default body that composes from
 other obligations on the same contract:
@@ -9226,8 +9257,11 @@ parameters such as `BrownianMotion<Ito>` and
 `BrownianMotion<Stratonovich>`; the convention is not a parameter on
 `~` itself.
 
-**Reserved but not yet assigned semantics.** `self` (reserved for
-refinement-predicate body use and future module-instance use).
+**Contextual reserved name.** `self` names the refined value inside a
+refinement-predicate body such as `where { 0 <= self <= 1 }`. In
+parameterized relations, including contract-required relations, `self`
+is only an ordinary parameter-name convention for the first `Self`
+argument, not a syntactic marker.
 
 **Structural punctuation.** `::` (path separator), `->` / `<->`
 (convert-direction arrows), `<=`, `>=`, `<`, `>`, `==`, `!=`,
