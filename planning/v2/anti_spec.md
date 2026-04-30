@@ -10,8 +10,8 @@ gap-review stale list, subsequent design locks.
 |---|---|---|
 | `dyn` | `impl Contract` (static monomorph) + `some` (runtime sizing) | clean split of compile-time vs runtime heterogeneity |
 | `param` | workflow-bound typed fields | CC1: all values enter from workflow |
-| `slot` / `learn_slot` / `bind_slot` / `bind_slot_metadata` | `bind(path, Controller(...))` | controller is workflow-only, no `.myco` kind |
-| `[*]` wildcard slot inputs | `Controller(reads=[...], writes=[...], input_contract=..., output_contract=...)` | explicit I/O spec |
+| `slot` / `learn_slot` / `bind_slot` / `bind_slot_metadata` | `bind(path, Controller(callable, ...))` | controller is workflow-only, no `.myco` kind |
+| `[*]` wildcard slot inputs | `Controller(callable, reads=[...], writes=[...], input_contract=..., output_contract=...)` | explicit I/O spec |
 | transparent-heuristic ABI | `Controller` source object | one workflow-side mechanism for pluggable behavior |
 | structural introspection (`<:` predicate, §5.5/§8.5) | nothing | closure policies see values + hyperparameters only |
 | `[t+1]` / `[t]` temporal subscripts | `d(x) = expr` (ODE) / `step(x) = expr` (discrete) | subscripts conflated kinds |
@@ -20,6 +20,7 @@ gap-review stale list, subsequent design locks.
 | module-scope `initial:` / `temporal:` per-type | in-type-body `initial:` / `temporal:` | module-scope kept only for truly cross-entity relations |
 | `const N: usize` | `N: val` | cleaner val-generic spelling |
 | `assume_topology` | `bind_topology` | topology materialization is its own workflow verb |
+| `assume_constant` / `assume_series` / `learn_constant` / `learn_initial` / `learn_trajectory` / `bind_controller` | `bind(path, Constant(...))`, `bind(path, Series(...))`, `bind(path, Trainable(...))`, or `bind(path, Controller(callable, ...))` | fixed vs learned vs callable behavior belongs to the source object and run mode, not separate workflow verbs |
 | `has`-style field-presence filtering | `where x is T` narrowing | type-based narrowing |
 | `property` declarations (`property sigma is PositiveDefinite`) | refinement types + capability contracts (`Invertible<_>`, `Differentiable`, `Monotone`) + `constraint` blocks | redundant with existing machinery; spec_new.md §6 already forbids user property-declaration surface. mock_sperry.myco flagged for rewrite |
 | `DataContract` / "data contract" as distinct contract kind | plain contracts satisfied by a type's output fields | `Controller(..., input_contract=..., output_contract=...)` enforces access; no failure case found where a plain contract + output-type annotation is insufficient |

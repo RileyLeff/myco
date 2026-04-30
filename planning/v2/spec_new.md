@@ -902,6 +902,11 @@ enum Option<T> {
     Some(T),
     None,
 }
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
 ```
 
 `match` is a body-form construct. It dispatches on one enum-typed
@@ -932,6 +937,10 @@ arm, no default arm, no guards, no or-patterns, and no nested pattern
 matching beyond destructuring the top-level variant. Those features
 can be added later as sugar only if they preserve exhaustiveness and
 diagnostic clarity.
+
+`Option<T>` and `Result<T,E>` are ordinary enums. Payload access
+requires explicit `match`; there is no implicit unwrap, default value,
+or exception-like projection.
 
 Enum fields are not projected implicitly. Outside an explicit
 narrowing context, this is invalid even if some variants contain a
@@ -2642,8 +2651,8 @@ use typically requires explicit override.
 
 If `bind_topology` does not specify a discretization, the
 compiler picks per-geometry defaults documented in the stdlib
-reference. Indicatively: `Line1D` uses a uniform N-node grid (N is
-still workflow-supplied); `Rectangle2D` uses a regular M×N grid;
+reference. Indicatively: `Interval` uses a uniform N-node grid (N is
+still workflow-supplied); `Rectangle` uses a regular M×N grid;
 `RootedTree` uses one node per structural vertex with no interior
 refinement. Defaults are conservative; the program compiles,
 but accuracy targets for scientific applications typically
@@ -5832,7 +5841,7 @@ Representative source objects:
   bound path and arguments.
 - **`Prior(distribution)`.** Epistemic distributional source used by
   inference/PPL modes without implying gradient training by name.
-- **`Controller(fn, reads, writes, input_contract, output_contract,
+- **`Controller(callable, reads, writes, input_contract, output_contract,
   trainable=True)`.** External callable source. `reads` and `writes`
   are path lists; contracts are plain Myco contracts (§7). The input
   contract is also the visibility boundary: widening what the
@@ -9025,8 +9034,10 @@ Users install them through the ordinary spore mechanism:
 
 ```text
 hypha add ocean99
-hypha add ocean99 --features realizations,cuda
 ```
+
+Feature-gated provider variants belong to the open package feature
+model (§37); this example commits only to ordinary spore installation.
 
 The TOML declaration is the public contract; Python / Rust code is the
 implementation:
@@ -9234,7 +9245,7 @@ pattern or pipe use).
 `solve_triangular`, `least_squares`, `cholesky`, `lu`, `qr`, `svd`,
 `eigen`, `inverse`, `det`, `trace`, `transpose`, `adjoint`, `norm`,
 `dot`,
-`matrix_rank`, `gram`, `zeros`, `ones`, `identity`, `diag`,
+`matrix_rank`, `kernel_matrix`, `gram`, `zeros`, `ones`, `identity`, `diag`,
 `diag_of`, `stack`, `hstack`, `vstack`, `deriv`, `integrate`,
 `condition_of`, `objective_terms`, `cost_of`, `value_in`, `grad`, `diverg`,
 `laplacian`, `curl`, `normal_grad`, `trace_from`, `limit_from`,
