@@ -3351,20 +3351,35 @@ handling (forward-backward, particle filter) as specified in
 
 #### 13.4 SDE Convention: Itô vs Stratonovich
 
-**Summary.** SDE draws carry an integration-convention type
-parameter (`BrownianMotion<Ito>` vs `<Stratonovich>`), not a global
-setting. Default is `Ito`. Mismatched conventions within one SCC
-are a compile error; cross-scope consistency is the user's call.
+**Summary.** SDE families carry an integration-convention type
+parameter (`BrownianMotion<Ito>` vs `<Stratonovich>`) when the
+convention can affect the world claim. The convention is not global,
+not a parameter on `~`, and has no default. State-dependent stochastic
+dynamics must spell the convention explicitly; state-independent cases
+may be marked by the compiler as convention-irrelevant.
 
-SDE draws carry an integration-convention generic:
-`x ~ BrownianMotion<Ito>(...)` vs
-`x ~ BrownianMotion<Stratonovich>(...)`. The convention is a
-type parameter on the stochastic family, not a global setting.
-The compiler uses it to route drift/diffusion rewrites
-correctly. Default is `Ito`. Mismatched conventions within one
-SCC are a compile error; the compiler does not auto-convert.
-Cross-scope consistency is the user's call; one `.myco` file
-may contain both conventions at different loci.
+SDE draws carry the integration convention on the stochastic family:
+`d(x) ~ BrownianMotion<Ito>(...)` vs
+`d(x) ~ BrownianMotion<Stratonovich>(...)`. The convention is a
+type parameter on the stochastic family, not a global setting and
+not a parameter on the `~` operator. There is no language default
+such as "assume Itô."
+
+If the diffusion coefficient depends on the evolving stochastic state
+or on any value in the same coupled dynamic SCC, omitting the
+convention is a compile error. The diagnostic asks the modeler to
+choose the stochastic family convention explicitly because Itô and
+Stratonovich claims produce different drift / diffusion rewrites.
+
+If the compiler proves the diffusion is independent of the evolving
+stochastic state for that locus, the convention may be omitted. The
+compiler records the site as `convention_irrelevant`; this is not an
+implicit `Ito` choice and does not authorize rewriting a later
+state-dependent refactor as Itô.
+
+Mismatched explicit conventions inside one coupled stochastic SCC are
+a compile error; the compiler does not auto-convert. Independent
+stochastic loci may use different conventions in one `.myco` file.
 
 #### 13.5 Independence via Structural Roots
 
