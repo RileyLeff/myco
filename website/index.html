@@ -5,57 +5,97 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>myco</title>
 <style>
+  :root {
+    --blue: #0227b5;
+    --ink: #fffdf7;
+  }
+
+  * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
-    background: #00008b;
-    color: #f5f1e8;
+    background: var(--blue);
+    color: var(--ink);
     font-family: "Courier New", Courier, ui-monospace, monospace;
     display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    min-height: 100svh;
+  }
+
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: 100vh;
-  }
-  main {
+    gap: 1.35rem;
     text-align: center;
-    padding: 2em;
+    padding: 2rem;
   }
+
+  .logo {
+    width: min(70vw, 420px);
+    height: auto;
+    display: block;
+    margin: 0 auto;
+  }
+
   h1 {
-    font-size: 7rem;
-    margin: 0;
-    font-weight: normal;
-    letter-spacing: -0.04em;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
+
   p {
-    margin: 1.5em auto 0 auto;
+    margin: 0 auto;
     font-size: 0.95rem;
-    opacity: 0.75;
     max-width: 40ch;
   }
+
   p.status {
-    margin: 2em auto 0 auto;
-    font-size: 0.8rem;
-    opacity: 0.5;
-    letter-spacing: 0.05em;
+    margin: 0 auto;
   }
-  a { color: inherit; text-decoration: underline; text-underline-offset: 4px; }
-  a:hover { background: #f5f1e8; color: #00008b; text-decoration: none; }
+
+  a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+  }
+
+  a:hover {
+    background: var(--ink);
+    color: var(--blue);
+    text-decoration: none;
+  }
+
   footer {
-    position: fixed;
-    bottom: 1.5em;
-    left: 0; right: 0;
+    padding: 0 2rem 1.5rem;
     text-align: center;
-    font-size: 0.75rem;
-    opacity: 0.5;
+    font-size: 0.92rem;
     font-family: inherit;
+  }
+
+  @media (max-width: 680px) {
+    .logo {
+      width: min(86vw, 380px);
+    }
   }
 </style>
 </head>
 <body>
   <main>
-    <h1>myco</h1>
-    <p>A compiler that turns mathematical models into fast programs that run on GPU.</p>
-    <p class="status">status: I'm working on it.</p>
+    <img class="logo" src="assets/myco-logo-white-trimmed.png" alt="Myco" width="1051" height="1040">
+    <h1>Myco</h1>
+    <p>A declarative language for reusable scientific models.</p>
+    <p class="status">
+      Status: I'm working on it.<br>
+      Track progress <a href="https://github.com/rileyleff/myco">here</a>.
+    </p>
   </main>
-  <footer>riley leff &middot; <a href="mailto:rileyleff@gmail.com">rileyleff@gmail.com</a></footer>
+  <footer>Riley Leff &middot; <a href="mailto:rileyleff@gmail.com">rileyleff@gmail.com</a></footer>
 </body>
 </html>
