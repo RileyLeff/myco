@@ -23,8 +23,9 @@ designed after the language and compiler lock.
 execution target. A modeler writes a `.myco` file (types, relations,
 state, topology) and a Python workflow (values, data, priors,
 observations, training directives). The compiler bridges them under
-five principles: world-vs-experiment split, clean boundary, compiler
-does work, structure regularizes, referential truth.
+six principles: world-vs-experiment split, clean boundary, compiler
+does work, structure regularizes, minimum incidental complexity,
+referential truth.
 
 Myco is a language for scientific modeling. GPU is the primary execution
 target; other backends ship via the trait abstraction in Part V. A
@@ -32,7 +33,7 @@ modeler writes a `.myco` file (types, relations, state evolution,
 topology change) and a Python workflow (values, data, priors,
 observations, training directives). The compiler bridges them.
 
-Five principles.
+Six principles.
 
 1. **World-vs-experiment split.** `.myco` claims how the world works;
 the workflow supplies what this run measures, assumes, and learns.
@@ -50,7 +51,12 @@ conservation groups, and contracts constrain the program ahead of
 runtime. Type correctness eliminates classes of error before the
 first numerical step.
 
-5. **Referential truth.** World-claims accumulate monotonically.
+5. **Minimum incidental complexity.** The shortest faithful Myco model
+should be the natural model. Boilerplate, duplicated ceremony, and
+execution-shaped contortions are design smells unless they express a
+real scientific distinction.
+
+6. **Referential truth.** World-claims accumulate monotonically.
 Events add facts. No retraction, no tombstoning. Entities do not know
 they are dead.
 
@@ -243,6 +249,12 @@ Re-export. A module that imports a symbol may re-expose it under its
 own path; downstream imports resolve against the importing module's
 path, not the source. Re-exports make a module's external surface
 independent of where each name was first declared.
+
+No source-level visibility keyword (`pub`, `private`, etc.) is committed
+in v2.1. Module paths exist for compiler name resolution and catalog
+addressing. Package-level API curation, cross-spore export policy, and
+library-vs-model entrypoints belong to the spore manifest / tooling
+design (§37), not to an implicit source privacy rule.
 
 Import graph. The `.myco` module import graph is a directed acyclic
 graph. Circular imports are a compile error at module load; the
@@ -896,8 +908,6 @@ cover these cases without hiding the `~` operator from the PPL
 machinery (§13) or collapsing structural differences that the
 compiler needs to see.
 
-Full design lives in `v2.1_chunk_reports/11_sum_types_enums.md`.
-
 Declaration syntax:
 
 ```myco
@@ -1053,8 +1063,9 @@ parametric universal `integer<N: val>: Scalar<dimensionless>`. The
 default workflow binding for `integer<N>` is `N` itself, so a user
 who never rebinds gets the natural value. Sensitivity analysis or
 alternative bindings are available through the standard
-universal-binding mechanism (`bind(path, Constant(...))`). See `spec_dev_notes.md`
-for the derivation.
+universal-binding mechanism (`bind(path, Constant(...))`). The
+important invariant is that integer literals are stdlib universals with
+default workflow bindings, not embedded `.myco` values.
 
 Exception positions accept literals directly. Unit definitions,
 affine conversion bodies, and structural positions (shape tuples,
@@ -1217,7 +1228,9 @@ bodies the compiler verifies for inverse consistency.
 Unit and named-type conversions come in four forms:
 
 - `convert A <-> B` (bidi, bare): declares A and B as same-magnitude
-  aliases. Required for conservation-group siblings (§3.7). No body.
+  aliases. This form is general for names that share an underlying
+  magnitude; conservation-group siblings are one required use (§3.7),
+  not the whole meaning of bare `convert`. No body.
 - `convert A -> B` (one-way, bare): declares A tagged-as-B in one
   direction. Lossy relabel.
 - `convert A <-> B { body }` (bidi, parameterized): both directions
@@ -3346,8 +3359,9 @@ a particular marginalization attach workflow evidence that keeps
 the latent's value in scope. Markov-structured
 discrete latents (HMM-style temporal dependencies) are a
 compile error with diagnostic guidance; they require structural
-handling (forward-backward, particle filter) as specified in
-§28, and do not fall through to Tier C.
+handling (forward-backward, Viterbi, particle filter) tracked as
+future stochastic-process inference machinery (§35), and do not
+fall through to Tier C.
 
 #### 13.4 SDE Convention: Itô vs Stratonovich
 
@@ -3628,6 +3642,11 @@ code can distinguish:
 - **Level III — Runtime.** Numerically computed at execution
   time. Fallback when neither symbolic nor algorithmic form
   is available.
+
+Level III estimates are still surfaced through `condition_of(expr)` and
+the structured `ConditionRecord`; there is no separate public `condest`
+primitive. Backend-specific estimators may provide entries and summaries
+when their capability facts make the provenance explicit.
 
 The mode is tagged in the return; `condition_of(expr).mode`
 surfaces which tier the compiler chose. Algorithmic-vs-problem
@@ -6546,7 +6565,7 @@ does not change source semantics.
 
 ### 27. Distribution Families (Z-group)
 
-**Summary.** Tier 1 ships 19 univariate continuous, 6 discrete, and 3
+**Summary.** Tier 1 ships 19 univariate continuous, 7 discrete, and 3
 multivariate families, plus the `Truncated<D>` and `Mixture` meta-
 families. Conjugate-posterior rewrites are enumerated as a closed
 catalog. Tier B approximate rewrites (Delta, Fenton-Wilkinson, CLT,
@@ -6557,7 +6576,7 @@ Tier 1 univariate continuous families (19): Normal, LogNormal, Uniform,
 Beta, Gamma, Exponential, ChiSquared, Cauchy, Student-t, Laplace,
 HalfNormal, HalfCauchy, InverseGamma, Lévy, Weibull, Pareto, Fréchet,
 Gumbel, GEV. Tier 1 discrete: Bernoulli, Binomial, Categorical,
-Poisson, NegBinomial, Hypergeometric. Tier 1 multivariate:
+Geometric, Poisson, NegBinomial, Hypergeometric. Tier 1 multivariate:
 MultivariateNormal, Dirichlet, Multinomial. Meta-families: `Truncated<D>`,
 `Mixture<D₁,…,D_N | weights>`. Conjugate-posterior rewrites.
 Tier B approximate rewrites: Delta method, Fenton-Wilkinson, CLT,
@@ -6681,14 +6700,15 @@ Tier 1 families ship as capability-tagged stdlib declarations
 | `Gumbel` | ℝ | `μ`, `β` | D, R (via `-log(-log U)`) |
 | `GEV` | ℝ (domain-dependent) | `μ`, `σ`, `ξ` | D, block-maxima limit |
 
-**Discrete (6).**
+**Discrete (7).**
 
 | Family | Support | Parameters | Capabilities |
 |---|---|---|---|
 | `Bernoulli` | `{0, 1}` | `p` | D, Conj(Beta) |
 | `Binomial` | `{0 … n}` | `n`, `p` | D, S (shared p), Conj(Beta) |
 | `Categorical` | `{0 … K-1}` | `p[K]` | D |
-| `Poisson` | ℕ | `λ` | D, Conj(Gamma) |
+| `Geometric` | `{0, 1, ...}` failures before first success | `p` | D, Conj(Beta) |
+| `Poisson` | ℕ | `λ` | D, S, Conj(Gamma) |
 | `NegBinomial` | ℕ | `r`, `p` | D |
 | `Hypergeometric` | `[max(0, n-(N-K)), min(n, K)]` | `N`, `K`, `n` | D |
 
@@ -6807,7 +6827,7 @@ to Tier B or Tier C for the missing capability.
 
 #### 27.5 Tier Ordering
 
-**Summary.** Tier 1 ships: 28 families plus two meta-families with
+**Summary.** Tier 1 ships: 29 families plus two meta-families with
 capability contracts and conjugate-rewrite wiring. Tier 2 mechanics
 for structured joint roots, named field projections, and coupling
 metadata are locked; remaining Tier 2 work is family-catalog and
@@ -6819,7 +6839,7 @@ the family catalog; Tier A/B/C orders dispatch and is orthogonal.
 Tiers are the PPL scoping axis distinct from the distribution-
 family catalog:
 
-- **Tier 1.** Ships in this release. The 28 families in §27.1
+- **Tier 1.** Ships in this release. The 29 families in §27.1
   plus the two meta-families in §27.2, with capability contracts
   and closed-form rewrites (§27.3) wired in. Includes three
   multivariate members (MVN, Dirichlet, Multinomial), with
@@ -8149,17 +8169,19 @@ Remaining kernel-adjacent work:
 **Summary.** The core units library ships SI base units, common
 SI-derived units via derived-unit algebra, the named dimensionless
 angle unit `rad`, stdlib semantic quantity types `Angle` and `Phase`,
-standard affine conversions between equivalent spellings, and
-dimensionless-ratio handling. Domain-specific unit libraries
+standard unit conversions including affine offset-unit conversions, and
+ordinary dimensionless scalar ratios. Domain-specific unit libraries
 (ecophysiology, chemistry, finance) stay out of core and ship as
 distributable packages on top.
 
 SI base units (m, kg, s, A, K, mol, cd). Common SI-derived units
 (N, Pa, J, W, C, V, Ω, Hz, rad, etc.) via derived-unit algebra (§5).
 `rad` is a named dimensionless unit; `Angle` and `Phase` are stdlib
-semantic quantity types over `Scalar<rad>` (§5.0). Standard affine
-conversions between equivalent SI-derived spellings. Dimensionless-
-ratio handling.
+semantic quantity types over `Scalar<rad>` (§5.0). Standard unit
+conversions, including affine offset-unit conversions when declared,
+ship in core. Dimensionless ratios are ordinary
+`Scalar<dimensionless>` values; the literal rules of §4 still apply,
+so there is no special dimensionless-float carve-out.
 
 Domain-specific unit libraries (ecophysiology, chemistry, astronomy,
 finance, etc.) are **out of scope** for Myco core: they ship as
@@ -8760,13 +8782,12 @@ lowering details after the core sum-type lock. Chunks 05, 06, 07, 08,
 - **Chunk 12.** Resolved cost/objective vocabulary. `cost_of(expr)`
   owns planner/extraction economics (§14.2, §19.1);
   `objective_terms(residual)` owns training-objective decomposition
-  (§14.2, §25). The former open is recorded in
-  `planning/v2/v2.1_chunk_reports/12_cost_field_unification.md`.
+  (§14.2, §25). The resolved rationale is summarized here and in the
+  referenced normative sections.
 - **Chunk 13.** RESOLVED: PPL blocker cluster B1/B2/B4. Distribution
   contract shape, opaque stochastic family policy, record-`~` joint
   sugar, and joint-envelope coupling metadata are locked in §13 and
-  §27; detailed rationale lives in
-  `planning/v2/v2.1_chunk_reports/13_ppl_blockers.md`.
+  §27.
 - **Complex numeric representation.** RESOLVED: `Complex` is an
   ordinary `Scalar<U,T>` numeric representation (§26.4), not a separate
   scalar kind or sub-hierarchy. It satisfies algebraic / conjugation /
@@ -8779,11 +8800,11 @@ lowering details after the core sum-type lock. Chunks 05, 06, 07, 08,
 **Summary.** Catalog of smaller remaining items: source-level retraction
 if ever admitted, exact-numeric GPU portability, vector / tensor seam
 transforms, rational-denominator termination beyond the rewrite cap,
-controller-interface affordances, stdlib inventory, Tier 2
-family-catalog polish, remaining Tier 3 non-parametric machinery,
-package dependencies, and event-scheduling policy API. Obligation
-retraction is resolved by the `ObligationSite` / `fulfills` ledger
-(§8.11, §10.5).
+controller-interface affordances, stdlib inventory, distribution /
+stochastic-process catalog polish, backend cost-calibration interfaces,
+workflow inference UX, package dependencies, and event-scheduling policy
+API. Obligation retraction is resolved by the `ObligationSite` /
+`fulfills` ledger (§8.11, §10.5).
 Heterogeneous selection is resolved by `Selected<T>` /
 `Option<Selected<T>>` selector semantics (§12.2). Event-driven topology
 mutation is resolved by versioned topology, explicit topology handlers,
@@ -8878,6 +8899,23 @@ Process, Beta Process), plus concrete closed-form / approximate /
 opaque handlers for process laws that do not fit the GP finite-joint
 path.
 
+**Discrete Markov latent machinery.** IID discrete latents and
+closed-form marginalization are covered in §13 and §27. Markov-structured
+discrete latents (HMM-style chains, switching regimes with temporal
+dependence, semi-Markov cases) still need a structural inference surface:
+forward-backward, Viterbi-style decoding, particle filters, and their
+workflow configuration / backend capability contracts. Until that is
+designed, these models are compile errors with diagnostic guidance
+rather than Tier C "make it work" handoff.
+
+**Workflow inference UX.** The core language and workflow boundary are
+locked enough to express observations, process priors, trainable sources,
+and whole-SCC inference tasks, but higher-level workflow helpers remain
+open: VI / ELBO construction, learned-trajectory parameterization menus,
+study-level train / validate / predict orchestration, and reproducible
+comparison of inference recipes. These are workflow APIs over the
+existing source semantics, not `.myco` syntax.
+
 **Cost/objective vocabulary resolved.** Chunk 12 is no longer an open
 design item. `cost_of(expr)` owns extraction economics with `compute`,
 `memory`, `approximation`, structured `condition`, `truncation`, and
@@ -8885,6 +8923,12 @@ design item. `cost_of(expr)` owns extraction economics with `compute`,
 owns training-objective decomposition (§14.2, §25). Peak allocation is
 therefore a first-class `memory` field of `cost_of`, not a separate
 surface.
+
+Backend cost interpreters remain implementation work: each backend /
+device / compiler-mode profile needs calibrated interpreters for the
+structured `cost_of` fields it advertises. Those interpreters inform
+extraction ranking and diagnostics but do not create source-level facts
+or override the meaning of `cost_of`.
 
 **CC5 site-gated strict rewrites: data path resolved.** CC5 locks
 both category and data path for identify-seam merges and pole
@@ -8942,8 +8986,20 @@ that locks: the full list of axiomatic primitives (`exp`, `log`,
 classification of each surface (expression atom vs parameterized relation), the
 capability contracts and abstract cost tags for each, and the
 classification of distributions (`log_density` / backend sampling
-capability) and kernels.
+capability) and kernels. This pass should also audit Tier 1 distribution
+capability tags (`A`, `S`, `P`, `Sc`, `ST`, `R`, `Conj`) against the
+stdlib implementation so the table is both mathematically precise and
+backend-realizable.
 Cross-refs §6, §7, §13.8, §14, §28, §30.
+
+**Y5 closure-policy placement review.** §8.8 currently locks Y5 custom
+closure policies as ordinary parameterized relations selected by the
+workflow. Before final canonicalization, review whether that is still
+the right world/workflow boundary: if a policy expresses a scientific
+claim over candidate values it belongs in `.myco`; if it is merely an
+extraction preference or compute budget it should be workflow
+configuration. The current text is coherent, but this is worth one
+explicit design pass because it sits close to the boundary.
 
 **Mode B resolved: per-instance heterogeneous contract binding.** Chunk 08
 pins three modes for pluggable behavior: Mode A (concrete type),
@@ -9023,10 +9079,17 @@ implementation detail. Committed subcommands:
 - `hypha explain` exposes textual plan reports and the
   machine-readable IR (§22).
 - `hypha fmt` formats source once the grammar is locked.
+- `hypha test` runs spore tests and property checks once the testing
+  convention is specified.
 - `hypha doc` generates documentation; `hypha doc <spore>` resolves an
   installed, workspace-local, or registry spore and emits / retrieves
   human-readable and agent-friendly documentation (§39, §40).
 - Package-management subcommands operate on spores (§37).
+
+Additional DX surfaces to design after the canonical language pass:
+interactive REPL / notebook ergonomics, model-graph visualization over
+the §22 IR, property-checking conventions for `.myco` relations, and
+doc-comment syntax that feeds `hypha doc`.
 
 ### 37. Dependency Management and Package Registry
 
@@ -9049,10 +9112,12 @@ Locked vocabulary:
 
 Open package items: resolver semantics, version constraints, feature
 model, build scripts, workspace-Python interaction, registry layout,
-workspace membership semantics, platform/backend metadata, and
-cross-spore export policy. The minimum scope is local path
-dependencies, workspace-local spores, manifest parsing, lockfile
-writing, and deterministic source resolution.
+workspace membership semantics, platform/backend metadata,
+library-vs-model entrypoints, and cross-spore export policy. The
+minimum scope is local path dependencies, workspace-local spores,
+manifest parsing, lockfile writing, and deterministic source
+resolution. Source-level visibility keywords are out (§2); the manifest
+/ tooling layer owns which paths form a spore's public API.
 
 #### 37.1 Realization Providers
 

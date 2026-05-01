@@ -18,6 +18,7 @@ gap-review stale list, subsequent design locks.
 | `rate()` | `d(x) = expr` | same |
 | `rule` keyword | `event` | disambiguate from rewrite rules |
 | module-scope `initial:` / `temporal:` per-type | in-type-body `initial:` / `temporal:` | module-scope kept only for truly cross-entity relations |
+| source-level visibility keywords (`pub`, `private`) | module paths for compiler/catalog addressing plus manifest/tooling export policy | package API curation is a spore/workspace concern; source privacy would add a second name-resolution system before there is a real use case |
 | `const N: usize` | `N: val` | cleaner val-generic spelling |
 | `assume_topology` | `bind_topology` | topology materialization is its own workflow verb |
 | `assume_constant` / `assume_series` / `learn_constant` / `learn_initial` / `learn_trajectory` / `bind_controller` | `bind(path, Constant(...))`, `bind(path, Series(...))`, `bind(path, Trainable(...))`, or `bind(path, Controller(callable, ...))` | fixed vs learned vs callable behavior belongs to the source object and run mode, not separate workflow verbs |
@@ -96,6 +97,7 @@ gap-review stale list, subsequent design locks.
 | exact-in-context default-off rewrites disappearing into the global default-on bucket | site-local `promoted_exact_in_context` with zero `cost_of().approximation` and preserved provenance | exactness in one envelope does not change the rewrite's baseline class; diagnostics must show why it fired |
 | hidden cancellation / independence assumptions when approximation terms stack | conservative monotone composition by default; sharper laws only from stdlib/compiler rules or evidence-graded provider facts | multiple approximations must remain auditable, and better error algebra requires evidence |
 | one scalar `cost_of().condition` as the canonical conditioning story | structured `ConditionRecord` over entrywise / norm / spectral / structural views with optional derived summary | multi-output numerical risk is not one dimension; scalar ranking summaries need provenance |
+| public `condest(expr)` primitive | `condition_of(expr)` with Level III runtime entries in `ConditionRecord` | condition estimates are one provenance-bearing mode of the structured conditioning story, not a separate source-level fact surface |
 | controller as `.myco` construct | workflow-only concept | strict `.myco` / Python split |
 | generated Python mirror classes for `.myco` models, entities, generics, or enums | catalog-backed `NodePath` / `FacetPath` handles, catalog-validated tagged records, plus optional thin data helpers | Python remains a dumb workflow layer; the catalog owns validation and type interpretation |
 | string-only workflow ABI as the canonical address model | catalog-backed handles with canonical string serialization | strings are useful for configs and CLIs, but complex types, generics, axes, and existence domains need catalog metadata |
