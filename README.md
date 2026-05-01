@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/brand/myco-logo-blue.png" alt="Myco logo" width="420">
+  <img src="assets/brand/myco-logo-blue-on-white.png" alt="Myco logo" width="420">
 </p>
 
 # Myco
@@ -108,7 +108,7 @@ Scientific work spans many systems: instruments, field notes, spreadsheets, data
 
 Myco should be able to touch those systems without pretending they all speak Myco. The workflow side is where external data, opaque callables, providers, controllers, and backend choices enter. The source model gives those boundaries types, units, contracts, provenance hooks, and obligations so the compiler can inspect what crosses them.
 
-That boundary is important for the longer vision. Myco can grow toward a richer claim system by learning how to type and explain the relationships around external things first.
+The broader external-integration story needs more design work. For now, the priority is to make Myco's internal semantics consistent, then support a narrow set of workflow boundaries well: dataframes and arrays that bind observed values, ML-framework callables, backend providers, and other explicitly typed sources.
 
 ## Relationship To OzzyDB
 
