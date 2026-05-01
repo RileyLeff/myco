@@ -8800,10 +8800,11 @@ lowering details after the core sum-type lock. Chunks 05, 06, 07, 08,
 **Summary.** Catalog of smaller remaining items: source-level retraction
 if ever admitted, exact-numeric GPU portability, vector / tensor seam
 transforms, rational-denominator termination beyond the rewrite cap,
-controller-interface affordances, stdlib inventory, distribution /
-stochastic-process catalog polish, backend cost-calibration interfaces,
-workflow inference UX, package dependencies, and event-scheduling policy
-API. Obligation retraction is resolved by the `ObligationSite` /
+continuous-extremum evidence, controller-interface affordances, stdlib
+inventory, distribution / stochastic-process catalog polish, backend
+cost-calibration interfaces, workflow inference UX, package
+dependencies, and event-scheduling policy API. Obligation retraction is
+resolved by the `ObligationSite` /
 `fulfills` ledger (§8.11, §10.5).
 Heterogeneous selection is resolved by `Selected<T>` /
 `Option<Selected<T>>` selector semantics (§12.2). Event-driven topology
@@ -8865,6 +8866,34 @@ only certified graph reductions, then obeys the active workflow budget.
 Guided subsystem search is workflow-authorized extraction approximation,
 not exact Y6, and records a Layer-4 approximation term on the relevant
 `ResidualSite`.
+
+**Continuous extrema / verified optimization sites.** Rewriting the
+Sperry et al. 2017 plant mock exposed a source/workflow boundary that is
+not yet cleanly specified. The model needs two values: `PcAtAmax`, the
+canopy pressure that maximizes gross assimilation over the continuous
+hydraulic range `[Pcrit, Ps]`, and `Pc`, the attainable canopy pressure
+that maximizes `beta - theta` under the maximum conductance constraint.
+Both objectives are derived from implicit relation families: choosing a
+candidate pressure determines transpiration, leaf temperature, vapor
+deficit, conductance, internal CO2, assimilation, hydraulic cost, and
+profit through a coupled graph. This is not the same problem as selecting
+an element from a finite collection with `argmax`; it is also not
+faithfully represented by `deriv(objective, Pc) = 0`, because boundary
+optima, plateaus, non-smooth guards, and local extrema are all possible.
+
+Current Myco can write the world equations and can leave the chosen
+continuous value workflow-bound, but it has no canonical way to say
+"this bound value is the globally verified maximizer of this implicit
+objective over this model-defined continuous domain" while preserving
+the `.myco` / workflow split. Open design questions: whether this should
+be a workflow source object, a realization-provider validation site, a
+compiler-emitted `OptimizationSite` / `ExtremumSite`, a stdlib relation
+over bounded domains, or some combination; how exact vs approximate
+evidence, tie behavior, boundary checks, tolerances, and provenance are
+recorded; and what diagnostics should fire when no acceptable global
+evidence is supplied. Until resolved, examples that need this pattern
+should state the limitation explicitly and avoid pretending a finite grid
+or first-order stationarity condition is the source-level semantics.
 
 **Controller-interface affordances in the Python layer.** General-
 system question: what hooks does Myco need to expose so workflows

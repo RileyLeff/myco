@@ -624,28 +624,12 @@ type SperryInstant {
 // - Bind forcing as fixed values or environmental series for each instant.
 // - Bind trait constants, vulnerability parameters, thermal response constants,
 //   hydraulic cutoff fraction, and gas-exchange constants from measurements.
-// - Bind or provide globally verified PcAtAmax and Pc choices over the
-//   continuous interval [Pcrit, Ps]. A workflow/provider sketch:
-//
-//     model.bind("instant.PcAtAmax", VerifiedArgmax(
-//         variable="Pc",
-//         objective="gainReference.A",
-//         interval=("Pcrit", "forcing.Ps"),
-//         admissibility="sperry_curve_state",
-//         evidence="global_interval_branch_and_bound",
-//     ))
-//     model.bind("instant.Pc", VerifiedArgmax(
-//         variable="Pc",
-//         objective="state.profit",
-//         interval=("Pcrit", "forcing.Ps"),
-//         admissibility="sperry_attainable_state",
-//         evidence="global_interval_branch_and_bound",
-//     ))
-//
-//   Amax is the maximum gross assimilation over the full hydraulic curve; Pc
-//   is the attainable state maximizing beta - theta under the Gmax conductance
-//   limit. Tolerances, derivative root finding, boundary checks, adaptive
-//   sampling, backend choice, and any long-term coordination experiments are
-//   run policy, not additional source equations. This mock intentionally does
-//   not invent source syntax for continuous argmax; that is a future spec
-//   design item if mocks show enough pressure for it.
+// - Open design note: this mock needs globally verified continuous extrema
+//   over [Pcrit, Ps]. Amax is the maximum gross assimilation over the full
+//   hydraulic curve; Pc is the attainable state maximizing beta - theta under
+//   the Gmax conductance limit. Existing finite selector syntax does not
+//   represent this, and derivative stationarity alone is not enough because
+//   boundary optima, plateaus, and local extrema are possible. The workflow
+//   must currently provide PcAtAmax and Pc plus evidence out of band. The
+//   canonical API for that evidence is an open spec item, not a source syntax
+//   commitment made by this mock.
