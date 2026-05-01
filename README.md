@@ -118,7 +118,7 @@ OzzyDB is about scientific memory: where data came from, how it changed, what co
 
 Myco is about scientific model meaning: what a model claims, which assumptions it depends on, how those claims interact, and how different workflows can ask different questions of the same description.
 
-The shared concern is that scientific work leaks meaning as it moves between notebooks, scripts, datasets, papers, and models. OzzyDB starts from the data and provenance side. Myco starts from the model and compiler side. Over time, the two projects should teach each other: Myco types can make data more meaningful, and scientific memory can make model claims more accountable.
+The shared concern is that scientific work leaks meaning as it moves between notebooks, scripts, datasets, papers, and models. Eventually, I see Myco and OzzyDB unifying around that problem. I am building them separately, with smaller scopes at first, so each project can teach me from real use before I try to combine them.
 
 See [Science Is Leaking](https://rileyleff.com/blog/science-is-leaking) for the longer version of the problem these projects are growing toward.
 
