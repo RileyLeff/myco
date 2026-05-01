@@ -1,28 +1,13 @@
-[build-system]
-requires = ["maturin>=1.8,<2"]
-build-backend = "maturin"
-
 [project]
 name = "myco"
-version = "0.1.0"
-description = "Python client for the Myco compiler prototype"
+version = "0.0.0"
+description = "Workspace shell for the Myco language specification"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.13"
 dependencies = []
 
-[dependency-groups]
-dev = [
-    "jax",
-    "maturin>=1.8,<2",
-    "optax",
-    "pytest>=8.4,<9",
-]
+[tool.uv]
+package = false
 
-[tool.maturin]
-manifest-path = "crates/myco-py/Cargo.toml"
-python-source = "python"
-module-name = "myco._myco_py"
-bindings = "pyo3"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.uv.workspace]
+members = []
