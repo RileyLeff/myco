@@ -5,7 +5,7 @@
 # ///
 """Generate a role-specific scaffold from the spec (Phase 7).
 
-Reads spec_new.md and concatenates:
+Reads the canonical v2 spec and concatenates:
     - Full text for sections relevant to the role.
     - **Summary.** paragraphs only for other sections.
 

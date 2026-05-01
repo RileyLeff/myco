@@ -23,7 +23,7 @@ import re
 import sys
 from pathlib import Path
 
-SPEC = Path(__file__).resolve().parent.parent / "planning" / "v2" / "spec_new.md"
+SPEC = Path(__file__).resolve().parent.parent / "planning" / "v2" / "spec.md"
 
 HEADER_RE = re.compile(
     r"^(#+)\s+"
