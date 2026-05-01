@@ -1,683 +1,623 @@
-// ============================================================================
-// Potkay & Feng (2023) Growth-Optimizing Stomatal Model (GOSM)
-// Mock v2.1 Myco implementation for spec stress-testing
-//
-// "Do stomata optimize turgor-driven growth?"
-// New Phytologist (2023) 238: 506–528
-//
-// Design principles:
-// - Carbon-water coupling through turgor and osmotic potential
-// - NSC dynamics as temporal state with substrate limitation
-// - Turgor-driven Lockhart growth equation
-// - Stomatal control as a slot (GOH usable as baseline, not training objective)
-// - Library reuse: imports VulnerabilityCurve, Photosynthesis from Sperry
-// - Simpler hydraulic catena than Sperry (single soil, no canopy layers)
-// - Different temperature responses (Q10 for respiration, peaked for growth)
-// - Tests carbon-water-turgor algebraic coupling across timesteps
-// ============================================================================
+// Potkay & Feng (2023), "Do stomata optimize turgor-driven growth?"
+// Canonical Myco mock: coupled plant physics plus workflow-facing GOH readouts.
+// Canonical path: plant::potkay_gosm.
 
-module plant::potkay_gosm
+use plant::photosynthesis::Photosynthesis
+use physics::thermo::water_vapor_saturation_pressure
 
-// ============================================================================
-// Imports: shared library modules
-//
-// In a real setup, these come from library packages. The Sperry mock and
-// this mock both use the same contracts and implementations, demonstrating
-// the library reuse story.
-// ============================================================================
-
-use plant::hydraulics::{
-    VulnerabilityCurve,
-    SigmoidVC,
-    ConductingElement,
-    XylemSegment,
-}
-
-use plant::photosynthesis::{
-    Photosynthesis,
-    FarquharC3,
-    rubisco_limited,
-    electron_transport_limited,
-    electron_transport_rate,
-    collatz_smooth_min,
-    arrhenius,
-    peaked_arrhenius,
-    saturated_vapor_pressure,
-}
-
-use physics::constants::{
-    stefan_boltzmann,
-    specific_heat_air,
-    gas_constant,           // R = 8.314 J mol⁻¹ K⁻¹
-    gravity,                // g = 9.81 m s⁻²
-    water_density,          // ρ = 998 kg m⁻³
-}
-
-use units::si::{
-    megapascal as MPa,
-    kilopascal as kPa,
-    pascal as Pa,
-    celsius as degC,
-    kelvin as K,
-    watt_per_square_meter as W_m2,
-    mole_per_square_meter_second as mol_m2_s,
-    micromole_per_square_meter_second as umol_m2_s,
-    mole_per_second as mol_s,
-    mole_carbon as mol_C,
-    mole_carbon_per_second as mol_C_s,
-    joule_per_mole as J_mol,
-    joule_per_mole_kelvin as J_mol_K,
-    meter as m,
-    meter_squared as m2,
-    meter_per_second as m_s,
-    seconds as s,
-    ratio,
-    inverse_kelvin as K_inv,
-    inverse_megapascal_per_second as inv_MPa_s,
-    mole_per_joule as mol_J,
-    mole_per_kilogram as mol_kg,
-    kilogram_per_mole as kg_mol,
-}
+use units::si::megapascal as MPa
+use units::si::pascal as Pa
+use units::si::kelvin as K
+use units::si::watt_per_square_meter as W_m2
+use units::si::watt_per_square_meter_kelvin_fourth as W_m2_K4
+use units::si::mole_per_square_meter_second as mol_m2_s
+use units::si::mole_per_second as mol_s
+use units::si::mole_carbon as mol_C
+use units::si::mole_carbon_per_second as mol_C_s
+use units::si::joule_per_mole_kelvin as J_mol_K
+use units::si::joule_per_mole as J_mol
+use units::si::meter as m
+use units::si::meter_squared as m2
+use units::si::seconds as s
+use units::si::mole_per_joule as mol_J
+use units::si::mole_per_kilogram as mol_kg
+use units::si::kilogram_per_mole as kg_mol
+use units::si::kilogram_per_cubic_meter as kg_m3
+use units::si::inverse_kelvin as K_inv
+use units::si::inverse_megapascal as MPa_inv
+use units::si::inverse_megapascal_per_second as inv_MPa_s
 
 
-// ============================================================================
-// Types (new types specific to this model)
-// ============================================================================
+// Shared constants are workflow-bound universals. Table values, species
+// parameters, forcing sweeps, initial values, and solver policy stay outside
+// this file.
 
-use plant::hydraulics::{
-    WaterPotential,
-    HydraulicConductance,
-    TranspirationRate,
-}
-
-use plant::photosynthesis::{
-    CarbonFlux,
-    Temperature,
-    Pressure,
-    Conductance,
-    Fraction,
-    PositiveScalar,
-}
-
-pub type GrowthRate : Scalar<U = mol_C_s> {
-    self >= 0
-}
-
-pub type CarbonPool : Scalar<U = mol_C> {
-    self >= 0
-}
-
-pub type LeafArea : Scalar<U = m2> {
-    self > 0
-}
-
-pub type Height : Scalar<U = m> {
-    self > 0
-}
-
-pub type Extensibility : Scalar<U = inv_MPa_s> {
-    self >= 0
-}
+universal gas_constant: GasConstant
+universal water_density: Scalar<kg_m3>
+universal gravity: Scalar<m / s^2>
+universal pa_to_mpa: Scalar<MPa / Pa>
+universal q10_interval: TemperatureInterval
+universal respiration_reference_temperature: Temperature
+universal extensibility_reference_temperature: Temperature
+universal extensibility_activation_energy: Scalar<J_mol>
+universal extensibility_deactivation_energy: Scalar<J_mol>
+universal extensibility_entropy: Scalar<J_mol_K>
+universal extensibility_cold_limit: Temperature
+universal extensibility_cold_steepness: Scalar<K_inv>
+universal co2_to_water_conductance_ratio: PositiveScalar
+universal zero_water_potential: WaterPotential
+universal stefan_boltzmann: StefanBoltzmannCoefficient
+universal specific_heat_air: PositiveHeatCapacity
+universal latent_heat_vaporization: Scalar<J_mol>
 
 
-// ============================================================================
-// Registered functions (new for this model)
-// ============================================================================
+// Core quantities.
 
-// NSC substrate limitation (Eqn 5, 6)
-// Smooth sigmoid: approaches 0 when C is small, 1 when C is large.
-// γ controls the half-saturation point relative to structural biomass.
-pub fn substrate_limitation(
+type Fraction = Scalar<dimensionless> where { 0 <= self <= 1 }
+type PositiveScalar = Scalar<dimensionless> where { self > 0 }
+
+type Temperature = Scalar<K> where { self > 0 }
+type TemperatureInterval = Scalar<K> where { self > 0 }
+type AtmosphericPressure = Scalar<Pa> where { self > 0 }
+type VaporPressure: Scalar<Pa> where { self >= 0 }
+type WaterPotential: Scalar<MPa>
+type RadiativeFlux = Scalar<W_m2>
+type StefanBoltzmannCoefficient = Scalar<W_m2_K4>
+type HeatConductance = Scalar<mol_m2_s> where { self >= 0 }
+type PositiveHeatCapacity = Scalar<J_mol_K> where { self > 0 }
+type GasConstant = Scalar<J_mol_K> where { self > 0 }
+type LeafArea: Scalar<m2> where { self > 0 }
+type Height: Scalar<m> where { self > 0 }
+type CarbonPool: Scalar<mol_C> where { self >= 0 }
+type CarbonAssimilationRate = Scalar<mol_C_s>
+type GrowthRate: Scalar<mol_C_s> where { self >= 0 }
+type Extensibility: Scalar<inv_MPa_s> where { self >= 0 }
+type Conductance: Scalar<mol_m2_s> where { self >= 0 }
+type LeafTranspiration: Scalar<mol_m2_s> where { self >= 0 }
+type WholeTreeTranspiration: Scalar<mol_s> where { self >= 0 }
+type WholePlantHydraulicConductance: Scalar<mol_s / MPa> where { self >= 0 }
+type LeafHydraulicConductance: Scalar<mol_m2_s / MPa> where { self >= 0 }
+type Molality: Scalar<mol_kg> where { self >= 0 }
+type MolalityPressureSlope: Scalar<mol_kg / MPa>
+type OsmoticQuadraticCoefficient: Scalar<kg_mol>
+type NSCUseEfficiencyRate: Scalar<1 / s>
+type VulnerabilitySlope = Scalar<MPa_inv> where { self > 0 }
+
+type StemAxis : Domain<G = Interval> as (z: Scalar<dimensionless>)
+type TimeHorizon : Domain<G = Interval> as (t: Scalar<s>)
+
+
+// Transparent reusable relations.
+
+relation substrate_limitation(
     C: CarbonPool,
     gamma: PositiveScalar,
     C_struct: CarbonPool,
-) -> Fraction {
-    invertibility: injective_restricted
-    differentiability: smooth
-    domain: C >= 0 and C_struct > 0
-
-    C / (C + gamma * C_struct)
+    sigma: Fraction,
+) {
+    constraint structural_pool_positive: C_struct > 0
+    sigma = C / (C + gamma * C_struct)
 }
 
-// Q10 temperature response for maintenance respiration
-// Simpler than Arrhenius — appropriate when empirical Q10 is available.
-// Temperature difference is purely multiplicative (affine offsets cancel),
-// so dividing by q10_interval produces a dimensionless exponent natively.
-universal q10_interval: Scalar<U = K> = 10      // Q10 temperature interval
-universal T_ref_degC: Temperature = 25      // reference temperature for Q10 (25C)
-
-pub fn q10_response<U: Unit>(
-    value_ref: Scalar<U>,
+relation q10_response<U: Unit>(
+    reference_flux: Scalar<U>,
     q10: PositiveScalar,
     temperature: Temperature,
-    T_ref: Temperature,
-) -> Scalar<U> {
-    invertibility: bijective
-    differentiability: smooth
-
-    value_ref * q10 ** ((temperature - T_ref) / q10_interval)
+    response: Scalar<U>,
+) {
+    response =
+        reference_flux
+        * q10 ** ((temperature - respiration_reference_temperature) / q10_interval)
 }
 
-// Temperature-dependent cell wall extensibility (Table 3, φ̄)
-// Following Johnson et al. (1942) / Parent et al. (2010),
-// modified so extensibility → 0 as temperature → 5°C.
-
-// Extensibility temperature response constants
-universal ext_T_opt: Scalar<U = K> = 298.15             // optimal temperature for growth
-universal ext_H_a: Scalar<U = J_mol> = 63000            // activation energy
-universal ext_H_d: Scalar<U = J_mol> = 200000           // deactivation energy
-universal ext_S_v: Scalar<U = J_mol_K> = 650            // entropy factor
-universal ext_cold_limit: Scalar<U = K> = 278.15        // 5°C — growth ceases below this
-universal ext_cold_steepness: Scalar<U = K_inv> = 2     // steepness of cold ramp
-
-pub fn extensibility_temperature(
-    phi_25: Extensibility,
+relation extensibility_temperature_response(
+    phi_reference: Extensibility,
     temperature: Temperature,
-) -> Extensibility {
-    invertibility: lossy
-    differentiability: smooth
+    phi: Extensibility,
+) {
+    let activation =
+        exp(
+            extensibility_activation_energy
+            * (temperature - extensibility_reference_temperature)
+            / (gas_constant * extensibility_reference_temperature * temperature)
+        )
 
-    // Compiler handles degC → K via affine conversion
-    let arrhenius_factor = exp(ext_H_a * (temperature - ext_T_opt) / (gas_constant * ext_T_opt * temperature))
-    let high_T_inhibition = (1 + exp((ext_S_v * ext_T_opt - ext_H_d) / (gas_constant * ext_T_opt)))
-        / (1 + exp((ext_S_v * temperature - ext_H_d) / (gas_constant * temperature)))
+    let high_temperature_inhibition =
+        (
+            1
+            + exp(
+                (
+                    extensibility_entropy * extensibility_reference_temperature
+                    - extensibility_deactivation_energy
+                )
+                / (gas_constant * extensibility_reference_temperature)
+            )
+        )
+        / (
+            1
+            + exp(
+                (
+                    extensibility_entropy * temperature
+                    - extensibility_deactivation_energy
+                )
+                / (gas_constant * temperature)
+            )
+        )
 
-    // Smooth ramp to zero below 5°C
-    let cold_factor = 1 / (1 + exp(-ext_cold_steepness * (temperature - ext_cold_limit)))
+    let cold_response =
+        1
+        / (
+            1
+            + exp(
+                -extensibility_cold_steepness
+                * (temperature - extensibility_cold_limit)
+            )
+        )
 
-    phi_25 * arrhenius_factor * high_T_inhibition * cold_factor
+    phi = phi_reference * activation * high_temperature_inhibition * cold_response
 }
 
-// Mean turgor excess along the stem (Eqn 7 integral)
-// Integrates max(P₀(z̄) - Γ, 0) from z̄=0 (apex) to z̄=1 (base),
-// where P₀ varies linearly with z̄ due to the gravity gradient.
-// Analytical solution of the piecewise-linear integral.
-pub fn mean_turgor_excess(
-    P_base: WaterPotential,     // turgor at base of stem (z̄ = 1)
-    P_apex: WaterPotential,     // turgor at apex of stem (z̄ = 0)
-    turgor_threshold: WaterPotential,   // Γ
-) -> WaterPotential {
-    invertibility: lossy
-    differentiability: subgradient
+relation sigmoid_vulnerability<U: Unit>(
+    maximum_conductance: Scalar<U>,
+    water_potential: WaterPotential,
+    half_loss_potential: WaterPotential,
+    slope: VulnerabilitySlope,
+    conductance: Scalar<U>,
+) {
+    conductance =
+        maximum_conductance
+        / (1 + exp(-slope * (water_potential - half_loss_potential)))
+}
 
-    // P₀(z̄) = P_apex + (P_base - P_apex) · z̄  (linear gradient)
-    // Integral of max(P₀ - Γ, 0) from 0 to 1
-    if P_apex >= turgor_threshold and P_base >= turgor_threshold then
-        // Entire stem above threshold
-        (P_apex + P_base) / 2 - turgor_threshold
-    else if P_apex >= turgor_threshold and P_base < turgor_threshold then
-        // Partial — only upper portion growing
-        let z_crit = (turgor_threshold - P_apex) / (P_base - P_apex)
-        (P_apex - turgor_threshold) ** 2 / (2 * (P_apex - P_base))
-    else if P_apex < turgor_threshold and P_base >= turgor_threshold then
-        // Partial — only lower portion growing
-        let z_crit = (turgor_threshold - P_apex) / (P_base - P_apex)
-        (P_base - turgor_threshold) ** 2 / (2 * (P_base - P_apex))
-    else
-        // No growth — entire stem below threshold
-        0 MPa
+relation saturated_vapor_pressure(
+    temperature: Temperature,
+    pressure: VaporPressure,
+) {
+    pressure = water_vapor_saturation_pressure(temperature)
+}
+
+relation leaf_energy_balance(
+    E_leaf: LeafTranspiration,
+    air_temperature: Temperature,
+    absorbed_radiation: RadiativeFlux,
+    boundary_layer_heat_conductance: HeatConductance,
+    radiative_heat_conductance: HeatConductance,
+    emissivity: Fraction,
+    leaf_temperature: Temperature,
+) {
+    leaf_temperature =
+        air_temperature
+        + (
+            absorbed_radiation
+            - emissivity * stefan_boltzmann * air_temperature ** 4
+            - latent_heat_vaporization * E_leaf
+        )
+        / (
+            specific_heat_air
+            * (boundary_layer_heat_conductance + radiative_heat_conductance)
+        )
+
+    constraint heat_transfer_positive:
+        boundary_layer_heat_conductance + radiative_heat_conductance > 0
+}
+
+relation vapor_pressure_deficit(
+    leaf_temperature: Temperature,
+    air_temperature: Temperature,
+    relative_humidity: Fraction,
+    deficit: VaporPressure,
+) {
+    let saturated_leaf: VaporPressure
+    let saturated_air: VaporPressure
+    saturated_vapor_pressure(leaf_temperature, saturated_leaf)
+    saturated_vapor_pressure(air_temperature, saturated_air)
+    deficit = saturated_leaf - relative_humidity * saturated_air
+}
+
+relation phloem_molality_from_stem_water(
+    intercept: Molality,
+    slope: MolalityPressureSlope,
+    stem_water_potential: WaterPotential,
+    molality: Molality,
+) {
+    molality = intercept - slope * stem_water_potential
+}
+
+relation osmotic_potential_from_molality(
+    molality: Molality,
+    linear_coefficient: PositiveScalar,
+    quadratic_coefficient: OsmoticQuadraticCoefficient,
+    temperature: Temperature,
+    osmotic_potential: WaterPotential,
+) {
+    let osmotic_pressure_pa =
+        water_density
+        * gas_constant
+        * temperature
+        * (linear_coefficient * molality + quadratic_coefficient * molality ** 2)
+
+    osmotic_potential = -pa_to_mpa * osmotic_pressure_pa
+}
+
+relation axial_lockhart_growth(
+    phi_effective: Extensibility,
+    stem_carbon: CarbonPool,
+    stem_allocation_fraction: Fraction,
+    stem_water_potential_at_apex: WaterPotential,
+    gravity_drop: WaterPotential,
+    osmotic_potential: WaterPotential,
+    turgor_threshold: WaterPotential,
+    axis: StemAxis,
+    potential_growth: GrowthRate,
+) {
+    constraint stem_allocation_positive: stem_allocation_fraction > 0
+
+    // Eqn 7: G0 = phi_e * (C_W / u_S) * integral max(P0(z) - Gamma, 0) dz.
+    let axial_turgor_excess =
+        integrate(
+            max(
+                stem_water_potential_at_apex
+                + gravity_drop * z
+                - osmotic_potential
+                - turgor_threshold,
+                zero_water_potential
+            ),
+            z,
+            axis
+        )
+
+    potential_growth =
+        phi_effective
+        * (stem_carbon / stem_allocation_fraction)
+        * axial_turgor_excess
+}
+
+relation nsc_use_efficiency_rate(
+    C: CarbonPool,
+    maintenance_respiration: GrowthRate,
+    growth: GrowthRate,
+    growth_respiration_fraction: Fraction,
+    eta: Fraction,
+    eta_rate: NSCUseEfficiencyRate,
+) {
+    constraint eta_below_growth_yield: eta < 1 - growth_respiration_fraction
+
+    // Eqn 9 readout for transient GOH workflows; it is not an execution policy.
+    eta_rate =
+        eta
+        * (
+            deriv(maintenance_respiration, C)
+            + (eta / (1 - growth_respiration_fraction) - 1)
+              * deriv(growth, C)
+        )
+}
+
+relation growth_objective_over_horizon(
+    growth: GrowthRate,
+    horizon: TimeHorizon,
+    total_growth: CarbonPool,
+) {
+    // Eqn 1 exposes the objective. Workflows maximize this over g_c.
+    let t: Scalar<s>
+    total_growth = integrate(growth, t, horizon)
 }
 
 
-// ============================================================================
-// Types: Atmosphere
-// ============================================================================
+// Plant state and coupled physics.
 
 type Atmosphere {
-    co2: Pressure                      // atmospheric CO2 (~40 Pa)
-    o2: Pressure                       // atmospheric O2 (~21000 Pa)
-    temperature: Temperature           // air temperature
-    rh: Fraction                       // relative humidity
-    pressure: Scalar<U = kPa>         // atmospheric pressure (~101.3)
-    insolation: Scalar<U = W_m2>      // incoming solar radiation
-    wind_speed: Scalar<U = m_s>       // wind speed
-    solar_elevation: Scalar<U = ratio> // solar elevation angle (rad) (Table 3: Phi)
-    psi_soil: WaterPotential           // soil water potential (single layer)
-    min_psi_soil: WaterPotential       // drought memory: worst soil ψ experienced
+    co2_mole_fraction: Fraction
+    o2_mole_fraction: Fraction
+    pressure: AtmosphericPressure
+    temperature: Temperature
+    relative_humidity: Fraction
+    insolation: Scalar<W_m2>
+    soil_water_potential: WaterPotential
 }
-
-
-// ============================================================================
-// Types: Tree Structure (allometric parameters)
-//
-// These are treated as rollout-stable or slowly-varying parameters.
-// In a full growth model they would be temporal state; here they are
-// assumed constant following the paper's "large, mature tree" assumption.
-// ============================================================================
 
 type TreeStructure {
-    leaf_area: LeafArea                // a_t — total leaf area (m²)
-    height: Height                     // H — stem height (m)
-    rooting_depth: Height              // Z — rooting depth (m)
-    canopy_width: Height               // W — canopy width (m)
-    C_struct: CarbonPool               // whole-tree structural biomass (mol C)
-    C_wood: CarbonPool                 // aboveground stem wood biomass (mol C)
-
-    // Gravity-induced water potential drop along the stem
-    // ρgH ≈ 0.01 MPa per meter of height
+    leaf_area: LeafArea
+    height: Height
+    rooting_depth: Height
+    canopy_width: Height
+    C_struct: CarbonPool
+    C_wood: CarbonPool
     gravity_drop: WaterPotential
-    gravity_drop = water_density * gravity * height
+
+    relation gravity_head:
+        gravity_drop = pa_to_mpa * water_density * gravity * height
 }
 
-
-// ============================================================================
-// Types: Leaf Properties
-// ============================================================================
-
-type LeafProperties {
-    emissivity: Fraction               // longwave emissivity (~0.97)
-    absorptance: Fraction              // shortwave absorptance (~0.5)
-    width: Scalar<U = m>              // leaf width, for boundary layer
-    kappa: Scalar<U = mol_J>          // quantum yield (Table 3: 6.9e-7 mol J⁻¹)
-
-    constraint width_positive: width > 0 m
-    constraint kappa_positive: kappa > 0 mol_J
+type LeafOptics {
+    absorptance: Fraction
+    quantum_yield: Scalar<mol_J>
+    emissivity: Fraction
+    boundary_layer_heat_conductance: HeatConductance
+    radiative_heat_conductance: HeatConductance
 }
 
+type WholePlantHydraulicSegment {
+    maximum_conductance: WholePlantHydraulicConductance
+    water_potential: WaterPotential
+    half_loss_potential: WaterPotential
+    vulnerability_slope: VulnerabilitySlope
+    conductance: WholePlantHydraulicConductance
 
-// ============================================================================
-// Types: Hydraulic Catena
-//
-// Soil → Root → Stem → Leaf, each segment with its own SigmoidVC.
-// Uses ConductingElement<SigmoidVC> for the conductance computation.
-// Junction water potentials are solved by the planner's SCC detection.
-//
-// Compared to Sperry mock: single soil layer, no multi-layer roots,
-// but each segment has distinct VC parameters (different P50, slope).
-// ============================================================================
+    relation conductance_loss:
+        sigmoid_vulnerability(
+            maximum_conductance,
+            water_potential,
+            half_loss_potential,
+            vulnerability_slope,
+            conductance
+        )
+}
+
+type LeafHydraulicSegment {
+    maximum_conductance: LeafHydraulicConductance
+    water_potential: WaterPotential
+    half_loss_potential: WaterPotential
+    vulnerability_slope: VulnerabilitySlope
+    conductance: LeafHydraulicConductance
+
+    relation conductance_loss:
+        sigmoid_vulnerability(
+            maximum_conductance,
+            water_potential,
+            half_loss_potential,
+            vulnerability_slope,
+            conductance
+        )
+}
 
 type HydraulicCatena {
-    // Three conducting segments, each with SigmoidVC
-    // The VC parameters (p50, slope) differ per segment
-    root_soil: ConductingElement<V = SigmoidVC>     // k_R, vc at ψ_soil
-    stem: XylemSegment<V = SigmoidVC>               // k_S, vc at ψ_S, with cavitation
-    leaf: XylemSegment<V = SigmoidVC>               // k_L, vc at ψ_L, with cavitation
-
-    // Internal junction pressure (solved by planner)
-    psi_root_junction: WaterPotential
-
-    // Whole-tree transpiration rate
-    transpiration: TranspirationRate
+    root_soil: WholePlantHydraulicSegment
+    stem: WholePlantHydraulicSegment
+    leaf: LeafHydraulicSegment
+    psi_root_collar: WaterPotential
+    psi_stem_apex: WaterPotential
+    psi_leaf: WaterPotential
+    transpiration_total: WholeTreeTranspiration
 }
-
-
-// ============================================================================
-// Types: Gas Exchange
-//
-// Stomatal and boundary layer conductance, Farquhar photosynthesis.
-// The Photosynthesis contract is imported from the library — same
-// FarquharC3 implementation used in the Sperry mock.
-// ============================================================================
 
 type GasExchange<P: Photosynthesis> {
     photo: P
-
-    g_s: Conductance                   // stomatal conductance (from slot)
-    g_b: Conductance                   // boundary layer conductance
-    g_c: Conductance                   // total CO2 conductance (series)
-    g_w: Conductance                   // water vapor conductance
-    atm_pressure: Scalar<U = kPa>     // atmospheric pressure (for VPD → mole fraction)
-
+    g_c: Conductance
+    g_s: Conductance
+    g_b_co2: Conductance
+    g_b_vapor: Conductance
+    g_w: Conductance
     leaf_temperature: Temperature
-    leaf_vpd: Scalar<U = kPa>
-    leaf_water_potential: WaterPotential // downstream endpoint of leaf hydraulic segment
+    leaf_vpd: VaporPressure
+    E_leaf: LeafTranspiration
+    atm_pressure: AtmosphericPressure
 
-    // Transpiration per unit leaf area
-    E_leaf: TranspirationRate
-
-    // Series conductance: stomata + boundary layer
-    g_c = g_s * g_b / (g_s + g_b)
-
-    // Water vapor conductance (1.6× CO2 for diffusivity ratio)
-    g_w = 1.6 * g_c
-
-    // Leaf-area-specific transpiration (VPD / P_atm = mole fraction deficit)
-    E_leaf = g_w * leaf_vpd / atm_pressure
-
-    // CO2 conductance wired to photosynthesis contract input
-    constraint co2_conductance:
-        photo.g_c = g_c
+    relation conductance_series:
+        constraint total_below_boundary: g_c < g_b_co2
+        g_c = g_s * g_b_co2 / (g_s + g_b_co2)
+        g_b_vapor = co2_to_water_conductance_ratio * g_b_co2
+        g_w = co2_to_water_conductance_ratio * g_c
+        E_leaf = g_w * leaf_vpd / atm_pressure
 }
-
-
-// ============================================================================
-// Types: Carbon Balance
-//
-// Whole-tree NSC pool with source-sink dynamics.
-// Carbon in = photosynthetic assimilation.
-// Carbon out = maintenance respiration + growth + growth respiration.
-// NSC substrate limitation throttles both growth and respiration when
-// reserves are low.
-//
-// Eqn 2: dC/dt = a_t · A_n - R_M - R_G - G
-// ============================================================================
 
 type CarbonBalance {
-    // NSC storage — the key temporal state variable
     C: CarbonPool
+    assimilation_total: CarbonAssimilationRate
+    R_M_reference: GrowthRate
+    R_M0: GrowthRate
+    R_M: GrowthRate
+    R_G: GrowthRate
+    G: GrowthRate
+    sigma_g: Fraction
+    sigma_r: Fraction
+    gamma_g: PositiveScalar
+    gamma_r: PositiveScalar
+    q10_respiration: PositiveScalar
+    growth_respiration_fraction: Fraction
 
-    // Carbon fluxes
-    assimilation_total: GrowthRate     // a_t · A_n (whole-tree GPP)
-    R_M: GrowthRate                    // maintenance respiration
-    R_G: GrowthRate                    // growth respiration
-    growth: GrowthRate                 // G (structural growth rate)
+    relation growth_respiration:
+        constraint growth_respiration_fraction_admissible:
+            growth_respiration_fraction < 1
 
-    // Substrate limitation
-    sigma_g: Fraction                  // σ_g(C) — growth limitation
-    sigma_r: Fraction                  // σ_r(C) — respiration limitation
-    gamma_g: PositiveScalar            // shape parameter for σ_g (~0.26)
-    gamma_r: PositiveScalar            // shape parameter for σ_r (~0.38)
+        R_G =
+            G
+            * growth_respiration_fraction
+            / (1 - growth_respiration_fraction)
 
-    // Maintenance respiration parameters
-    R_M_25: GrowthRate                 // R_M,0 at 25°C
-    q10_respiration: PositiveScalar    // Q10 for maintenance respiration
-
-    // Growth respiration fraction
-    f_c: Fraction                      // fraction of GPP to growth resp (~0.28)
-
-    // Growth respiration is proportional to growth (Eqn 2 text)
-    R_G = growth * f_c / (1 - f_c)
+    temporal: {
+        // Eqn 2: dC/dt = a_L A_n - R_M - R_G - G.
+        d(C) = assimilation_total - R_M - R_G - G
+    }
 }
-
-
-// ============================================================================
-// Types: Turgor-Driven Growth
-//
-// The Lockhart equation: growth depends on turgor excess above a
-// threshold, modulated by cell wall extensibility and NSC substrate
-// limitation.
-//
-// Eqn 3: G = σ_g(C) · G_0
-// Eqn 7: G_0 = φ̄ · (C_W / w_S) · ∫max(P₀(z̄) - Γ, 0) dz̄
-// ============================================================================
 
 type TurgorGrowth {
-    // Turgor computation
-    psi_stem: WaterPotential           // stem water potential (from hydraulics)
-    osmotic_potential: WaterPotential   // π (from phloem sap molality)
+    stem_axis: StemAxis
+    psi_stem_apex: WaterPotential
+    gravity_drop: WaterPotential
+    phloem_molality: Molality
+    osmotic_potential: WaterPotential
+    c_m1: Molality
+    c_m2: MolalityPressureSlope
+    c_pi1: PositiveScalar
+    c_pi2: OsmoticQuadraticCoefficient
+    temperature: Temperature
+    turgor_threshold: WaterPotential
+    phi_reference: Extensibility
+    phi_effective: Extensibility
+    stem_carbon: CarbonPool
+    stem_allocation_fraction: Fraction
+    G0: GrowthRate
 
-    // Phloem sap molality parameters (Table 3, Paljakka et al. 2017)
-    c_m1: Scalar<U = mol_kg>          // intercept (~0.48 mol kg⁻¹)
-    c_m2: Scalar<U = mol_kg>          // slope (~0.13 mol kg⁻¹ MPa⁻¹, calibrated to MPa)
-    c_pi1: PositiveScalar              // linear osmotic coefficient (~0.998, dimensionless)
-    c_pi2: Scalar<U = kg_mol>         // quadratic osmotic coefficient (~0.089 kg mol⁻¹)
+    relation phloem_osmotic_state:
+        phloem_molality_from_stem_water(
+            c_m1,
+            c_m2,
+            psi_stem_apex,
+            phloem_molality
+        )
 
-    constraint c_m1_positive: c_m1 > 0 mol_kg
-    constraint c_m2_positive: c_m2 > 0 mol_kg
-    constraint c_pi2_positive: c_pi2 > 0 kg_mol
+        osmotic_potential_from_molality(
+            phloem_molality,
+            c_pi1,
+            c_pi2,
+            temperature,
+            osmotic_potential
+        )
 
-    // Phloem sap molality: m_p = c_m1 - c_m2 · ψ_S
-    // c_m2 is calibrated to MPa inputs — use value_in to extract dimensionless pressure
-    phloem_molality: Scalar<U = mol_kg>
-    let psi_MPa = psi_stem.value_in(MPa)
-    phloem_molality = c_m1 - c_m2 * psi_MPa
+    relation lockhart_growth:
+        extensibility_temperature_response(
+            phi_reference,
+            temperature,
+            phi_effective
+        )
 
-    // Osmotic potential from phloem molality (van't Hoff equation)
-    // π = -ρ · R · T · (c_Π1 · m_p + c_Π2 · m_p²)
-    // Units: kg/m³ · J/(mol·K) · K · mol/kg = J/m³ = Pa.
-    // c_pi1 · m_p has units mol/kg; c_pi2 · m_p² has units (kg/mol)·(mol/kg)² = mol/kg.
-    // The compiler converts the Pa result to MPa for WaterPotential automatically.
-    osmotic_potential = -water_density * gas_constant * temperature
-        * (c_pi1 * phloem_molality + c_pi2 * phloem_molality ** 2)
-
-    temperature: Temperature           // for osmotic potential and extensibility
-
-    // Turgor at stem base and apex
-    turgor_base: WaterPotential        // P at base = ψ_stem - π
-    turgor_apex: WaterPotential        // P at apex = ψ_stem - gravity_drop - π
-
-    turgor_base = psi_stem - osmotic_potential
-    turgor_apex = psi_stem - gravity_drop - osmotic_potential
-
-    gravity_drop: WaterPotential       // from tree structure
-
-    // Growth threshold and extensibility
-    turgor_threshold: WaterPotential   // Γ (~0.75 MPa)
-    phi_25: Extensibility              // φ̄ at 25°C
-    phi: Extensibility                 // temperature-adjusted φ̄
-
-    phi = extensibility_temperature(phi_25, temperature)
-
-    // Potential growth rate G_0 (Eqn 7)
-    // G_0 = φ̄ · (C_W / w_S) · mean_turgor_excess
-    // where w_S = stem carbon density per unit normalized height
-    G_0: GrowthRate
-    C_wood: CarbonPool                 // from tree structure
-    u_s: Fraction                      // fraction of new growth to stems (~0.25)
-
-    G_0 = phi * (C_wood / u_s) * mean_turgor_excess(turgor_base, turgor_apex, turgor_threshold)
+        axial_lockhart_growth(
+            phi_effective,
+            stem_carbon,
+            stem_allocation_fraction,
+            psi_stem_apex,
+            gravity_drop,
+            osmotic_potential,
+            turgor_threshold,
+            stem_axis,
+            G0
+        )
 }
 
+type ConductanceOptimizationLayer {
+    eta: Fraction
+    eta_rate: NSCUseEfficiencyRate
+    horizon: TimeHorizon
+    total_growth_objective: CarbonPool
+}
 
-// ============================================================================
-// Top-level model
-// ============================================================================
+contract ConductancePolicyInputs {
+    C: CarbonPool
+    eta: Fraction
+    E_leaf: LeafTranspiration
+    G: GrowthRate
+    G0: GrowthRate
+    leaf_vpd: VaporPressure
+    psi_leaf: WaterPotential
+    psi_stem_apex: WaterPotential
+}
 
-pub type PotkayTree<P: Photosynthesis> {
-    atm: Atmosphere
+contract ConductancePolicyOutput {
+    g_c: Conductance
+}
+
+type PotkayTree<P: Photosynthesis> {
+    atmosphere: Atmosphere
     structure: TreeStructure
-    leaf_props: LeafProperties
+    leaf: LeafOptics
     hydraulics: HydraulicCatena
-    gas: GasExchange<P = P>
+    gas: GasExchange<P>
     carbon: CarbonBalance
     turgor: TurgorGrowth
+    optimization: ConductanceOptimizationLayer
 
-    // Simulation timestep — dt is a normal quantity, not a magic name.
-    // The compiler uses it for temporal integration; the workflow layer
-    // provides it via assume_constant or assume_series.
-    dt: Scalar<U = s>
+    relation hydraulic_catena:
+        hydraulics.root_soil.water_potential = atmosphere.soil_water_potential
+        hydraulics.stem.water_potential = hydraulics.psi_stem_apex
+        hydraulics.leaf.water_potential = hydraulics.psi_leaf
+
+        hydraulics.transpiration_total =
+            hydraulics.root_soil.conductance
+            * (atmosphere.soil_water_potential - hydraulics.psi_root_collar)
+
+        hydraulics.transpiration_total =
+            hydraulics.stem.conductance
+            * (
+                hydraulics.psi_root_collar
+                - hydraulics.psi_stem_apex
+                - structure.gravity_drop
+            )
+
+        hydraulics.transpiration_total =
+            structure.leaf_area
+            * hydraulics.leaf.conductance
+            * (hydraulics.psi_stem_apex - hydraulics.psi_leaf)
+
+        hydraulics.transpiration_total =
+            structure.leaf_area * gas.E_leaf
+
+    relation gas_exchange:
+        let absorbed_radiation: RadiativeFlux
+        absorbed_radiation = leaf.absorptance * atmosphere.insolation
+
+        leaf_energy_balance(
+            gas.E_leaf,
+            atmosphere.temperature,
+            absorbed_radiation,
+            leaf.boundary_layer_heat_conductance,
+            leaf.radiative_heat_conductance,
+            leaf.emissivity,
+            gas.leaf_temperature,
+        )
+
+        vapor_pressure_deficit(
+            gas.leaf_temperature,
+            atmosphere.temperature,
+            atmosphere.relative_humidity,
+            gas.leaf_vpd
+        )
+
+        gas.atm_pressure = atmosphere.pressure
+        gas.photo.temperature = gas.leaf_temperature
+        gas.photo.co2_mole_fraction = atmosphere.co2_mole_fraction
+        gas.photo.o2_mole_fraction = atmosphere.o2_mole_fraction
+        gas.photo.absorbed_radiation = leaf.quantum_yield * absorbed_radiation
+        gas.photo.total_co2_conductance = gas.g_c
+
+    relation carbon_turgor_coupling:
+        substrate_limitation(
+            carbon.C,
+            carbon.gamma_g,
+            structure.C_struct,
+            carbon.sigma_g
+        )
+
+        substrate_limitation(
+            carbon.C,
+            carbon.gamma_r,
+            structure.C_struct,
+            carbon.sigma_r
+        )
+
+        q10_response(
+            carbon.R_M_reference,
+            carbon.q10_respiration,
+            atmosphere.temperature,
+            carbon.R_M0
+        )
+
+        carbon.R_M = carbon.sigma_r * carbon.R_M0
+        carbon.assimilation_total = structure.leaf_area * gas.photo.assimilation
+        carbon.G = carbon.sigma_g * turgor.G0
+
+        turgor.psi_stem_apex = hydraulics.psi_stem_apex
+        turgor.gravity_drop = structure.gravity_drop
+        turgor.temperature = atmosphere.temperature
+        turgor.stem_carbon = structure.C_wood
+
+    relation optimization_readouts:
+        nsc_use_efficiency_rate(
+            carbon.C,
+            carbon.R_M,
+            carbon.G,
+            carbon.growth_respiration_fraction,
+            optimization.eta,
+            optimization.eta_rate
+        )
+
+        growth_objective_over_horizon(
+            carbon.G,
+            optimization.horizon,
+            optimization.total_growth_objective
+        )
 }
 
-
-// ============================================================================
-// Relations: Hydraulics (the planner finds the SCC)
-//
-// The flow-pressure-conductance system forms an algebraic loop:
-// flow depends on conductance, conductance depends on pressure,
-// pressure depends on flow. Same structure as Sperry, simpler catena.
-//
-// Potkay uses per-leaf-area k_L but whole-tree k_R, k_S.
-// Total E = k_R·(ψ_soil - ψ_R) = k_S·(ψ_R - ψ_S - ρgH) = a_t·k_L·(ψ_S - ψ_L)
-// ============================================================================
-
-// Root-soil segment VC evaluated at soil water potential
-relation root_vc_pressure:
-    hydraulics.root_soil.water_potential = atm.psi_soil
-
-// Stem VC evaluated at stem water potential
-relation stem_vc_pressure:
-    hydraulics.stem.core.water_potential = turgor.psi_stem
-
-// Leaf VC evaluated at leaf water potential
-relation leaf_vc_pressure:
-    hydraulics.leaf.core.water_potential = gas.leaf_water_potential
-
-// Where leaf water potential lives in the GasExchange type
-// (it's the downstream endpoint of the leaf segment)
-
-// Soil conductance: no cavitation memory (desaturation is reversible)
-relation soil_conductance:
-    hydraulics.root_soil.conductance = hydraulics.root_soil.vc_conductance
-
-// Root-soil flow: soil to root junction
-relation root_flow:
-    hydraulics.transpiration =
-        hydraulics.root_soil.conductance
-        * (atm.psi_soil - hydraulics.psi_root_junction)
-
-// Stem flow: root junction to stem
-relation stem_flow:
-    hydraulics.transpiration =
-        hydraulics.stem.core.conductance
-        * (hydraulics.psi_root_junction - turgor.psi_stem - structure.gravity_drop)
-
-// Leaf flow: stem to leaf (scaled by leaf area)
-relation leaf_flow:
-    hydraulics.transpiration =
-        structure.leaf_area * hydraulics.leaf.core.conductance
-        * (turgor.psi_stem - hydraulics.leaf.core.water_potential)
-
-// Whole-tree transpiration = leaf-area × leaf-specific transpiration
-relation transpiration_scaling:
-    hydraulics.transpiration = structure.leaf_area * gas.E_leaf
-
-
-// ============================================================================
-// Relations: Photosynthesis inputs
-//
-// Wire the Photosynthesis contract inputs via the wiring pattern.
-// FarquharC3 is imported from the library — same implementation as Sperry.
-// ============================================================================
-
-relation photo_temperature:
-    gas.photo.temperature = gas.leaf_temperature
-
-relation photo_par:
-    gas.photo.par = leaf_props.kappa * atm.insolation * leaf_props.absorptance
-
-relation photo_co2:
-    gas.photo.co2 = atm.co2
-
-relation photo_o2:
-    gas.photo.o2 = atm.o2
-
-relation photo_pressure:
-    gas.photo.atm_pressure = atm.pressure
-
-relation gas_atm_pressure:
-    gas.atm_pressure = atm.pressure
-
-
-// ============================================================================
-// Relations: Leaf Energy Balance
-//
-// T_leaf depends on E (latent heat), E depends on D_leaf (leaf VPD),
-// D_leaf depends on T_leaf (saturation vapor pressure).
-// The planner discovers this SCC and emits a solver.
-// Same structure as Sperry, simplified for single canopy.
-// ============================================================================
-
-universal latent_heat_vap: Scalar<U = J_mol> = 44100  // latent heat of vaporization
-
-relation energy_balance:
-    // Boundary layer heat conductance (Nobel): empirical, calibrated to m/s and m
-    let u = atm.wind_speed.value_in(m_s)
-    let d = leaf_props.width.value_in(m)
-    let g_ha = (1.4 * 0.135 * sqrt(u / (d * 0.72))) mol_m2_s
-    // Radiative conductance: empirical polynomial, calibrated to degC
-    let T_c = atm.temperature.value_in(degC)
-    let g_r = (0.1579 + 0.0017 * T_c + 7.17e-6 * T_c ** 2) mol_m2_s
-    gas.leaf_temperature =
-        atm.temperature
-        + (atm.insolation * leaf_props.absorptance
-           - leaf_props.emissivity * stefan_boltzmann * atm.temperature ** 4
-           - latent_heat_vap * gas.E_leaf)
-          / (specific_heat_air * (g_r + g_ha))
-
-relation leaf_vpd:
-    let e_sat_leaf = saturated_vapor_pressure(gas.leaf_temperature)
-    let e_sat_air = saturated_vapor_pressure(atm.temperature)
-    let e_air = e_sat_air * atm.rh
-    gas.leaf_vpd = e_sat_leaf - e_air
-
-// Boundary layer conductance (Table 3, treated as constant)
-universal g_b_const: Scalar<U = mol_m2_s> = 2.4   // boundary layer conductance
-
-relation boundary_layer:
-    gas.g_b = g_b_const
-
-
-// ============================================================================
-// Relations: Carbon-Turgor Coupling
-//
-// Connects the carbon balance to the turgor growth computation.
-// This is the key new coupling that doesn't exist in the Sperry mock.
-// ============================================================================
-
-// Substrate limitation from NSC pool (Eqn 5, 6)
-relation growth_limitation:
-    carbon.sigma_g = substrate_limitation(carbon.C, carbon.gamma_g, structure.C_struct)
-
-relation respiration_limitation:
-    carbon.sigma_r = substrate_limitation(carbon.C, carbon.gamma_r, structure.C_struct)
-
-// Wire turgor growth inputs
-relation turgor_stem_pressure:
-    turgor.psi_stem = hydraulics.stem.core.water_potential
-
-relation turgor_temperature:
-    turgor.temperature = atm.temperature
-
-relation turgor_gravity:
-    turgor.gravity_drop = structure.gravity_drop
-
-relation turgor_wood:
-    turgor.C_wood = structure.C_wood
-
-// Actual growth = potential growth × substrate limitation (Eqn 3)
-relation actual_growth:
-    carbon.growth = carbon.sigma_g * turgor.G_0
-
-// NSC-limited maintenance respiration with Q10 temperature response (Eqn 4)
-relation maintenance_respiration:
-    carbon.R_M = carbon.sigma_r
-        * q10_response(carbon.R_M_25, carbon.q10_respiration, atm.temperature, T_ref_degC)
-
-// Total assimilation = leaf area × leaf-specific A_n
-relation total_assimilation:
-    carbon.assimilation_total = structure.leaf_area * gas.photo.assimilation
-
-
-// ============================================================================
-// Slot: Stomatal Control
-//
-// The world model declares WHAT stomata depend on. The HOW is pluggable.
-// Under the GOH, the optimal g_s maximizes ∫G dt (Eqn 1). In Myco, the
-// slot replaces this heuristic: it is trained on observational data via
-// supervised loss, learning to reproduce observed stomatal behavior without
-// being told the optimization criterion. To generate synthetic training data
-// from a GOH baseline, provide a hand-coded Python function implementing
-// the GOH criterion as the slot and run in simulate mode.
-// ============================================================================
-
-slot stomatal_control provides [gas.g_s]:
-    inputs = [*]
-
-
-// ============================================================================
-// Temporal: State Evolution
-// ============================================================================
-
-// NSC dynamics: the core carbon balance equation (Eqn 2)
-// dC/dt = a_t · A_n - R_M - R_G - G
-temporal nsc_dynamics:
-    d(carbon.C) = carbon.assimilation_total
-        - carbon.R_M
-        - carbon.R_G
-        - carbon.growth
-
-// Irreversible cavitation: track worst pressure for stem and leaf
-initial stem_cavitation_init:
-    hydraulics.stem.min_historical_pressure = hydraulics.stem.core.water_potential
-
-initial leaf_cavitation_init:
-    hydraulics.leaf.min_historical_pressure = hydraulics.leaf.core.water_potential
-
-temporal stem_cavitation:
-    hydraulics.stem.min_historical_pressure[t+1] =
-        min(hydraulics.stem.min_historical_pressure[t],
-            hydraulics.stem.core.water_potential[t])
-
-temporal leaf_cavitation:
-    hydraulics.leaf.min_historical_pressure[t+1] =
-        min(hydraulics.leaf.min_historical_pressure[t],
-            hydraulics.leaf.core.water_potential[t])
-
-// Track minimum soil water potential for root-soil conductance hysteresis
-// (the paper uses this for drought legacy effects, Fig 5)
-initial soil_drought_init:
-    atm.min_psi_soil = atm.psi_soil
-
-temporal soil_drought_memory:
-    atm.min_psi_soil[t+1] =
-        min(atm.min_psi_soil[t], atm.psi_soil[t])
+// A GOH workflow resolves gas.g_c with bind(path, Controller(...)) or with an
+// optimizer over optimization.total_growth_objective. Instantaneous,
+// steady-state, and transient choices determine how eta, eta_rate, and the
+// marginal conditions are bound or constrained for a particular run.
