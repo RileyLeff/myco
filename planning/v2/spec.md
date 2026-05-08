@@ -4424,11 +4424,11 @@ claim is an evidence-scope mismatch, not a successful fulfillment.
 - relaxed, smoothed, clipped, or surrogate execution offered for an
   exact source claim without an accepted ledger entry.
 
-The Trainable interaction is intentionally not locked here. A choice
-slot bound as `Trainable` plus an active `OptimalitySite` may represent
-alternative fulfillment paths or a workflow-selected training policy.
-The exact UX for combining them is tracked in §35; the compiler must not
-silently translate an optimality claim into a penalty term.
+Trainable bindings on a covered choice slot do not fulfill the site by
+themselves. Workflow-composition rules in §25 govern the explicit
+policies for combining `Trainable` with an active `OptimalitySite`. The
+compiler must not silently translate an optimality claim into a penalty
+term.
 
 ---
 
@@ -6577,6 +6577,39 @@ training run:
   supplies a learned quantity's prior and initial guess. Priors
   contribute objective terms; initial guesses do not by themselves
   assert truth.
+
+**Training and optimality.** `Trainable` is a workflow source object. It
+never appears in `.myco` source and it does not make a value optimal.
+When a `Trainable` binding covers a choice slot with an active
+`OptimalitySite` (§15.7), the binding supplies a candidate value only.
+It does not supply optimality evidence and does not fulfill the site.
+
+The workflow uses one explicit interaction policy, recorded in the run
+ledger:
+
+- **`strict`.** Default. The `OptimalitySite` must be fulfilled by
+  separate evidence or an explicit fulfillment path. The `Trainable`
+  binding itself is insufficient, so composition fails if no separate
+  evidence or fulfillment path is supplied.
+- **`train_then_verify`.** The workflow trains the value, then supplies
+  separate provider / compiler / audited-package evidence for the
+  `OptimalitySite`. The site's evidence grade is whatever the verifier
+  supplies.
+- **`relaxed_training`.** The workflow explicitly treats the
+  optimality claim as a soft training term. The site moves to
+  `relaxed_with_ledger`, and the relaxation envelope, term identity,
+  weights, and provenance are recorded. The compiler does not insert the
+  penalty; the workflow constructs it from exposed residuals,
+  `objective_terms`, or site evidence hooks like every other objective
+  contribution.
+- **`diagnostic_only`.** The workflow declares that this run reports the
+  site without requiring fulfillment. The run record keeps the site
+  unfulfilled and marks the reason.
+
+No automatic penalty insertion, no silent fulfillment, and no covert
+relaxation are permitted. A `Trainable` binding can be evidence only
+when accompanied by a separate certificate, verifier, or accepted
+relaxation policy that explicitly targets the `OptimalitySite`.
 
 **Projection flavor.** Workflow selects admissibility projection
 where a runtime projection is desired: `hard_clip`, `sigmoid`, or
@@ -9328,13 +9361,12 @@ stdlib implementation so the table is both mathematically precise and
 backend-realizable.
 Cross-refs §6, §7, §13.8, §14, §15.7, §28, §30.
 
-**Trainable / optimality interaction.** §15.7 intentionally does not
-lock the UX for a choice slot that is both bound as `Trainable` and
-covered by an active `OptimalitySite`. These may be alternative
-fulfillment paths, a workflow-selected training policy, or an invalid
-composition depending on the run. The compiler must not silently turn an
-optimality claim into a training penalty. A future pass should specify
-the Python API, diagnostics, and ledger entries for this combination.
+**Trainable / optimality interaction.** §15.7 does not make
+`Trainable` a source-language concept. The interaction is resolved as a
+workflow-composition policy in §25: `strict`, `train_then_verify`,
+`relaxed_training`, or `diagnostic_only`. A `Trainable` binding supplies
+a candidate value; it does not fulfill an `OptimalitySite` without
+separate evidence or an explicit relaxation ledger entry.
 
 **Y5 closure-policy placement review.** §8.8 currently locks Y5 custom
 closure policies as ordinary parameterized relations selected by the
