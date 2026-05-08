@@ -4253,8 +4253,8 @@ Slot meanings:
   the output slot and projection, e.g. `{ from: state, project: profit }`.
   If the family exposes the criterion as a single slot, the shorter
   `{ profit }` form desugars to the same criterion anchor.
-- **`alternatives`.** Explicit domain or admissible alternative family
-  for the choice slot.
+- **`alternatives`.** Explicit `ChoiceSpace<T>` or source helper that
+  elaborates to one for the choice slot.
 - **Operator-specific slots.** `tie`, `epsilon`, `neighborhood`, and
   `horizon` are required by the relations that need them. No default is
   hidden for these fields.
@@ -4336,6 +4336,48 @@ semantics quantify over an admissible semantic family, while providers
 may later choose finite bases, searches, certificates, or approximations
 with evidence (§37.1).
 
+**Choice spaces.** The `alternatives` slot elaborates to a typed
+`ChoiceSpace<T>` whose element type matches the `choice` slot. Continuous
+intervals are one choice-space primitive, not the whole ontology. The
+canonical primitives are:
+
+- **`Interval(lo, hi)`.** Mathematical one-dimensional continuous
+  interval over an orderable type. v2.1 ships full evidence machinery
+  for scalar interval extrema.
+- **`Finite(xs)`.** Mathematical finite explicit set. v2.1 ships full
+  evidence machinery and cross-links to the finite selector surface
+  (§12.2).
+- **`ProductSpace(factors)`.** Mathematical cartesian product of choice
+  spaces. v2.1 ships full evidence machinery when the factors do.
+- **`MeasurableMap(domain, codomain)`.** Mathematical space of
+  measurable functions from a domain to a codomain. v2.1 can express the
+  claim, but fulfillment requires provider-validated or
+  audited-package evidence.
+- **`ContractImplSet<C>`.** Catalog-scoped set of concrete
+  implementations of contract `C` reachable from the loaded source
+  bundle and package graph. It is not a package-independent
+  mathematical universe. Evidence built on it must record the resolved
+  package graph, contract version, and concrete implementation set in
+  the run lock.
+
+Source-facing helpers elaborate to those primitives. `interval(a, b)`
+records `Interval(a, b)`. `finite(xs)` records `Finite(xs)`.
+`product_space(factors)` records `ProductSpace(factors)`.
+`parameter_space(shape, refinements)` records a `ProductSpace` of
+scalar spaces plus refinement predicates. `measurable_map(domain,
+codomain)` records `MeasurableMap(domain, codomain)`.
+`field_space(domain, value_type)` records `MeasurableMap(domain,
+value_type)`. `trajectory_space(horizon, value_type)` records a
+`MeasurableMap` whose domain is a time horizon. `contract_impls<C>()`
+records `ContractImplSet<C>`.
+
+`ContractImplSet<C>` is appropriate only when the modeler genuinely
+means "one of the in-scope contract implementations." For policy
+optimality over arbitrary functions, prefer `MeasurableMap` or a named
+`Finite` set of policies. `hypha explain` must report the implementation
+set and warn when a broad contract makes the claim sensitive to package
+graph changes.
+
 **Criterion rule.** The criterion must satisfy the `Compare` capability
 contract and must have a coherent unit / scaling policy. Multi-output,
 tensor-valued, distribution-valued, and complex criteria are rejected
@@ -4343,6 +4385,34 @@ unless the model explicitly projects them to an ordered scalar. Hidden
 scalarization is forbidden. Future multi-objective relations such as
 lexicographic or Pareto optimality must ship as separate
 `std::optimality` relations with their own claim shapes.
+
+**Stochastic criteria.** Distribution-valued criteria are not orderable.
+The model must project them to an ordered scalar in `.myco`; the
+workflow cannot choose the projection at composition time. Projection is
+a model commitment: `expected(loss)` and `cvar(loss, alpha)` state
+different scientific criteria and produce distinct `OptimalitySite`s.
+
+The stdlib projection family includes:
+
+- **`expected(X)`** — requires a mean-existence capability and returns
+  `E[X]`.
+- **`variance(X)`** — requires second moments and returns `Var[X]`.
+- **`quantile(X, p)`** — requires a well-defined quantile and returns
+  `F_X^-1(p)`.
+- **`cvar(X, alpha)`** — requires tail integrability and returns a
+  tail-risk scalar.
+- **`pr_above(X, threshold)`** — requires a CDF / survival capability
+  and returns `P(X >= threshold)`.
+- **`entropy(X)`** — requires a well-defined density or mass function
+  and returns the distribution entropy.
+
+Numeric projection parameters such as `p`, `alpha`, or `threshold`
+follow CC1: they are universals or derived graph quantities whose values
+enter from workflow binding. Projection atoms dispatch through the same
+Tier A/B/C evidence ladder as distribution reasoning (§13, §27):
+`expected(Normal(mu, sigma))` may simplify to `mu`, while an empirical
+or opaque finite-shot estimator remains provider / workflow evidence
+with uncertainty recorded in the run ledger.
 
 `epsilon_global_*` relations require an `epsilon: Scalar<U>` whose unit
 matches the criterion's comparison unit. CC1 applies: the source declares
@@ -4462,7 +4532,11 @@ claim is an evidence-scope mismatch, not a successful fulfillment.
 - unfulfilled active optimality site;
 - missing realized family invocation;
 - empty or inconsistent feasible set;
+- unsupported or underspecified choice-space evidence;
 - criterion lacking `Compare` or scaling policy;
+- distribution-valued criterion without explicit scalar projection;
+- `ContractImplSet` claim whose implementation set changed across
+  package graphs;
 - finite evidence offered for continuous/global claim;
 - stationarity offered for global or local extremum without sufficient
   boundary / neighborhood evidence;
@@ -9408,6 +9482,27 @@ Finite `argmax` remains a separate exact selector surface (§12.2).
 Derivative stationarity, finite grids, local optimizers, and controller
 contracts do not silently satisfy global continuous or horizon claims.
 
+**Choice-space ontology scoped.** §15.7 defines the `ChoiceSpace<T>`
+ontology for optimality alternatives: mathematical `Interval`, `Finite`,
+`ProductSpace`, and `MeasurableMap`, plus catalog-scoped
+`ContractImplSet<C>`. v2.1 ships full evidence machinery for intervals,
+finite sets, and supported products; `MeasurableMap` claims are
+expressible but require provider-validated or audited-package evidence;
+`ContractImplSet` claims enumerate in-scope implementations and record
+the resolved package graph / contract version / implementation set in
+the run lock. This resolves function-valued and trajectory-valued
+choice syntax at the semantic level while keeping implementation
+capability honest.
+
+**Stochastic-criterion optimality scoped.** §15.7 rejects
+distribution-valued criteria unless the model projects them to an
+ordered scalar with explicit stdlib atoms such as `expected`,
+`variance`, `quantile`, `cvar`, `pr_above`, or `entropy`. The projection
+is a source-level model commitment, not workflow configuration. Tier
+A/B/C distribution machinery may simplify or validate these projections
+when capability facts permit; empirical or opaque projections remain
+evidence-bearing workflow / provider records.
+
 **Controller-interface affordances resolved.** §24.2 defines
 axis-aware controller scope (`PerInstance`, `OverAxes`, `Global`), the
 read / write axis-compatibility rules, and the immutable value-payload
@@ -9527,7 +9622,8 @@ that locks: the full list of axiomatic primitives (`exp`, `log`,
 classification of each surface (expression atom vs parameterized
 relation), the capability contracts and abstract cost tags for each,
 and the classification of distributions (`log_density` / backend
-sampling capability), kernels, and `std::optimality` relations (§15.7).
+sampling capability), kernels, `std::optimality` relations, choice-space
+constructors, and stochastic-criterion projection atoms (§15.7).
 This pass should also audit Tier 1 distribution capability tags (`A`,
 `S`, `P`, `Sc`, `ST`, `R`, `Conj`) against the
 stdlib implementation so the table is both mathematically precise and
@@ -9914,7 +10010,10 @@ pattern or pipe use).
 `jump`, `average`, `normal`, `normal_traction`, `test_space`, `smooth_max`,
 `smooth_abs`, `smooth_step`, `soft_select`, `hard_select`,
 `weighted_sum`, `weighted_average`, `condition_weighted`,
-`soft_clip`, `hard_clip`,
+`soft_clip`, `hard_clip`, `interval`, `finite`, `product_space`,
+`measurable_map`, `contract_impls`, `parameter_space`, `field_space`,
+`trajectory_space`, `expected`, `variance`, `quantile`, `cvar`,
+`pr_above`, `entropy`,
 `sigmoid`, plus the distribution-
 family names enumerated in §27. The stdlib universal namespace
 reserves `pi`, `e`, and the parametric family `integer<N: val>`
