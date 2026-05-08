@@ -624,12 +624,11 @@ type SperryInstant {
 // - Bind forcing as fixed values or environmental series for each instant.
 // - Bind trait constants, vulnerability parameters, thermal response constants,
 //   hydraulic cutoff fraction, and gas-exchange constants from measurements.
-// - Open design note: this mock needs globally verified continuous extrema
-//   over [Pcrit, Ps]. Amax is the maximum gross assimilation over the full
-//   hydraulic curve; Pc is the attainable state maximizing beta - theta under
-//   the Gmax conductance limit. Existing finite selector syntax does not
+// - This mock needs std::optimality claims for globally verified continuous
+//   extrema over [Pcrit, Ps]. Amax is the maximum gross assimilation over the
+//   full hydraulic curve; Pc is the attainable state maximizing beta - theta
+//   under the Gmax conductance limit. Existing finite selector syntax does not
 //   represent this, and derivative stationarity alone is not enough because
-//   boundary optima, plateaus, and local extrema are possible. The workflow
-//   must currently provide PcAtAmax and Pc plus evidence out of band. The
-//   canonical API for that evidence is an open spec item, not a source syntax
-//   commitment made by this mock.
+//   boundary optima, plateaus, and local extrema are possible. See spec §15.7
+//   for the OptimalitySite / OptimalityObligation design; this mock has not
+//   yet been rewritten to use the new claim surface.

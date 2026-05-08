@@ -617,7 +617,8 @@ type PotkayTree<P: Photosynthesis> {
         )
 }
 
-// A GOH workflow resolves gas.g_c with bind(path, Controller(...)) or with an
-// optimizer over optimization.total_growth_objective. Instantaneous,
-// steady-state, and transient choices determine how eta, eta_rate, and the
-// marginal conditions are bound or constrained for a particular run.
+// A GOH workflow may resolve gas.g_c with bind(path, Controller(...)) or with
+// an optimizer over optimization.total_growth_objective. A source-level claim
+// that a policy is pointwise, steady-state, stationary, or horizon-optimal
+// should use std::optimality (§15.7); a controller binding by itself supplies
+// behavior, not optimality evidence.
