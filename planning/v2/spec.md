@@ -3303,20 +3303,18 @@ differentiable maps whose closure contracts do not otherwise match.
 
 #### 13.1 Aleatoric and Epistemic Uncertainty
 
-**Summary.** Same `~` surface, two kinds of uncertainty
-classified by graph position plus workflow bindings. Aleatoric
-`~` applies to measured/observed quantities tethered to data
-via `observe` or to `~` inside temporal/event scope; realized
-via sampling, does not reduce with data. Epistemic `~` applies
-to unknown constants not observed per time-step; reduces via
-Bayesian update and participates in training. The classification
-is compiler-derived, not user-annotated.
+**Summary.** One `~` surface attaches distributional structure.
+Aleatoric / epistemic role is graph- and workflow-derived, may be
+set-valued in hierarchical models, and is never marked with a second
+source operator. Aleatoric treatment means realized variation;
+epistemic treatment means fixed-but-unknown uncertainty that can be
+reduced by conditioning, training, or inference.
 
-Two distinct sources of uncertainty. Same `~` surface; the
-compiler derives the classification from two static signals:
-whether the LHS e-class has observation data attached (workflow
-`observe`; §13.8) and where the `~` appears in the model
-structure.
+`~` states one source claim: the left-hand e-class carries the
+distributional structure on the right. It does not say "prior" and it
+does not say "noise." The compiler classifies each distributional site
+from graph position and workflow bindings such as `Prior`,
+`ProcessPrior`, and probabilistic `observe` (§13.8, §24).
 
 - **Aleatoric** — world-randomness. The quantity genuinely
   fluctuates across realizations (measurement noise,
@@ -3334,13 +3332,44 @@ structure.
   (§24), which attaches a distributional fact to the e-class at
   training or inference time.
 
-The classification is compiler-derived, not user-annotated.
-The user writes `~` uniformly; the compiler inspects graph
-position plus workflow bindings to assign aleatoric vs
-epistemic. SCC classification (§20) threads the two: aleatoric
-variables enter the stochastic SCC class; epistemic latents
-enter the training class. The same `~` operator, routed
-differently based on derived classification.
+Classification is compiler-derived, not user-annotated. The user writes
+`~` uniformly; the compiler inspects graph position plus workflow
+bindings to assign aleatoric, epistemic, or both. SCC classification
+(§20) threads the distinction: aleatoric variables enter stochastic SCCs
+and epistemic latents enter training / inference SCCs. The same
+distributional site may participate in both roles.
+
+Example:
+
+```myco
+mu_pop ~ Normal(0, 1)
+sigma_pop ~ HalfNormal(1)
+theta[i] ~ Normal(mu_pop, sigma_pop)
+y[i, j] ~ Normal(theta[i], sigma_obs)
+```
+
+`theta[i]` is population variation across `i`, and it may also be a
+latent value inferred from downstream observations. A forward-simulation
+workflow and an inference workflow can treat the same source site
+differently without editing the `.myco` file.
+
+**Inspection and conflicts.** `hypha explain` must report, for every
+distributional site:
+
+- the attached distributional claim and source / workflow provenance;
+- classified kind set (`aleatoric`, `epistemic`, or both) and the graph
+  / workflow signals that drove it;
+- relevant `Prior`, `ProcessPrior`, and `observe` bindings;
+- Tier A/B/C routing and the capability contracts that enabled or
+  blocked closed-form handling; and
+- SDE convention status, including `convention_irrelevant` proof
+  citation when the convention is omitted (§13.4).
+
+A workflow `Prior(D)` may supply distributional structure for a path or
+refine a compatible source `~` claim. It may not silently contradict a
+source `~` attachment. Direct contradictions between source
+distributional structure and workflow distributional bindings are
+workflow-composition errors.
 
 #### 13.2 Tier A / B / C Dispatch
 
@@ -3552,18 +3581,28 @@ projections are deterministic reads from that root; the joint family
 owns dependence. Record syntax is the only destructuring sugar:
 there is no tuple destructuring and no positional index access.
 
+Separate field-level `~` statements create separate distributional
+attachments unless they share a visible structured joint root. The
+compiler never implicitly factors a record-level distribution into
+independent field distributions and never implicitly joins adjacent
+field-level `~` statements into one joint distribution.
+
 #### 13.8 Observation Injection and Likelihood Back-Propagation
 
-**Summary.** Workflow `observe(path, data)` attaches observed data
-as a layer-2 envelope fact on the observed e-class (no equational
-merge with the data). Downstream samples condition on it; the
+**Summary.** Workflow `observe(path, data)` is probabilistic
+conditioning. It requires a compatible distributional attachment on the
+observed e-class and attaches observed data as a layer-2 envelope fact,
+with no equational merge. Downstream samples condition on it; the
 relevant `D.log_density(data, logp)` term adds to the SCC's training
-objective. Distinct from `identify`: observation narrows the
-distribution, not the value.
+objective. Deterministic residual targets use `fit_to`, not `observe`
+(§24.1).
 
-`observe` is a workflow verb, not `.myco` source syntax. When a
-workflow observes a path whose e-class carries `x ~ D`, the compiler
-uses the following mechanism:
+`observe` is a workflow verb, not `.myco` source syntax. It requires the
+target e-class to carry compatible distributional structure from source
+`~`, `Prior`, `ProcessPrior`, or another explicit distributional
+workflow source. If no compatible distributional structure is present,
+workflow composition fails. When a workflow observes a path whose
+e-class carries `x ~ D`, the compiler uses the following mechanism:
 
 1. The observed value becomes an envelope fact on the e-class
    of the observed quantity (layer 2 of the three-layer split; §16). The e-class
@@ -3580,19 +3619,27 @@ narrows the distribution, not the value. The same x elsewhere
 in the model stays stochastic — the observation is information,
 not an equation.
 
+A deterministic model-output target is a different workflow claim. Use
+`fit_to(path, data)` (§24.1) to expose residual-style objective terms for
+a deterministic path. A path / e-class cannot receive both
+probabilistic `observe` and deterministic `fit_to` in the same workflow.
+If a stochastic model should be trained with residual-style objectives,
+that is an inference-recipe choice over the distributional site, not a
+second target binding on the same path.
+
 #### 13.9 Observed Samples as Envelope Facts
 
-**Summary.** `observe` attaches layer-2 metadata, not a new merge
-source. The eight sources in §17 remain eight; layer-1 equational
-core is untouched. Observations compose with other envelope facts
-(refinement bounds, capability advertisements, tolerance envelopes)
-without equational conflict.
+**Summary.** Probabilistic `observe` attaches layer-2 metadata, not a
+new merge source. The eight sources in §17 remain eight; layer-1
+equational core is untouched. Observations compose with other envelope
+facts (refinement bounds, capability advertisements, tolerance
+envelopes) without equational conflict.
 
-`observe` attaches layer-2 distributional metadata; it does
-not introduce a new e-graph merge source. The envelope fact
-says "this e-class has observed data attached"; it narrows
-the distribution and drives likelihood contribution (§13.8),
-but the equational core (layer 1) is unchanged.
+`observe` attaches layer-2 distributional metadata; it does not
+introduce a new e-graph merge source. The envelope fact says "this
+e-class has observed data attached"; it narrows the distribution and
+drives likelihood contribution (§13.8), but the equational core (layer
+1) is unchanged.
 
 Consequence: observations compose with other envelope facts
 (refinement bounds, capability advertisements, tolerance
@@ -3609,6 +3656,10 @@ and the probabilistic `observe` verb share the colloquial name
 collapses an e-class with a literal (layer 1); `observe`
 attaches a distributional fact (layer 2). The distinction is
 by layer, not by spelling.
+
+Deterministic `fit_to` targets also avoid layer-1 merges. They attach
+workflow objective evidence and create residual-target terms, not
+probabilistic likelihoods and not equalities.
 
 #### 13.10 Tier 2 PPL Lock
 
@@ -3792,7 +3843,8 @@ workflow extraction policy decides whether the candidate is admissible.
 returns named training-objective components, not a scalar. Fields cover
 the site's training sources:
 
-- `data_fit` — likelihood / observation mismatch terms.
+- `data_fit` — probabilistic likelihood terms from `observe` and
+  deterministic residual-target terms from `fit_to`.
 - `constraint_violation` — projection/penalty terms from
   `constraint` blocks (§8.1) not discharged at compile time.
 - `regularization` — prior log-densities on learned parameters.
@@ -5875,8 +5927,8 @@ Representative result fields:
   `inconsistent`, or `unresolved`.
 - `value` — available only when the expression is ground under the
   current workflow binding.
-- `depends_on` — source paths, topology paths, observations, and
-  relevant run-config fields.
+- `depends_on` — source paths, topology paths, observations, fit
+  targets, and relevant run-config fields.
 - `envelope` — bounds, distributional facts, tolerances, capability
   facts, and provenance.
 - `regime_boundaries` — any boundary records affecting the path,
@@ -5938,8 +5990,8 @@ two error tiers, and catalog-backed paths.
 execution. The compiler does not auto-emit projection or solver
 selection; those are workflow choices (§0.1 projection-free
 compiler). All materialized values (physical constants, fit
-parameters, data series, initial conditions, topology, observations)
-cross this boundary.
+parameters, data series, initial conditions, topology, observations,
+fit targets) cross this boundary.
 
 **Dumb-data Python layer.** Python never sees `.myco` types as
 Python classes. The compiled artifact exposes a node catalog (path,
@@ -6046,8 +6098,8 @@ One `.myco` compiles once to a plan; many workflows bind the
 same plan under different source and evidence configurations.
 
 - **Plan.** Compile emits a plan parameterized by its binding
-  surface: which sources, topology, observations, and run-config
-  fields the plan accepts.
+  surface: which sources, topology, observations, fit targets, and
+  run-config fields the plan accepts.
 - **Instantiation.** Each workflow supplies concrete values
   for the parameterized surface via §24. The compiled
   artifact is shared across workflows; binding is cheap.
@@ -6155,8 +6207,9 @@ bind, observe, query, configure, or diagnose. A catalog entry carries:
   runtime-bounded axes, dynamic-keyed axes, matrix facts, and shape
   expression provenance.
 - **Binding roles and facets.** Whether the slot accepts source
-  values, initial values, observations, topology, process priors,
-  controller outputs, or output queries. Facets such as
+  values, initial values, observations, deterministic fit targets,
+  topology, process priors, controller outputs, or output queries.
+  Facets such as
   `path.initial` are catalog entries or `FacetPath`s, not ad hoc
   string suffixes.
 - **Contracts and refinements.** Contracts, refinement facts,
@@ -6184,12 +6237,13 @@ workflow.bind(psi, Series(df, column="psi", unit="MPa",
                           index=["leaf_id", "time"]))
 ```
 
-`FacetPath` addresses a bindable or observable facet of a node:
+`FacetPath` addresses a bindable, observable, or targetable facet of a
+node:
 
 ```python
 height = cat.path("leaf.height")
 workflow.bind(height.facet("initial"), Constant(0.02, unit="m"))
-workflow.observe(height, data=height_df, noise=Normal(sigma=obs_sd))
+workflow.fit_to(height, data=height_df)
 ```
 
 A `Selector` is a workflow-only query over catalog metadata, used for
@@ -6283,11 +6337,11 @@ backend lowering.
 
 ### 24. Workflow Source Model
 
-**Summary.** The workflow-composition surface has three binding
-verbs: `bind(path, source)`, `bind_topology(path, geometry)`, and
-`observe(path, data)`. Fixed values, time series, trainable
-parameters, priors, controllers, and process priors are source objects
-passed to `bind`, not separate verbs. Run mode
+**Summary.** The workflow-composition surface has four binding verbs:
+`bind(path, source)`, `bind_topology(path, geometry)`,
+`observe(path, data)`, and `fit_to(path, data)`. Fixed values, time
+series, trainable parameters, priors, controllers, and process priors
+are source objects passed to `bind`, not separate verbs. Run mode
 decides how sources participate in execution, training, or PPL.
 
 `.myco` states world claims. Workflow composition materializes those
@@ -6295,11 +6349,12 @@ claims for a particular experiment by attaching sources and evidence
 to `NodePath` / `FacetPath` handles resolved through the compiled
 catalog (§23.5).
 
-#### 24.1 The Three Binding Verbs
+#### 24.1 The Four Binding Verbs
 
 **Summary.** `bind` attaches a source object to a node path,
-`bind_topology` materializes geometry, and `observe` attaches
-evidence. Orchestration verbs such as `load`, `spawn`, `run`,
+`bind_topology` materializes geometry, `observe` attaches
+probabilistic evidence, and `fit_to` attaches deterministic residual
+targets. Orchestration verbs such as `load`, `spawn`, `run`,
 `checkpoint`, and output queries are workflow-library operations, not
 model bindings.
 
@@ -6309,24 +6364,39 @@ model bindings.
   contracts.
 - **`bind_topology(path, geometry)`.** Supplies concrete topology or
   discretization data for a declared geometry (§11).
-- **`observe(path, data)`.** Attaches evidence to a catalog-resolved
-  path as layer-2 envelope metadata (§13.8, §13.9). It does not assert
-  equality with the data unless the `.myco` model explicitly states a
-  hard observation model.
+- **`observe(path, data)`.** Attaches probabilistic evidence to a
+  catalog-resolved path as layer-2 envelope metadata (§13.8, §13.9).
+  Requires compatible distributional structure on the target e-class
+  from source `~` or an explicit workflow distributional source. It does
+  not assert equality with the data.
+- **`fit_to(path, data)`.** Attaches deterministic residual-target
+  evidence to a catalog-resolved path. Requires that the target e-class
+  not carry a distributional attachment in the current workflow. It
+  requires explicit data/path shape alignment through catalog axes and
+  exposes objective terms for workflow training / calibration without
+  creating a likelihood and without asserting equality.
 
-All three verbs resolve their path arguments through the catalog.
+All four verbs resolve their path arguments through the catalog.
 Bulk surfaces may accept `Selector`s only when their fanout behavior
 is explicit and every selected entry is validated independently.
+
+`observe` and `fit_to` are mutually exclusive on the same target
+e-class in one workflow. A path with distributional structure uses
+`observe` and inference recipes; a deterministic path uses `fit_to`
+when the workflow wants residual-style fitting. A stochastic model that
+uses MSE-like training does so through an explicit inference recipe over
+the distributional site, not by adding `fit_to` to the same path.
 
 The verbs fire at workflow composition. Bind-time type checking
 validates shape, dtype, units, path existence, contract satisfaction,
 N-max ceilings, existence-domain compatibility, and backend
 capability requirements before the run starts.
 
-Workflow binding is the only path by which source objects become
-Layer-2 envelope facts or Layer-3 provider records (§16, §17.1 source
-2). The verbs do not introduce `.myco` syntax; they materialize the
-compiled plan's parameterized boundary.
+Workflow binding is the only path by which source objects and workflow
+evidence bindings become Layer-2 envelope facts, Layer-3 provider
+records, or residual-target records (§16, §17.1 source 2). The verbs do
+not introduce `.myco` syntax; they materialize the compiled plan's
+parameterized boundary.
 
 #### 24.2 Source Objects
 
@@ -6438,9 +6508,10 @@ learnable weights). Gradient semantics:
   at workflow composition. A workflow may bind the same trained
   controller later with `trainable=False` to freeze it.
 - **Backward pass.** Objective gradients from workflow observations
-  (§13.8) flow through the model graph to the controller's output,
-  into the controller's parameters, via the backend's AD facility
-  (§31). This requires the controller's contract to advertise
+  (§13.8) or deterministic fit targets (§24.1) flow through the model
+  graph to the controller's output, into the controller's parameters,
+  via the backend's AD facility (§31). This requires the controller's
+  contract to advertise
   `Differentiable` where gradients must pass, and requires the
   selected backend to advertise `opaque_callable_runtime`,
   `opaque_callable_ad`, and the relevant runtime AD profile.
@@ -6476,13 +6547,15 @@ Runtime checks and run records:
   axes must use an explicit missing / existence policy (`error`,
   `masked`, `ragged`, or `nan` where legal) so inactive coordinates are
   represented deliberately.
-- **Observation and optimality.** Observing a controller output uses
-  ordinary `observe(path, data)` Layer-2 evidence (§13.8); it does not
-  merge the output with the observation. A controller binding produces
-  values, not optimality evidence. If a trainable controller covers a
-  choice slot with an active `OptimalitySite`, the interaction policy is
-  the §25 `Trainable` / optimality policy (`strict`,
-  `train_then_verify`, `relaxed_training`, or `diagnostic_only`).
+- **Observation, fitting, and optimality.** Probabilistic observation of
+  a controller output uses `observe(path, data)` only when the output
+  path has compatible distributional structure (§13.8). Deterministic
+  residual fitting uses `fit_to(path, data)` (§24.1). Neither verb
+  merges the output with the data. A controller binding produces values,
+  not optimality evidence. If a trainable controller covers a choice slot
+  with an active `OptimalitySite`, the interaction policy is the §25
+  `Trainable` / optimality policy (`strict`, `train_then_verify`,
+  `relaxed_training`, or `diagnostic_only`).
 - **Provenance.** Reproducible run locks record each resolved
   controller's id, callable identity or hash, weight artifact if any,
   backend / device, input and output contracts, scope, gradient policy,
@@ -6899,8 +6972,10 @@ an objective, likelihood, projection, exact-conditioning, or
 provider-check obligation must be consumed by an explicit workflow
 policy before composition succeeds. Valid handling includes:
 
-- observation noise / likelihood, for example
+- probabilistic observation / likelihood, for example
   `observe(path, data, noise=Normal(...))`;
+- deterministic residual-target binding, for example
+  `fit_to(path, data)`;
 - exact observation or exact conditioning, where the workflow chooses
   a hard evidence policy;
 - objective aggregation through `objective_terms(residual)`,
@@ -6916,14 +6991,14 @@ If a workflow binds mismatched data or activates overconstrained physics
 without selecting one of these paths, workflow composition fails with an
 unhandled-residual diagnostic. The compiler does not silently invent
 least-squares, measurement noise, penalty weights, projection, or a
-gradient stop. In ordinary simulation mode, observations are inert
-unless the workflow asks to condition, fit, infer, or score against
-them.
+gradient stop. In ordinary simulation mode, observations and fit targets
+are inert unless the workflow asks to condition, fit, infer, or score
+against them.
 
 **What the compiler does not auto-emit.** The compiler does not pick a
 projection flavor, aggregate objective terms, update dual variables,
-choose annealing / penalty schedules, or convert observations into a
-least-squares objective. Each of those is a workflow policy.
+choose annealing / penalty schedules, or convert observations into
+deterministic fit targets. Each of those is a workflow policy.
 
 **Constraint discharge regimes.** Constraints discharge in three
 ways:
@@ -9266,13 +9341,13 @@ capabilities.
 **Summary.** Part VI enumerates remaining open design / catalog /
 tooling items and the resolved blocker ledger carried forward
 explicitly so they are not silently recommitted during consolidation.
-Open items now cluster around stochastic syntax review, stdlib
-inventory, package / workflow API details, exact-numeric portability,
-selected geometry polish, Tier 2 / Tier 3 family catalogs, and
-implementation / cost-calibration work. The B-tagged blockers, matrix
-heterogeneous-unit resolution, backend abstraction, the type-graph /
-e-graph bridge, Complex numeric semantics, O4 carryovers, controller
-affordances, and cost-field cluster are closed.
+Open items now cluster around stdlib inventory, package / workflow API
+details, exact-numeric portability, selected geometry polish, Tier 2 /
+Tier 3 family catalogs, and implementation / cost-calibration work. The
+B-tagged blockers, matrix heterogeneous-unit resolution, backend
+abstraction, the type-graph / e-graph bridge, Complex numeric
+semantics, O4 carryovers, controller affordances, stochastic `~`
+spelling review, and cost-field cluster are closed.
 
 Carried forward explicitly so they are not silently committed during
 consolidation.
@@ -9399,11 +9474,12 @@ lowering details after the core sum-type lock. Chunks 05, 06, 07, 08,
 **Summary.** Catalog of smaller remaining items: source-level retraction
 if ever admitted, exact-numeric GPU portability, vector / tensor seam
 transforms, rational-denominator termination beyond the rewrite cap,
-stochastic `~` spelling review, stdlib inventory, distribution /
-stochastic-process catalog polish, backend cost-calibration interfaces,
-workflow inference UX, package dependencies, and event-scheduling policy
-API. Controller-interface affordances are resolved by §24.2, §24.3, and
-§24.7. Continuous extrema / verified optimization sites are resolved by
+stdlib inventory, distribution / stochastic-process catalog polish,
+backend cost-calibration interfaces, workflow inference UX, package
+dependencies, and event-scheduling policy API. Controller-interface
+affordances are resolved by §24.2, §24.3, and §24.7. Stochastic `~`
+spelling is resolved by §13.1 and the workflow evidence split in §24.1.
+Continuous extrema / verified optimization sites are resolved by
 `std::optimality` and `OptimalitySite` (§15.7). Obligation retraction is
 resolved by the `ObligationSite` /
 `fulfills` ledger (§8.11, §10.5).
@@ -9504,19 +9580,15 @@ A/B/C distribution machinery may simplify or validate these projections
 when capability facts permit; empirical or opaque projections remain
 evidence-bearing workflow / provider records.
 
-**Aleatoric / epistemic `~` spelling review.** §13.1 currently uses one
-`~` surface for both aleatoric and epistemic distributional claims, with
-the compiler deriving the kind from graph position and workflow
-bindings. This remains coherent, but should get one explicit UX /
-syntax pass before canonicalization: does using the same character for
-world-randomness and parameter uncertainty make the source too easy to
-misread, and should Myco instead use distinct spellings such as `~` /
-`~~`, relation-like stdlib forms, or another explicit source surface?
-Any replacement must preserve the existing semantic split: `~`-style
-claims remain Layer-2 distributional metadata rather than e-graph
-merges, process-valued uncertainty is still epistemic or aleatoric with
-process shape (§28.8), and the workflow binding story for `Prior`,
-`observe`, and PPL routing remains explicit.
+**Aleatoric / epistemic `~` spelling resolved.** §13.1 keeps one `~`
+surface for distributional structure. Aleatoric / epistemic role is
+derived from graph position and workflow bindings, may be set-valued in
+hierarchical models, and is surfaced by `hypha explain` rather than by
+source-level kind annotations. Probabilistic evidence uses
+`observe(path, data)` and requires compatible distributional structure;
+deterministic residual targets use `fit_to(path, data)` (§24.1). This
+keeps source distributional claims separate from workflow evidence
+roles while making workflow intent readable at the call site.
 
 **Controller-interface affordances resolved.** §24.2 defines
 axis-aware controller scope (`PerInstance`, `OverAxes`, `Global`), the
@@ -10320,15 +10392,20 @@ checking; directional because names cannot be re-inferred. LOCKED.
   explicit `convert` or stdlib-declared operation; same underlying unit
   `rad` is not enough to infer semantic equivalence.
 
-**V. Observation injection.** Ground-truth data pinning (§13.9).
+**V. Observation and target injection.** Workflow evidence bindings
+(§13.9, §24.1).
 LOCKED.
 
 - V1. `observe(path, data)` attaches observed data as a layer-2
-  envelope fact on `path`'s e-class (§13.8, §13.9);
+  envelope fact on a distributional e-class (§13.8, §13.9);
   `log_density(data, logp)` contributes to the training objective
   (§25). Not an equational merge: `path` is not rewritten to `data`
   in layer 1, and the same `path` elsewhere remains stochastic. Data
   is never rewritten by inferred constraints.
+- V2. `fit_to(path, data)` attaches deterministic residual-target
+  evidence to a non-distributional e-class (§24.1). It exposes
+  objective terms for workflow training / calibration. It is not a
+  likelihood and not an equational merge.
 
 **W. Obligation fulfillment.** Ledger selection, not rewrite.
 RESOLVED (O4.1 resolved by §8.11, §10.5, §16).
