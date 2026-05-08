@@ -124,6 +124,12 @@ These are the design commitments that appear stable across review:
     consumed: sample, MAP, marginalize, propagate posterior, or another
     named policy.
 
+The ergonomic rule behind these invariants is "explicit at the boundary,
+concise inside the boundary." A lexical block may name a temporal domain
+or correspondence once and allow shorter forms inside that block, but it
+must not infer that context from imports, shape, unit, name, or the
+current number of candidates in scope.
+
 ---
 
 ## 3. Core Ontology
@@ -195,6 +201,20 @@ domain ExperimentB: ContinuousTime<Second> as t_b
 
 `ExperimentA` and `ExperimentB` are not the same domain.
 
+Importing an existing domain identity from another spore preserves that
+identity. Importing a constructor does not. This distinction is
+load-bearing for reusable code:
+
+```myco
+use std::time::ContinuousTime       // imports a constructor
+use shared_clock::ExperimentClock   // imports a domain identity
+
+domain LocalClock: ContinuousTime<Second> as t
+```
+
+`LocalClock` is new. `shared_clock::ExperimentClock` remains the same
+domain identity it had in its defining spore.
+
 ### 3.3 Spatial Domains
 
 Spatial domains are domains with geometry, adjacency, measure, topology,
@@ -263,6 +283,13 @@ entities or other domains:
 Hidden generation is not allowed. These require declared domain family
 sites.
 
+Module-scope domains are module-owned identities. Generic domain
+parameters are caller-owned identities. Per-entity or per-instance loci
+should not be created by putting a `domain` declaration inside a
+reusable type body unless the semantics of that declaration are
+explicitly specified. In most cases, the right surface is a domain
+family or a total-space composition.
+
 Current preferred shape:
 
 ```myco
@@ -320,6 +347,13 @@ maps only if the constructor guarantees them.
 
 There is no universal assumption that every composition has cartesian
 projections.
+
+Emitted maps are named catalog objects. A product constructor can emit
+`Product.proj_left` and `Product.proj_right`; a bundle constructor can
+emit base and fiber maps; a quotient constructor can emit a quotient
+map. These emitted maps may be compiler-proven for the constructor, but
+they are still visible. The compiler should not invent additional
+projections because a composition "looks product-like."
 
 ### 3.7 Correspondence
 
@@ -397,6 +431,12 @@ couple family LeafDeformation over Leaves {
 Exact syntax for indexing family domains is open. The important
 architectural rule is stable: coupling family instances are nominal and
 explicit, not generated invisibly.
+
+A module-scope correspondence cannot capture instance-local state by
+accident. If a correspondence map depends on fields of a particular
+leaf, sensor, robot, site, or other entity, the correspondence must be a
+family indexed by that entity or an associated correspondence of a
+contract/type context that makes the instance identity explicit.
 
 ### 3.9 Observation Operator
 
@@ -599,6 +639,12 @@ RealizationEvidence
   validation records
   invalidation dependencies
 ```
+
+Posterior or learned realizations need a use policy before they are
+consumed as if they were deterministic. Examples include `sample`,
+`MAP`, `marginalize`, `propagate_posterior`, and domain-specific
+posterior query modes. The policy belongs to workflow/inference
+configuration and is recorded in the run lock.
 
 ---
 
@@ -821,15 +867,35 @@ Current recommendation:
 
 - `temporal over T` provides the default temporal domain for `d` and
   `step` within the block.
-- event-family declarations inside the block may inherit `T`, but this
-  needs to be locked explicitly.
+- event-family declarations inside the block may inherit `T` if the
+  eventual syntax chooses that lexical rule.
 - `integrate`, `observe`, `fit_to`, cross-domain reads, and
   correspondence operations should still name their domains or
   correspondences explicitly unless a separate lexical scope does so.
 
 This is an open syntax rule, not yet canonical.
 
-### 6.4 Partial and Branching Time
+### 6.4 `over` as Domain Anchor
+
+The keyword `over` should have one conceptual meaning: it anchors a
+declaration, operator, or block to a domain.
+
+Known positions:
+
+- field support: `field: Field<T> over S`;
+- temporal context: `temporal over T { ... }`;
+- event-family home time: `event family E over T { ... }`;
+- explicit derivative/update: `d(x, over = T)`;
+- domain-sensitive operators: `integrate(expr, over = D)`;
+- observation/operator declarations where a target or data locus is
+  domain-indexed.
+
+`over` should not mean "infer whatever domain is convenient." It names
+the domain anchor for the syntactic form where it appears. If a syntax
+position can see more than one compatible domain, the source must name
+the intended one.
+
+### 6.5 Partial and Branching Time
 
 `TemporalDomain` alone authorizes nothing. Operations require capability
 contracts.
@@ -896,6 +962,18 @@ Simple scalar read:
 ```myco
 temperature @ ModelTime via SensorToModelTime
 ```
+
+Scoped shorthand is allowed only when the scope names the
+correspondence explicitly:
+
+```myco
+using correspondence SensorToModelTime {
+    temperature @ ModelTime
+}
+```
+
+This is not ambient inference. Moving a line outside the block should
+make the missing correspondence visible again.
 
 Explicit operation for non-scalar transport:
 
@@ -1140,6 +1218,12 @@ This is essential for:
 - PMU sensors;
 - market feeds;
 - epidemiological reports.
+
+Observation operators should satisfy ordinary contracts, not introduce a
+parallel mechanism. A stdlib contract such as
+`ObservationOperator<ModelLocus, DataLocus, Value>` can require the
+couplings, aggregation relation, noise structure, missingness behavior,
+and evidence shape that a workflow `observe(...)` call consumes.
 
 ### 9.3 Workflow Shape
 
@@ -1467,6 +1551,7 @@ Questions:
 - whether associated compositions are domains, members, or aliases;
 - satisfaction checking;
 - coherence rules;
+- elaboration order when a body references associated domains;
 - diagnostics;
 - how generic bounds over associated domains compose.
 
@@ -1611,6 +1696,44 @@ Questions:
 - how providers advertise capabilities;
 - how user spores define new capabilities safely.
 
+Candidate domain capabilities include `TotalOrder`, `PartialOrder`,
+`BranchOrder`, `DurationMeasure<U>`, `HasMetric`, `HasMeasure`,
+`HasBoundary`, `HasAdjacency`, `StaticTopology`, `DynamicTopology`,
+`SupportsDerivative`, `SupportsStep`, `SupportsDelay`,
+`SupportsHazard`, `SupportsFrontierSnapshot`, `SupportsBranchSnapshot`,
+`SupportsLaplacian`, and `SupportsIntegration`.
+
+Candidate correspondence capabilities include `SupportsRead`,
+`SupportsPullback`, `SupportsPushforward`, `SupportsSnapshot`,
+`SupportsInvert`, `Smooth(k)`, `UnitConsistent`, `MeasurePreserving`,
+`OrderPreserving`, `Causal`, `Invertible`, `OrientationConsistent`, and
+`SnapshotConsistent`.
+
+### 14.15 Existing Surface Reconciliation
+
+Questions:
+
+- how the old `Domain<G>` surface is retired or reframed;
+- how `bind_topology` relates to general `bind(cat.domain(...), ...)`;
+- how `ProcessPrior<I, V>` relates to domain realizations and
+  posterior domains;
+- how `identify` relates to `identify domain`;
+- how `convert` differs from correspondence;
+- how existing Layer-3 provider sites generalize without duplication.
+
+### 14.16 Latent, Learned, and Structured Loci
+
+Questions:
+
+- when pseudotime is a declared domain, a learned correspondence, or a
+  workflow analysis axis;
+- when a coalescent/transmission tree is a domain realization versus a
+  structured stochastic value;
+- how posterior-use policy is declared for latent domains;
+- whether branch structures are domains, occurrence structures,
+  process-prior structures, or context-dependent combinations;
+- how to avoid using `Domain` as a catch-all for every latent object.
+
 ---
 
 ## 15. Anti-Spec Rows To Add Or Revise
@@ -1634,9 +1757,13 @@ Likely additions:
 | Python-declared observation semantics | Workflow data bound to declared observation operators | Python should not declare model structure |
 | Hidden per-entity domains | Domain families or total-space bundles | Runtime loci must be declared |
 | Hidden per-entity couplings | Coupling families | Instance-specific correspondences need identities |
+| Module-scope correspondence capturing instance fields | Coupling family or associated correspondence | Instance-local state needs an explicit identity parameter |
 | Separate `domainreq` language | Ordinary contracts and associated members | Avoid parallel type system |
 | Workflow axes as source domains by default | Catalog workflow axes; explicit source domains only when modeled | Replicates and sweeps are not world mechanisms |
 | Silent deterministic use of posterior domains | Explicit posterior-use policy | Uncertain loci need explicit consumption semantics |
+| Ambient lexical inference from imports or unique candidates | Explicit lexical scopes that name the domain or correspondence | Concision should be scoped, not ambient |
+| Casual cartesian `S x T` as hidden product assumption | Named composition constructor with emitted maps | Product, bundle, quotient, and tree-indexed loci differ |
+| `over` inheriting unrelated temporal/domain context | Domain anchor named at each relevant syntax position | Avoid recreating hidden global context under a nicer keyword |
 
 Existing rows to revise:
 
