@@ -1773,9 +1773,10 @@ records. It must not be reported as exact Y6.
 
 **Summary.** A Y5 policy is a parameterized relation satisfying the
 closure-policy interface: candidate values plus hyperparameters in,
-one explicit output slot. The compiler inlines the relation body into
-the extraction pipeline, so Y5 policies participate in differentiation
-and e-graph reasoning like other parameterized relations.
+one explicit output slot, plus mandatory closure laws. The compiler
+inlines the relation body into the extraction pipeline, so Y5 policies
+participate in differentiation and e-graph reasoning like other
+parameterized relations.
 
 A Y5 policy is an ordinary parameterized relation whose inputs are
 the candidate values (one per competing claim) plus user-supplied
@@ -1785,6 +1786,54 @@ it per residual block via the same mechanism as Y1-Y6. The compiler
 inlines the relation body into the extraction pipeline; Y5 policies
 participate in differentiation and e-graph reasoning like other
 parameterized relations.
+
+**Y5 contract.** A user-defined closure policy must satisfy three
+mandatory laws:
+
+- **Consensus.** If all candidates equal `x`, the output equals `x`.
+  A closure policy must respect agreement rather than shifting a
+  unanimous answer.
+- **Permutation invariance.** The output must not depend on the
+  extractor's candidate iteration order. If a policy needs source
+  preference, reliability, or provenance, those inputs must be
+  explicit hyperparameters or candidate metadata rather than implicit
+  slot order.
+- **Unit homogeneity.** All candidates have the same type and unit,
+  and the output preserves that type and unit. The type system enforces
+  the rule; closure-policy diagnostics report violations at the Y5
+  site.
+
+Optional capabilities are advertised through ordinary capability
+contracts (§7.2). Useful examples include `ConvexHullContaining`
+(output lies in the convex hull of candidates where that notion is
+defined), `Differentiable` (training emission may propagate gradients
+through the combiner), and `Monotone` (candidate ordering is preserved
+for sensitivity diagnostics). Consumers that need one of these
+capabilities require the contract explicitly.
+
+Verification follows the same posture as parameterized conversion
+round-trip checks (§5.2): the compiler first tries structural
+recognition through stdlib atoms and capability contracts, then bounded
+counterexample search within refinement bounds. A Y5 declaration that
+cannot verify the mandatory laws is a compile error at the declaration
+site, before any workflow selects it.
+
+**World fusion vs. extraction selection.** If a modeler intends to
+claim that the actual value of a quantity is some function of multiple
+measurements, expressions, or estimates, they write an ordinary
+relation. Such a relation contributes equational structure to the world
+model: it is visible to the e-graph and participates in
+overdetermination analysis like every other relation.
+
+A Y5 closure policy has the opposite shape. It does not claim that the
+actual value is its combiner output. It commits the extractor to one
+representative when a residual block is redundant-consistent (§8.6)
+and the workflow selected this policy for that block. Different
+workflows may select different Y5 policies for the same source bundle;
+the source claims do not change. Diagnostics should warn when a Y5
+selection appears to be doing the work of a scientific fusion relation,
+but this warning is advisory unless the compiler can prove a stronger
+misuse.
 
 #### 8.9 Smoothing as a Model Claim
 
@@ -6379,7 +6428,9 @@ Representative fields:
   selection and budgets. Exact Y6 entries may set enumeration budgets
   and escalation behavior; guided subsystem search entries must set an
   explicit subsystem budget, acceptance criteria, and `on_unmet`
-  behavior (§8.7).
+  behavior (§8.7). Y5 entries name `.myco` parameterized relations
+  satisfying the Y5 contract (§8.8); opaque Python callables are not
+  closure-policy fulfillments.
 - `run.config.objective_policy`. Workflow-side scalarization of
   `objective_terms` across residuals and studies (§25).
 - `run.config.approximation_estimation`. Sampling parameters used to
@@ -9369,13 +9420,12 @@ a candidate value; it does not fulfill an `OptimalitySite` without
 separate evidence or an explicit relaxation ledger entry.
 
 **Y5 closure-policy placement review.** §8.8 currently locks Y5 custom
-closure policies as ordinary parameterized relations selected by the
-workflow. Before final canonicalization, review whether that is still
-the right world/workflow boundary: if a policy expresses a scientific
-claim over candidate values it belongs in `.myco`; if it is merely an
-extraction preference or compute budget it should be workflow
-configuration. The current text is coherent, but this is worth one
-explicit design pass because it sits close to the boundary.
+closure policies as `.myco` parameterized relations selected by the
+workflow. This placement is resolved: §8.8 adds the Y5 contract
+(consensus, permutation invariance, unit homogeneity), optional
+capability contracts, and the world-fusion vs. extraction-selection
+distinction. §24 requires Y5 workflow selections to name `.myco`
+relations rather than opaque Python callables.
 
 **Mode B resolved: per-instance heterogeneous contract binding.** Chunk 08
 pins three modes for pluggable behavior: Mode A (concrete type),
@@ -10096,8 +10146,8 @@ config.
   candidates by well-conditionedness. LOCKED (un-deferred 2026-04-20,
   closes O4.5).
 - Y5. User-defined custom policy: any parameterized relation taking
-  candidates plus hyperparameters and writing a forward output slot.
-  Extensibility surface. LOCKED.
+  candidates plus hyperparameters and writing a forward output slot,
+  subject to the Y5 contract (§8.8). Extensibility surface. LOCKED.
 - Y6. General exact `C(N,M)` enumeration for overconstrained blocks
   (`N > M+1`): planner enumerates all relevant maximal square
   subsystems after certified graph reductions; policy receives the
