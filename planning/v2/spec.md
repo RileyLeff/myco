@@ -6274,11 +6274,12 @@ Representative source objects:
 - **`Prior(distribution)`.** Epistemic distributional source used by
   inference/PPL modes without implying gradient training by name.
 - **`Controller(callable, reads, writes, input_contract, output_contract,
-  trainable=True)`.** External callable source. `reads` and `writes`
-  are path lists; contracts are plain Myco contracts (§7). The input
-  contract is also the visibility boundary: widening what the
-  callable may read requires widening the declared input contract.
-  No `.myco` keyword introduces a controller.
+  scope, trainable=True, gradient_stop=False)`.** External callable
+  source. `reads` and `writes` are path lists; contracts are plain Myco
+  contracts (§7). `scope` is required and declares how the callable is
+  invoked over catalog axes. The input contract is also the visibility
+  boundary: widening what the callable may read requires widening the
+  declared input contract. No `.myco` keyword introduces a controller.
 - **`ProcessPrior(index=..., value=..., law=...)`.** Workflow source
   for epistemic process priors over indexed `.myco` contracts. The
   binding names the index slots and value slots explicitly; the
@@ -6291,6 +6292,57 @@ Representative source objects:
 All source objects are dumb workflow data. They do not expose Myco
 types as Python classes and they do not create new source-language
 constructs.
+
+**Controller scope.** A controller binding declares one of three
+axis-aware invocation scopes:
+
+- **`PerInstance(axes=[...])`.** The runtime invokes the callable once
+  per active coordinate of the listed axes in each tick. A single-axis
+  convenience form may spell `axis=A`, but the canonical schema stores
+  `axes=[A]`.
+- **`OverAxes(axes=[...])`.** The runtime invokes the callable once per
+  tick with axis-shaped payloads over the listed axes.
+- **`Global()`.** The runtime invokes the callable once per tick with
+  no collection-axis payloads. `Global()` is a named intent, not user
+  spelling for `OverAxes([])`, even if the compiler may lower them
+  similarly.
+
+Axis compatibility is checked at workflow composition:
+
+- For `PerInstance(axes=As)`, every read path must have axes that are a
+  subset of `As`, or no collection axes. Subset reads broadcast across
+  the missing invocation axes; no-axis reads broadcast everywhere. Every
+  write path must have axes exactly `As`.
+- For `OverAxes(axes=As)`, every read or write path must have axes that
+  are a subset of `As`, or no collection axes.
+- For `Global()`, every read and write path must have no collection
+  axes.
+
+Reading across axes outside the declared scope is a workflow-
+composition error. If a controller needs a summary over another axis,
+the modeler writes an explicit `.myco` aggregation relation using
+ordinary stdlib aggregations (§12.1) and the controller reads that
+aggregate. Example: with `PerInstance(axes=[tree, leaf_patch])`, a
+`tree`-only read broadcasts across `leaf_patch`, and a no-axis weather
+read broadcasts to every invocation. A `soil_patch` read is invalid
+unless an explicit `.myco` relation maps soil-patch information into
+the tree / leaf-patch scope.
+
+Scope describes the shape of a single model step, not overall run
+cadence. In dynamic modules with temporal blocks or events, controllers
+are invoked at the SCC position determined by the dependency graph in
+each tick. In static modules, controllers are invoked once per run.
+Time step configuration remains a workflow binding such as
+`bind("config.dt", ...)` (§9.1).
+
+**Controller invocation invariant.** The runtime invokes a controller's
+callable with immutable value payloads at the declared `reads` paths
+and accepts immutable value payloads as outputs for the declared
+`writes` paths. The callable never receives a mutable handle into
+catalog state, the e-graph, the obligation ledger, the residual graph,
+or any compiler-internal data structure. Catalog state changes only at
+declared `writes` paths after the callable returns. Hidden writes are
+structurally impossible by construction.
 
 #### 24.3 Controller Gradient-Flow Semantics
 
@@ -6331,10 +6383,38 @@ learnable weights). Gradient semantics:
   controller boundary as a gradient stop. In that case the controller
   may influence downstream values, but its internal parameters are
   not learned in the current run and upstream gradient accounting
-  records the stop. Exact Python spelling is a workflow API detail;
-  the semantic requirement is explicitness.
+  records the stop. `gradient_stop=True` is the canonical semantic
+  flag; workflow libraries may wrap it ergonomically but must preserve
+  explicitness.
 - **Cross-run weight persistence.** Trained weights persist across
   runs that bind the same controller (§23.3).
+
+Runtime checks and run records:
+
+- **Output refinements.** Output contracts and path refinements are
+  runtime obligations on every controller invocation. A value that
+  violates the output type, unit, shape, contract, or refinement fails
+  the run with a diagnostic naming the offending path, value, contract,
+  and source controller.
+- **Existence domains.** Controller bindings obey the catalog
+  existence rules of §23.5. `PerInstance` controllers invoke only
+  active coordinates by default. `OverAxes` controllers over dynamic
+  axes must use an explicit missing / existence policy (`error`,
+  `masked`, `ragged`, or `nan` where legal) so inactive coordinates are
+  represented deliberately.
+- **Observation and optimality.** Observing a controller output uses
+  ordinary `observe(path, data)` Layer-2 evidence (§13.8); it does not
+  merge the output with the observation. A controller binding produces
+  values, not optimality evidence. If a trainable controller covers a
+  choice slot with an active `OptimalitySite`, the interaction policy is
+  the §25 `Trainable` / optimality policy (`strict`,
+  `train_then_verify`, `relaxed_training`, or `diagnostic_only`).
+- **Provenance.** Reproducible run locks record each resolved
+  controller's id, callable identity or hash, weight artifact if any,
+  backend / device, input and output contracts, scope, gradient policy,
+  serialization format, and training provenance such as dataset hash,
+  recipe hash, and source commit when supplied. This mirrors provider
+  artifact provenance (§37.1) and cross-study reuse metadata (§23.3).
 
 The controller is the seam where neural machinery attaches to the
 scientific model, but the seam is workflow-side: `.myco` sees only
@@ -6595,6 +6675,49 @@ strategy for preserving source semantics across a topology-changing
 regime boundary, not a model relaxation. The run's plan records the
 selected handler, required backend / device capabilities, rejected
 alternatives, and any explicitly authorized host or emulation route.
+
+#### 24.7 Controller Patterns and Anti-Patterns
+
+**Summary.** Controllers are workflow-side opaque callables with
+explicit catalog reads, writes, contracts, scope, and provenance. Myco
+does not add source-language syntax for neural architectures,
+embeddings, learned policies, taxonomic effects, or context injection;
+those are Python workflow patterns checked against the catalog.
+
+Common patterns are expressible without new `.myco` syntax:
+
+- **Feature modulation / FiLM-style conditioning.** The controller reads
+  the primary inputs plus the modulating context paths. The architecture
+  is internal to the Python callable; Myco validates the declared
+  `reads`, `writes`, contracts, scope, and gradient boundary.
+- **Categorical or taxonomic embeddings.** The controller reads enum-
+  typed or id-like catalog fields and embeds them internally. If the
+  output structure depends on a variant, the output contract uses
+  ordinary enum / tagged-record machinery (§3.10).
+- **Hierarchical context.** A `PerInstance` controller may read no-axis
+  or subset-axis context that broadcasts within the invocation scope. A
+  cross-axis summary must be written as an explicit `.myco` relation
+  first, then read as a catalog path.
+- **Population-aware controllers.** `OverAxes(axes=[...])` supplies
+  axis-shaped payloads to one callable invocation per tick. This is the
+  right shape for coupled solvers, attention over a population, or
+  global policy modules whose outputs remain indexed by declared axes.
+- **Learned policies and fixed heuristics.** Both are `Controller`
+  sources. `trainable=True` registers learnable parameters; `False`
+  freezes an opaque callable. Neither setting implies optimality
+  evidence (§15.7, §25).
+
+Anti-patterns are workflow-composition errors or diagnostics:
+
+- wildcard reads or writes;
+- implicit scope inferred from path shapes;
+- controller reads over axes outside the declared scope;
+- controller writes to paths outside the declared `writes`;
+- mutable catalog handles passed into the callable;
+- required gradients through a non-differentiable controller without an
+  explicit gradient stop;
+- controller binding offered as fulfillment of an `OptimalitySite`; and
+- `.myco` syntax for specific learned-architecture patterns.
 
 ### 25. Training Emission
 
@@ -9285,16 +9408,15 @@ Finite `argmax` remains a separate exact selector surface (§12.2).
 Derivative stationarity, finite grids, local optimizers, and controller
 contracts do not silently satisfy global continuous or horizon claims.
 
-**Controller-interface affordances in the Python layer.** General-
-system question: what hooks does Myco need to expose so workflows
-can cleanly implement patterns like taxonomic embeddings, context
-injection, per-category modulation, FiLM-style conditioning? Not
-FiLM specifically; the meta-question of which controller-binding
-surfaces belong in the language / stdlib vs which are workflow
-idioms the user builds on their own. The goal is to avoid baking
-project-specific patterns into the language while still exposing
-enough machinery that workflow authors can implement them cleanly
-against `Controller` sources (§24.2).
+**Controller-interface affordances resolved.** §24.2 defines
+axis-aware controller scope (`PerInstance`, `OverAxes`, `Global`), the
+read / write axis-compatibility rules, and the immutable value-payload
+invocation invariant. §24.3 covers output refinements, provenance,
+existence domains, and observation / optimality non-interaction.
+§24.7 documents patterns such as feature modulation, categorical
+embeddings, taxonomic effects, population-aware controllers, and
+learned policies as Python workflow idioms over ordinary `Controller`
+sources, not `.myco` syntax.
 
 **Tier 2 family-catalog polish.** The core mechanics are locked:
 `Distribution<S>` over sample types, visible `log_density`, curated
