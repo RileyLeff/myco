@@ -150,6 +150,14 @@ These are the design commitments that appear stable across review:
     equations, relation fulfillments, state variables, event effects, and
     correspondence-map fulfillments; they may contain ordinary SCCs.
 
+17. **Temporal Execution Is Coordinated Explicitly.**
+    Temporal domains define order and snapshot structure. Temporal lifts,
+    event families, delayed occurrence maps, adaptive root detection, and
+    output snapshots define source semantics over that structure. A
+    compiler-emitted temporal execution site coordinates compatible
+    realizations so workflow cannot accidentally assemble an incoherent
+    hidden scheduler.
+
 The ergonomic rule behind these invariants is "explicit at the boundary,
 concise inside the boundary." A lexical block may name a temporal domain
 or correspondence once and allow shorter forms inside that block, but it
@@ -196,13 +204,16 @@ SiteKind =
   DomainFamily
   DomainComposition
   DomainMap
+  SubLocus
   Correspondence
   CorrespondenceFamily
   TemporalLift
+  TemporalExecution
   EventFamily
   OccurrenceDomain
   ObservationOperator
   Realization
+  WorkflowAxis
 ```
 
 ### 3.1 Domain
@@ -460,6 +471,19 @@ rule is not: a type may refer to "its own" fiber only through an
 explicit family-instance context. Outside such a context, fields over all
 members should use the total-space domain.
 
+The preferred ergonomic surface can be sugar over the same contract:
+
+```myco
+type Leaf indexed by Leaves {
+    chlorophyll:
+        Field<Concentration> over LeafSurface[self]
+}
+```
+
+This form introduces `self` as a locator in the `Leaves` index domain
+for the type body. It does not create a hidden domain instance; it binds
+the entity-local view to the declared family site.
+
 Conceptual payload:
 
 ```text
@@ -474,6 +498,25 @@ DomainFamilySite
   emitted instance projection, if any
   entity/fiber binding contract, if any
 ```
+
+Family instance identity should be keyed explicitly:
+
+```text
+FamilyInstanceIdentityKey
+  family site id
+  index-domain identity
+  index entity identity
+
+EventCreatedFamilyInstanceIdentityKey
+  family site id
+  birth event occurrence identity
+  generated entity identity
+```
+
+Across runs, family-instance identity is comparable only when the index
+identity is comparable. For posterior or sampled event histories,
+generated family instances are draw-local unless a correspondence or
+posterior identity policy relates them.
 
 If the index domain is event-created or dynamically changing, the domain
 family inherits the same dynamic-topology phase. For example, a family
@@ -546,12 +589,43 @@ DomainMapSite is therefore not a semantic subtype of
 CorrespondenceSite, but both can satisfy shared operation contracts such
 as `SupportsRead`, `SupportsPullback`, or `SupportsPushforward`.
 
+DomainMapSites automatically emit capability facts for mathematically
+valid transports. For example, a product projection can emit exact scalar
+pullback/read capabilities and a zero-cost broadcast interpretation where
+the constructor justifies it. Users should not need to wrap built-in
+product projections in manual correspondence blocks.
+
+The compiler may not silently compose domain maps and correspondences
+across arbitrary paths. Same-domain reads need no map; direct emitted
+maps from declared compositions are legal; explicit named compositions
+are legal. A path like `A -> B -> C` does not silently become an `A -> C`
+transport merely because the intermediate maps exist.
+
+Domain projections emitted by composition constructors are structural
+domain maps. They are unrelated to runtime constraint projection or any
+optimization/projection rule used to discharge residuals.
+
+Sub-loci should be explicit but lighter than domains:
+
+```text
+SubLocusSite
+  parent domain
+  selector, boundary, region, chart slice, or footprint
+  no independent nominal identity unless promoted to a DomainSite
+  no independent realization obligation unless the constructor requires one
+```
+
+Examples include a boundary of `LeafSurface`, an interval of `Clock`, an
+edge subset of a graph, a one-sided trace locus at an interface, or a
+pixel footprint region. A sub-locus is how the language can name
+boundaries and regions without turning every selector into a new domain.
+
 ### 3.7 Correspondence
 
-A correspondence aligns loci. This amendment treats `CorrespondenceSite`
-as the canonical internal concept. The final source keyword is still
-open: `correspondence` is clearer and less overloaded; `couple` may
-remain as shorthand if it elaborates to the same block form.
+A correspondence aligns loci. This amendment treats `correspondence` as
+the canonical source keyword and `CorrespondenceSite` as the canonical
+internal concept. The older word `couple` may appear in discussion or
+legacy examples, but should not be the canonical v2 spelling.
 
 Correspondences are not arbitrary scientific relations. They answer
 indexing and transport questions:
@@ -617,6 +691,19 @@ is useful for conversation but should not be canonical. It
 hides witness structure and tends to make correspondences look like
 single functions.
 
+Trivial correspondences should be ergonomic through stdlib constructors,
+not by weakening the canonical witness/leg representation:
+
+```myco
+correspondence ObsToModel:
+    std::time::correspondence::IdentityClock<ObsClock, ModelClock>
+```
+
+The stdlib form elaborates to a `CorrespondenceSite` with witness, legs,
+supported operations, and evidence requirements. This keeps identity
+clocks, scalar embeddings, and other common exact alignments concise
+without making the loose binary form canonical.
+
 ### 3.8 Correspondence Families
 
 Correspondences can also be families:
@@ -630,7 +717,7 @@ Correspondences can also be families:
 Preferred shape:
 
 ```myco
-correspondence family LeafDeformation over Leaves {
+correspondence family LeafDeformation for leaf in Leaves {
     witness MaterialAtTime:
         std::domain::Product<LeafSurface[leaf], Clock>
 
@@ -643,6 +730,10 @@ correspondence family LeafDeformation over Leaves {
 Exact syntax for indexing family domains is open. The important
 architectural rule is stable: correspondence family instances are
 nominal and explicit, not generated invisibly.
+
+The index variable must be explicitly bound. A correspondence family
+should not conjure `leaf`, `sensor`, or `site` as an implicit ambient
+name.
 
 A module-scope correspondence cannot capture instance-local state by
 accident. If a correspondence map depends on fields of a particular
@@ -696,6 +787,30 @@ workflow.observe(
 )
 ```
 
+Observation operators can be generic over domains and contracts, just
+like types and relations. A reusable instrument model should not have to
+hardcode `LeafSurface` if it can observe any compatible heat-emitting
+spatial domain:
+
+```myco
+observation_operator ThermalCamera<
+    S: SpatialDomain + HasMeasure,
+    T: ODETime<Second>,
+> {
+    data_locus:
+        std::domain::Product<CameraPixels, ExposureIntervals>
+
+    target:
+        temperature.trajectory[T] over S
+
+    uses correspondence PixelFootprint<S>
+    uses correspondence ExposureToModelTime<T>
+
+    noise:
+        ThermalSensorNoise
+}
+```
+
 Trivial path observations can have stdlib sugar, but the measurement
 semantics must remain inspectable.
 
@@ -715,6 +830,8 @@ ObservationOperatorSite
   residual form, optional
   evidence form, optional
   fit objective contribution, optional
+  supported consumption modes:
+    observe | fit_to | condition | score | posterior_predict
   calibration dependencies
   evidence and provenance requirements
 ```
@@ -924,6 +1041,18 @@ depend on a calendar provider, which may depend on an external dataset
 hash. The run lock must record the whole DAG, not only the leaf
 realization object that was passed to `workflow.bind`.
 
+Run-lock entries pin realization/provider versions. Replaying an old run
+uses the versions, seeds, source hashes, traces, and fallback decisions
+recorded in that run lock; a newer stdlib provider version does not
+silently change the replay. Mid-run adaptive realization, such as
+adaptive mesh refinement, records monotonic realization events in the
+run log rather than invalidating earlier run-lock entries.
+
+Realizations may feed the semantic solve graph, but solve outcomes do
+not mutate or invalidate run-lock entries within a run. If a solve
+requires changing a realization, that change must be modeled as an
+event-mutated realization with its own logged provenance.
+
 Posterior or learned realizations need a use policy before they are
 consumed as if they were deterministic. Examples include `sample`,
 `MAP`, `marginalize`, `propagate_posterior`, and domain-specific
@@ -944,6 +1073,74 @@ occurrences, and observation operators over that domain become
 stochastic or inference-coupled through the existing probabilistic
 machinery; the posterior-use policy states how that uncertainty is
 queried for deterministic extraction or reporting.
+
+Posterior use may need joint context, not independent per-site sampling:
+
+```text
+PosteriorContextSite
+  jointly realized sites
+  posterior draw axis, if sampled
+  dependence/correlation structure
+  query modes
+```
+
+`sample` should emit or use a workflow draw axis; `MAP` names a specific
+realization within the posterior context; `marginalize` integrates
+jointly over the context; `propagate_posterior` preserves dependence into
+downstream SCCs.
+
+### 3.13 Temporal Execution Site
+
+A `TemporalExecutionSite` is a compiler-emitted coordination obligation
+for a temporal domain or temporal SCC. It prevents separately valid
+realizations from composing into an incoherent hidden scheduler.
+
+Conceptual payload:
+
+```text
+TemporalExecutionSite
+  temporal domain or temporal SCC
+  participating TemporalLiftSites
+  participating EventFamilySites
+  participating ScheduledOccurrenceMaps
+  snapshot/output requirements
+  conservation obligations touched by events
+  required capabilities:
+    derivative integration
+    event root localization
+    stochastic next-event sampling
+    delayed queue
+    replay
+    branch/frontier snapshot
+  compatible realization contracts
+  realization binding and run-lock fields
+```
+
+Source owns the temporal lifts, event laws, stale policies, delay laws,
+matching rules, and conservation claims. Workflow binds an execution
+realization that satisfies the resulting coordination obligation.
+
+Example:
+
+```python
+workflow.bind(
+    cat.temporal_execution("Clock"),
+    myco.execution.HybridSSAODE(
+        ode=myco.ode.AdaptiveRK(...),
+        events=myco.events.NextReaction(...),
+        delayed=myco.events.DelayedQueue(...),
+        root_finder=myco.roots.Bracketed(...),
+        seed=42,
+    ),
+)
+```
+
+Incompatible bindings are workflow-composition errors. For example, SSA
+next-event sampling over a temporal domain realized only as a fixed tick
+array is invalid unless the temporal-domain realization advertises a
+capability such as `AdmitsExternalEventTimes` or the execution
+coordinator supplies a coherent embedding of stochastic events into the
+tick lattice.
 
 ---
 
@@ -1051,6 +1248,23 @@ contract LeafWorld {
 
 This prevents associated compositions from becoming hidden domain
 generation while still avoiding boilerplate for canonical products.
+
+Derived-domain identity is owned by the concrete context implementation,
+not by each use site. All consumers of `SimWorld` see the same
+`SimWorld::Trajectory` identity. A different context implementation that
+derives the same structural `Product<Space, Time>` still gets a distinct
+nominal derived domain unless the same identity is imported/passed or a
+domain equality constraint is stated.
+
+Identity key:
+
+```text
+DerivedDomainIdentityKey
+  declaring contract member path
+  implementing context identity
+  context generic arguments
+  derived member name
+```
 
 Candidate instantiation shape:
 
@@ -1222,6 +1436,12 @@ temporal over Clock {
 }
 ```
 
+If a scalar state belongs to an entity collection, the entity context
+contributes support. For example, `Plant.biomass` for many plants is
+supported by the plant entity domain when viewed at collection scope;
+`UnitLocus` applies only when the state truly has no entity or family
+support.
+
 A temporal block names evolution:
 
 ```myco
@@ -1270,6 +1490,47 @@ at the start/frontier of the evolution domain. An `initial` block is
 syntactic sugar for constraining the trajectory along that start-boundary
 map.
 
+Boundary maps depend on temporal capability:
+
+```text
+TemporalBoundaryMapSite
+  temporal domain
+  support domain
+  boundary kind:
+    start | successor | frontier | branch_root |
+    branch_local | interval_endpoint
+  emitted domain map or correspondence
+  required temporal capability
+```
+
+Continuous total-order time can provide a start inclusion. Discrete time
+can provide initial-tick and successor maps. Partial-order time can
+provide initial antichain/frontier maps. Branching time can provide root
+and branch-local boundary maps. `initial over T` is legal only when `T`
+advertises the required boundary capability.
+
+Initial blocks must be anchored to the relevant temporal domain. Either
+spell the anchor directly:
+
+```myco
+initial over Clock {
+    x = 5
+}
+```
+
+or place the initial block lexically inside the temporal block:
+
+```myco
+temporal over Clock {
+    initial { x = 5 }
+    d x = -k * x
+}
+```
+
+An unanchored type-level `initial { ... }` is invalid for lifted state
+unless the spec defines a legacy migration rule that elaborates it to an
+unambiguous `initial over T`.
+
 Past or delayed reads should use the trajectory facet explicitly. For a
 delay differential equation or distributed lag, do not make the
 instantaneous field pretend that its support is time-indexed:
@@ -1292,6 +1553,12 @@ context. For v2, evolving the same state in two temporal blocks is a
 hard compile error. A model with two clocks should declare separate
 state facets and an explicit correspondence or observation/control
 operator between them.
+
+In multi-rate systems, a quantity influenced by both slow and fast
+dynamics should be modeled as separate state facets over their owning
+clocks, connected by explicit correspondences, relations, or
+control/observation operators. It should not be modeled as one state
+evolved by two clocks.
 
 ### 6.3 Temporal Context Scope
 
@@ -1430,6 +1697,22 @@ Initial capability rule sketch:
 | calendar successor | `CalendarSuccessor<T>` |
 | integration over a domain | `SupportsIntegration<D>` plus measure contract |
 
+Hazards and propensities require a temporal reference measure or
+discrete event-probability structure. A continuous-time hazard should be
+typed against something like:
+
+```myco
+contract HazardTime<U> : TemporalDomain {
+    requires DurationMeasure<Self, U>
+    requires SupportsHazard<Self>
+}
+```
+
+Discrete event probabilities should use a separate capability such as
+`SupportsDiscreteEventProbability<Self>`. Propensity formulas should not
+float free of the temporal semantics that give them units and snapshot
+meaning.
+
 ---
 
 ## 7. Correspondence Semantics
@@ -1443,6 +1726,15 @@ Same-domain reads need no correspondence. Cross-domain reads require:
 - a named supported operation when the value kind is not safely
   inferred; or
 - an explicit lexical correspondence scope.
+
+Domain maps and correspondences do not silently compose transitively.
+If a use requires a path through several maps or correspondences, the
+source must name a composed map/correspondence site or spell the
+operation sequence explicitly.
+
+`convert` is not a domain-alignment mechanism. Unit, wrapper, or value
+conversion can occur inside an expression or observation operator, but
+locus alignment uses a `DomainMapSite` or `CorrespondenceSite`.
 
 Simple scalar read:
 
@@ -1514,12 +1806,17 @@ run's realization supplies the actual evidence record. Do not conflate
 "this operation requires provider-validated Jacobians" with "this
 provider has validated the Jacobian in this run."
 
+Approximate, sampled, or posterior correspondence operations must enter
+the approximation/evidence ledger just like approximate event
+realizations. A correspondence-mediated approximation should not become
+invisible merely because the source-level correspondence is named.
+
 ### 7.3 Correspondence Obligations
 
 A correspondence declaration emits obligation sites for its declared
 state-dependent legs/maps and supported operations.
 
-Current recommendation:
+Current landing:
 
 - one `ObligationSite` per declared state-dependent leg/map slot;
 - default cardinality `exactly_one`;
@@ -1578,6 +1875,42 @@ class is required. Diagnostics may describe an ordinary SCC as
 "correspondence-coupled" when it contains correspondence-map
 obligations, but this should not fork the solver taxonomy.
 
+### 7.5 Cross-Domain Conservation
+
+Conservation obligations should name the locus where conservation is
+checked. Event effects, domain maps, and correspondences must explain how
+deltas are transported into that conservation locus.
+
+Sketch:
+
+```myco
+domain PhysicalSpaceTime:
+    std::domain::Product<PhysicalSpace, Clock>
+
+conservation Mass over PhysicalSpaceTime {
+    conserved quantity total_mass
+}
+
+correspondence RxnToClock:
+    std::time::correspondence::IdentityClock<RxnTime, Clock>
+
+event family Reaction over RxnTime {
+    effect {
+        substrate -= one_mole
+        product += one_mole
+    }
+
+    fulfills Mass
+        via RxnToClock
+        over PhysicalSpaceTime
+}
+```
+
+The exact syntax is provisional. The semantic rule is that conservation
+is not proven by the event firing in isolation. The compiler must trace
+the event delta through the named temporal/spatial maps into the
+conservation locus and check the corresponding obligation there.
+
 ---
 
 ## 8. Event Families
@@ -1615,7 +1948,7 @@ event family Bind over T {
             complex_id = complex.id
         }
         stale: CancelIfComplexGone
-        firing_state: CapturedPayload
+        firing_state: captured
     }
 }
 
@@ -1636,6 +1969,14 @@ For delayed events, source owns the scientific semantics:
 - whether firing uses captured state, current state, payload-only state,
   or resampled state;
 - conservation obligations.
+
+Canonical firing-state policy names:
+
+- `captured`: firing reads captured scheduling-time state;
+- `current`: firing reads current state at firing time;
+- `payload_only`: firing reads only declared payload;
+- `resampled`: firing resamples or redraws the relevant state according
+  to a declared law.
 
 Workflow/provider owns the queue representation, sampling algorithm,
 approximation choice, seed/replay, and validation evidence.
@@ -1671,6 +2012,11 @@ workflow.bind(
     myco.events.DelayedQueue(),
 )
 ```
+
+In hybrid systems, event-family bindings are checked against the
+`TemporalExecutionSite` for the home temporal domain. A set of
+individually valid event-family and temporal-domain realizations can
+still be rejected if no coordinator can execute them coherently.
 
 Different realizations can produce different evidence grades:
 
@@ -1871,13 +2217,23 @@ semantics.
 This area needs a catalog mechanism parallel to domains:
 
 ```text
-WorkflowAxis
+WorkflowAxisSite
   id
-  role
-  coordinate set
+  axis kind:
+    replicate | sweep | scenario_batch | posterior_draw |
+    cv_fold | backend_comparison
+  coordinate schema
+  lifting target
+  aggregation operations
   binding/provenance
   lifting semantics
+  source visibility: forbidden
 ```
+
+Workflow outputs may be indexed by workflow axes, such as
+`MonteCarloReplicate`, `ParameterSweep`, or `PosteriorDraw`. Those axes
+are catalog-addressable for workflow outputs and aggregation, but source
+laws cannot read them.
 
 ### 10.1 Process Priors And Domains
 
@@ -1922,6 +2278,11 @@ EventFamilyRealizationPrior<E>
 ObservationParameterPrior<O>
 ```
 
+These are target-kind specializations of the same realization/source
+machinery, not a parallel contract hierarchy. For example,
+`DomainRealizationPrior<D>` is a `Realization<D>` whose source character
+is stochastic and whose evidence records `obtained_by = sampled`.
+
 For example, a `CoalescentTreePrior` bound to
 `cat.domain("TransmissionTree")` must satisfy a
 `Realization<TransmissionTree>`-shaped contract with stochastic evidence
@@ -1954,6 +2315,14 @@ Preferred tools:
    exact `IdentityMap` correspondence and let extraction optimize it
    when safe.
 
+Choice rule:
+
+- use import/re-export, generic/context passing, or `domain alias` when
+  the names should refer to the same domain identity;
+- use `IdentityMap` when the loci are distinct nominal identities that
+  are structurally isomorphic and should remain distinct but exactly
+  aligned.
+
 Sketch:
 
 ```myco
@@ -1982,8 +2351,10 @@ as a restricted identity witness, not a convenience feature:
 - never inferred by tooling;
 - rejected if either side has incompatible realization obligations.
 
-The default design assumption for this amendment is: no general domain
-identity merge.
+The v2 decision is: no general domain identity merge and no restricted
+post-declaration identity witness. Future versions can revisit this only
+if alias/import/context passing and exact correspondences prove
+insufficient.
 
 Dynamic fusion of nominal domains is also not part of the model. If two
 droplets, cells, regions, or branches may merge or split at runtime,
@@ -2080,6 +2451,15 @@ type Canopy {
 
 This avoids hidden per-leaf domain generation.
 
+Entity-local sugar can expose the same family safely:
+
+```myco
+type Leaf indexed by Leaves {
+    chlorophyll:
+        Field<Concentration> over LeafSurface[self]
+}
+```
+
 ### 12.5 Observation Clock
 
 ```myco
@@ -2104,6 +2484,14 @@ observation_operator BiomassCensus {
 }
 ```
 
+For trivial exact alignments, a stdlib correspondence constructor can
+stand in for the full witness/leg block:
+
+```myco
+correspondence ObsToModelTime:
+    std::time::correspondence::IdentityClock<ObsClock, ModelTime>
+```
+
 ### 12.6 Chemical Event Family
 
 ```myco
@@ -2125,6 +2513,20 @@ Workflow:
 workflow.bind(
     cat.event_family("Reaction"),
     myco.events.SSA(seed=42),
+)
+```
+
+Hybrid execution binds the temporal coordination site, not a hidden
+global scheduler:
+
+```python
+workflow.bind(
+    cat.temporal_execution("T"),
+    myco.execution.HybridSSAODE(
+        ode=myco.ode.AdaptiveRK(...),
+        events=myco.events.NextReaction(...),
+        seed=42,
+    ),
 )
 ```
 
@@ -2283,9 +2685,11 @@ The next review round should test at least:
 If accepted, this amendment likely requires changes to:
 
 - **Glossary.** Add DomainSite, DomainFamilySite, DomainCompositionSite,
-  DomainMapSite, TemporalLiftSite, CorrespondenceSite,
-  ObservationOperatorSite, EventFamilySite, OccurrenceDomainSite,
-  RealizationInstance, RealizationEvidence, WorkflowAxis.
+  DomainMapSite, SubLocusSite, TemporalLiftSite,
+  TemporalExecutionSite, CorrespondenceSite, ObservationOperatorSite,
+  EventFamilySite, OccurrenceDomainSite, OccurrenceStreamRealization,
+  ScheduledOccurrenceMap, PosteriorContextSite, RealizationInstance,
+  RealizationEvidence, WorkflowAxisSite.
 
 - **Types and contracts.** Domains as generic parameters; associated
   domains/compositions/correspondences in contracts; coherence rules.
@@ -2295,11 +2699,11 @@ If accepted, this amendment likely requires changes to:
 
 - **State and time.** Remove implicit global time; rewrite `d`, `step`,
   `config.dt`, temporal blocks, initial conditions, and temporal
-  realization.
+  realization/coordination.
 
 - **Events.** Replace tick-centered firing order with event families,
-  occurrence domains, event realization, matching, delayed events, and
-  cascade semantics.
+  occurrence domains, temporal execution sites, event realization,
+  matching, delayed events, and cascade semantics.
 
 - **Collections and axes.** Clarify source domains vs workflow axes and
   domain families over entity domains.
@@ -2319,7 +2723,8 @@ If accepted, this amendment likely requires changes to:
   dependencies, and observation-operator residuals.
 
 - **Workflow.** Bind domain/event/correspondence/observation realization
-  via typed catalog handles; preserve `bind` if possible.
+  and temporal execution via typed catalog handles; preserve `bind` if
+  possible.
 
 - **Backend capabilities.** Temporal/domain/correspondence/event/
   observation capabilities.
@@ -2334,6 +2739,31 @@ If accepted, this amendment likely requires changes to:
 
 - **Mocks.** Rewrite mocks to use explicit domains, temporal blocks, and
   observation/event/correspondence surfaces where relevant.
+
+### 13.1 Elaboration Pass Order Sketch
+
+The exact compiler pipeline is not locked, but the spec rewrite should
+preserve this dependency shape:
+
+1. Resolve modules, imports, aliases, and constructor names.
+2. Create `DomainSite`s and domain-constructor uses.
+3. Elaborate contract bounds and associated members.
+4. Elaborate `derived domain`s and emitted `DomainMapSite`s.
+5. Elaborate `DomainFamilySite`s, total-space views, and sub-loci.
+6. Elaborate fields and state support domains.
+7. Elaborate temporal blocks into `TemporalLiftSite`s and
+   `TemporalBoundaryMapSite`s.
+8. Elaborate correspondences and correspondence families.
+9. Elaborate event families into `OccurrenceDomainSite`s and
+   `ScheduledOccurrenceMap`s.
+10. Elaborate observation operators.
+11. Emit `TemporalExecutionSite`s for coordinated temporal realization.
+12. Build the semantic solve graph and SCCs.
+13. Build realization obligations and the run-lock dependency DAG.
+
+Observation operators may target trajectory facets, so temporal lifts
+must exist before observation targets are resolved. Temporal execution
+sites depend on both lifts and event-family sites.
 
 ---
 
@@ -2399,11 +2829,12 @@ blockers separate from syntax choices and stdlib package design.
    `TemporalLiftSite` that owns the trajectory facet. Past/delayed reads
    must target the trajectory facet explicitly. Scalar states use
    internal `UnitLocus` support. Initial/boundary/conservation semantics
-   attach to the lift. One state path has at most one owning
-   `TemporalLiftSite` in v2; multi-time evolution is a hard error. Need
-   to settle: exact catalog facet names, observation target syntax,
-   start-boundary domain-map spelling, conservation loci, nested fresh
-   state ownership, and reconciliation with `y[t]`/`y[t+1]` ground terms.
+   attach to the lift via temporal boundary maps. `initial` must be
+   anchored with `initial over T` or nested inside `temporal over T`.
+   One state path has at most one owning `TemporalLiftSite` in v2;
+   multi-time evolution is a hard error. Need to settle: exact catalog
+   facet names, observation target syntax, conservation loci, and
+   reconciliation with `y[t]`/`y[t+1]` ground terms.
 
 6. **Temporal scope and `over`.**
    Decision so far: `temporal over T` authorizes concise `d` and `step`,
@@ -2423,7 +2854,16 @@ blockers separate from syntax choices and stdlib package design.
    binding, observed event streams, delayed queue payload capture,
    stale/cancellation/merge semantics, and event-created entities.
 
-8. **ObservationOperatorSite contract shape.**
+8. **Temporal execution coordination.**
+   Decision so far: a `TemporalExecutionSite` coordinates temporal lifts,
+   event families, delayed occurrence maps, root detection, snapshots,
+   and conservation obligations over a temporal domain or temporal SCC.
+   Individually valid temporal-domain and event-family realizations can
+   be rejected when no coordinator can execute them coherently. Need to
+   settle: exact emitted site keys, compatibility diagnostics, and the
+   workflow binding surface for hybrid execution providers.
+
+9. **ObservationOperatorSite contract shape.**
    Decision so far: observation operators are source-visible measurement
    models, trivial path observations elaborate to stdlib operators, and
    workflow chooses observe/fit/evidence consumption mode.
@@ -2432,34 +2872,35 @@ blockers separate from syntax choices and stdlib package design.
    multiple correspondence/domain-map references, and data-coordinate
    diagnostics.
 
-9. **Realization contracts, providers, and posterior use.**
+10. **Realization contracts, providers, and posterior use.**
    Decision so far: realizations are workflow constructors satisfying
    source-side contracts; provider machinery extends Section 37.1 rather
    than duplicating it; realization dependencies form a run-locked DAG
    distinct from the semantic solve graph. Priors over declared domain,
    correspondence, and event-family sites are typed realization sources.
+   Run locks pin realization/provider versions for replay.
    Need to settle: canonical `Realization<D>` contract, event-family and
    correspondence realization contracts, provider TOML `kind`
-   extensions, exact run-lock schema, initial posterior-use policies,
-   and how `ProcessPrior<I, V>` targets declared catalog sites.
+   extensions, exact run-lock schema, and posterior context/draw-axis
+   semantics.
 
-10. **Workflow axes and source leakage.**
+11. **Workflow axes and source leakage.**
     Decision so far: workflow axes lift, batch, replicate, and aggregate
     runs but cannot become source-readable by workflow action. Need to
     settle: catalog representation for replicate/sweep/scenario axes,
     lifting semantics, aggregate outputs, and diagnostics such as
     `workflow_axis_read_by_source_law`.
 
-11. **Domain identity/refactoring policy.**
+12. **Domain identity/refactoring policy.**
     Decision so far: no general `identify domain` as routine modeling
     syntax. Prefer import/re-export, domain alias, generic/context
     passing, or exact `IdentityMap` correspondence for distinct but
     isomorphic loci. Dynamic domain fusion is disallowed; use a superset
     domain, phase field, indicator, or dynamic topology within one family.
-    Need to settle: whether any restricted identity witness is necessary,
-    and `hypha check --domain-audit` behavior.
+    No restricted post-declaration identity witness is included in v2.
+    Need to settle: `hypha check --domain-audit` behavior.
 
-12. **Existing surface reconciliation.**
+13. **Existing surface reconciliation.**
     Need to settle how this amendment rewrites or reframes:
     old `Domain<G>`; `bind_topology`; `config.dt`; `y[t]` ground terms;
     existing `identify`; `convert`; stochastic "coupling" terminology;
@@ -2499,6 +2940,66 @@ Candidate correspondence capabilities include `SupportsRead`,
 - all domain-specific event realizers;
 - provider-specific validation protocols;
 - rich atlas/manifold conveniences beyond the minimal domain-map model.
+
+### 14.4 Diagnostic Candidates
+
+Likely new diagnostics:
+
+- `E_DOMAIN_MISSING_TEMPORAL_LIFT`: `d` or `step` appears without
+  `temporal over T` or explicit `over = T`;
+- `E_DOMAIN_AMBIGUOUS_CORRESPONDENCE`: a cross-domain read lacks a
+  required `via` or operation;
+- `E_DOMAIN_UNFULFILLED_MAP`: a state-dependent correspondence leg/map
+  lacks a fulfilling relation;
+- `E_DOMAIN_INVALID_SUPPORT_READ`: a past/future read targets the
+  instantaneous support facet instead of the trajectory facet;
+- `E_DOMAIN_DOUBLE_EVOLUTION`: one state path gets multiple owning
+  temporal lifts;
+- `E_DOMAIN_INITIAL_UNANCHORED`: an `initial` block over lifted state
+  lacks a temporal anchor;
+- `E_DOMAIN_FAMILY_INDEX_UNBOUND`: a family member is referenced without
+  a bound index-domain locator;
+- `E_DOMAIN_CORRESPONDENCE_FAMILY_INDEX_UNBOUND`: a correspondence
+  family uses an unbound index variable;
+- `E_DOMAIN_SILENT_MAP_COMPOSITION_REJECTED`: a read would require an
+  unstated chain of domain maps/correspondences;
+- `E_DOMAIN_CONVERT_USED_FOR_ALIGNMENT`: `convert` is used where a
+  domain map or correspondence is required;
+- `E_DOMAIN_TEMPORAL_EXECUTION_INCOMPATIBLE`: temporal-domain,
+  event-family, delayed-queue, root-finding, or snapshot realizations
+  cannot be coordinated;
+- `E_DOMAIN_HAZARD_REQUIRES_MEASURE`: hazard/propensity is declared on
+  a temporal domain without the needed measure/probability capability;
+- `E_DOMAIN_POSTERIOR_CONTEXT_REQUIRED`: posterior sites that must be
+  sampled or marginalized jointly were configured independently;
+- `E_DOMAIN_POSTERIOR_DRAW_AXIS_MISSING`: sampled posterior use lacks a
+  workflow draw axis;
+- `E_DOMAIN_SUBLOCUS_REQUIRES_PARENT`: a sub-locus lacks an explicit
+  parent domain;
+- `E_DOMAIN_BOUNDARY_MAP_UNSUPPORTED`: `initial` or boundary semantics
+  require a boundary map the temporal domain does not provide;
+- `E_DOMAIN_OBSERVATION_CONSUMPTION_MISSING`: workflow binds data to an
+  observation operator without selecting a supported consumption mode;
+- `E_DOMAIN_MODULE_CORRESPONDENCE_CAPTURES_INSTANCE_STATE`: a
+  module-scope correspondence depends on instance-local state.
+
+### 14.5 Rewrite Catalog Candidates
+
+The rewrite catalog likely needs a domain-transport group. Candidate
+rules:
+
+- identity pullback: `pullback(x, IdentityMap)` rewrites to `x`;
+- projection pullback: `pullback(x, Product.proj_left)` rewrites to a
+  compiler-proven broadcast over the right axis when the value kind
+  permits it;
+- start-boundary evaluation: evaluating a trajectory at a
+  `TemporalLiftSite` start-boundary map rewrites to the corresponding
+  initial facet;
+- occurrence payload resolution: querying a captured payload at the
+  exact occurrence coordinate rewrites to the captured value;
+- domain-map identity collapse: composed exact domain maps with an
+  explicit identity proof may collapse, but only when the composition
+  site is named.
 
 ---
 
@@ -2562,6 +3063,16 @@ Likely additions:
 | Event family declared without home temporal domain | `event family E over T` | Event laws need a temporal substrate |
 | Realization parameters declared in `.myco` source | Workflow source object configuration | Source declares obligations; workflow chooses execution policy |
 | `ContinuousTime` constructor used without unit parameter | Explicit unit parameter such as `ContinuousTime<Second>` | Constructors should not hide structural parameters |
+| Per-event-family realizers as implicit scheduler | Explicit `TemporalExecutionSite` / coordinator realization | Hybrid ODE + SSA + delayed events need one coherent advance discipline |
+| Hazard/propensity without temporal reference measure | `HazardTime<U>` or discrete event-probability capability | Propensities need units and snapshot semantics |
+| Silent composition of domain maps and correspondences | Explicit named composition/map/correspondence operation | Prevent hidden transitive alignment |
+| Independent posterior sampling per site by default | `PosteriorContextSite` and draw-axis policy | Joint inferred structures must preserve dependence |
+| `convert` used for domain alignment | Domain map or correspondence operation | Value conversion is not locus correspondence |
+| Sub-locus treated as implicit domain | Declared `SubLocusSite` or explicit `DomainSite` | Boundaries, regions, and selectors need semantics without hidden identity |
+| Observation operator without consumption mode | Operator exposes observe/fit/evidence modes; workflow chooses | Measurement semantics and objective semantics differ |
+| Domain projection confused with constraint projection | `DomainMapSite(kind = projection)` | Structural maps are not solver projections |
+| Approximate correspondence operation without ledger entry | Approximation/evidence ledger entry for approximate, sampled, or posterior transport | Correspondence-mediated approximations need provenance |
+| Unanchored `initial` over lifted state | `initial over T` or `initial` nested inside `temporal over T` | Initialization must choose a temporal boundary map |
 
 Existing rows to revise:
 
@@ -2609,6 +3120,10 @@ External reviewers should answer:
    correspondence, temporal lift, event occurrence, observation
    operator, and realization errors?
 16. Which rewrite-catalog rules need new groups or extensions?
+17. Are there realization combinations the architecture admits at bind
+   time but cannot coherently execute, especially combinations of
+   temporal-domain, event-family, correspondence, and temporal-execution
+   realizations?
 
 ---
 
@@ -2618,11 +3133,13 @@ External reviewers should answer:
 2. Resolve the open questions in Section 14.
 3. Publish a final locked invariants list with cross-references to the
    amendment sections that enforce each invariant.
-4. Run local subagents over `spec.md`, `anti_spec.md`, `soul.md`, and
+4. Produce an amendment-to-spec mapping that says which canonical
+   sections each amendment section modifies, replaces, or adds.
+5. Run local subagents over `spec.md`, `anti_spec.md`, `soul.md`, and
    mocks with the locked amendment.
-5. Produce a comprehensive spec-edit plan.
-6. Execute atomic spec/anti-spec/soul/mock edits.
-7. Re-run review on the rewritten canonical spec.
+6. Produce a comprehensive spec-edit plan.
+7. Execute atomic spec/anti-spec/soul/mock edits.
+8. Re-run review on the rewritten canonical spec.
 
 No canonical spec rewrite should happen until the amendment's core
 surface is locked.
