@@ -9266,13 +9266,13 @@ capabilities.
 **Summary.** Part VI enumerates remaining open design / catalog /
 tooling items and the resolved blocker ledger carried forward
 explicitly so they are not silently recommitted during consolidation.
-Open items now cluster around stdlib inventory, package / workflow API
-details, controller affordances, exact-numeric portability, selected
-geometry polish, Tier 2 / Tier 3 family catalogs, and implementation /
-cost-calibration work. The B-tagged blockers, matrix heterogeneous-unit
-resolution, backend abstraction, the type-graph / e-graph bridge,
-Complex numeric semantics, O4 carryovers, and cost-field cluster are
-closed.
+Open items now cluster around stochastic syntax review, stdlib
+inventory, package / workflow API details, exact-numeric portability,
+selected geometry polish, Tier 2 / Tier 3 family catalogs, and
+implementation / cost-calibration work. The B-tagged blockers, matrix
+heterogeneous-unit resolution, backend abstraction, the type-graph /
+e-graph bridge, Complex numeric semantics, O4 carryovers, controller
+affordances, and cost-field cluster are closed.
 
 Carried forward explicitly so they are not silently committed during
 consolidation.
@@ -9399,10 +9399,11 @@ lowering details after the core sum-type lock. Chunks 05, 06, 07, 08,
 **Summary.** Catalog of smaller remaining items: source-level retraction
 if ever admitted, exact-numeric GPU portability, vector / tensor seam
 transforms, rational-denominator termination beyond the rewrite cap,
-controller-interface affordances, stdlib inventory, distribution /
+stochastic `~` spelling review, stdlib inventory, distribution /
 stochastic-process catalog polish, backend cost-calibration interfaces,
 workflow inference UX, package dependencies, and event-scheduling policy
-API. Continuous extrema / verified optimization sites are resolved by
+API. Controller-interface affordances are resolved by §24.2, §24.3, and
+§24.7. Continuous extrema / verified optimization sites are resolved by
 `std::optimality` and `OptimalitySite` (§15.7). Obligation retraction is
 resolved by the `ObligationSite` /
 `fulfills` ledger (§8.11, §10.5).
@@ -9502,6 +9503,20 @@ is a source-level model commitment, not workflow configuration. Tier
 A/B/C distribution machinery may simplify or validate these projections
 when capability facts permit; empirical or opaque projections remain
 evidence-bearing workflow / provider records.
+
+**Aleatoric / epistemic `~` spelling review.** §13.1 currently uses one
+`~` surface for both aleatoric and epistemic distributional claims, with
+the compiler deriving the kind from graph position and workflow
+bindings. This remains coherent, but should get one explicit UX /
+syntax pass before canonicalization: does using the same character for
+world-randomness and parameter uncertainty make the source too easy to
+misread, and should Myco instead use distinct spellings such as `~` /
+`~~`, relation-like stdlib forms, or another explicit source surface?
+Any replacement must preserve the existing semantic split: `~`-style
+claims remain Layer-2 distributional metadata rather than e-graph
+merges, process-valued uncertainty is still epistemic or aleatoric with
+process shape (§28.8), and the workflow binding story for `Prior`,
+`observe`, and PPL routing remains explicit.
 
 **Controller-interface affordances resolved.** §24.2 defines
 axis-aware controller scope (`PerInstance`, `OverAxes`, `Global`), the
