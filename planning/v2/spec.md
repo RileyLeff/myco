@@ -206,6 +206,7 @@ Terms: `variable`, `bound variable`, `free variable`, `relation`,
 `SelectedSite`, `TopologyDelta`, `TopologyVersion`, `capability profile`,
 `resolved run lock`, `SpatialOperatorSite`, `WeakFormSite`,
 `ResidualFormSite`, `TransferSite`, `DiscreteOperatorSite`,
+`OptimalitySite`, `OptimalityObligation`,
 `realization provider`, `evidence grade`, `ConditionRecord`,
 `promoted_exact_in_context`.
 
@@ -1324,13 +1325,19 @@ they may be generic over units, contracts, types, and `val`
 parameters. Stdlib expression functions (`exp`, `log`, `sin`,
 `sqrt`, arithmetic atoms, etc.) are compiler-owned primitives that
 may appear inside expressions and carry capability contracts such as
-`Invertible<_>`, `Differentiable`, and `Monotone`.
+`Invertible<_>`, `Differentiable`, and `Monotone`. Stdlib may also
+ship compiler-owned statement-position relation families for semantic
+sites such as `std::optimality` (§15.7).
 
-Myco keeps two surfaces distinct:
+Myco keeps three surfaces distinct:
 
 - **Parameterized relations.** User-authored, statement-position
   reusable structure. A relation invocation adds obligations and
   equations to the graph; it does not return a value expression.
+- **Stdlib parameterized relations.** Compiler-owned
+  statement-position relation families such as `std::optimality`.
+  They emit recognized sites or obligations while preserving the same
+  explicit-slot, no-caller-capture discipline as user relations.
 - **Stdlib functions.** Compiler-owned expression atoms. They may be
   called inside expressions and may carry axiomatic contracts that
   drive rewrites (§17, Appendix C). User code cannot declare new
@@ -4116,6 +4123,313 @@ Provider-supplied composition laws are ordinary evidence-graded facts
 (§37.1). They may sharpen a run's `cost_of().approximation`, but they do
 not become global source-level theorems.
 
+#### 15.7 Optimality Claims
+
+**Summary.** Optimality is a source-level comparison claim over
+admissible alternatives. It is not a solver instruction, not a direction
+of computation, and not a hidden value producer. Invoking a
+`std::optimality` relation emits an `OptimalitySite` /
+`OptimalityObligation` in Layer 3. Workflow solvers, controllers,
+search policies, tolerances, and certificates may fulfill that site with
+evidence; they do not become source truth.
+
+An `OptimalitySite` does not produce the chosen value. It records a
+comparison claim and an evidence obligation.
+
+Optimality has two distinct faces in Myco:
+
+- **World claim.** The source model may claim that a value, state,
+  field, trajectory, or policy is optimal relative to a criterion and an
+  admissible family of alternatives. This belongs in `.myco` when it is
+  part of the scientific model: a membrane minimizes energy, a
+  stomatal policy maximizes growth, a market actor maximizes utility, or
+  a path satisfies a variational principle.
+- **Workflow tactic.** A workflow may run a numerical optimizer,
+  interval verifier, collocation method, branch-and-bound search,
+  empirical policy evaluation, or training loop to realize or test a
+  value. This belongs to Python workflow configuration, provider
+  records, backend capability facts, and run-lock evidence.
+
+The source relation family defines the counterfactual world being
+compared; `std::optimality` only names the comparison claim.
+
+**Stdlib surface.** The `std::optimality` namespace contains
+statement-position, compiler-owned parameterized relations:
+
+- `global_maximum`
+- `global_minimum`
+- `epsilon_global_maximum`
+- `epsilon_global_minimum`
+- `local_maximum`
+- `local_minimum`
+- `stationary_point`
+- `steady_state_maximum`
+- `steady_state_minimum`
+- `trajectory_maximum`
+- `trajectory_minimum`
+
+The relation name encodes operator, strength, and non-default scope.
+Pointwise scope is the default for `global_*`, `epsilon_global_*`,
+`local_*`, and `stationary_point`. `steady_state_*` and
+`trajectory_*` name their scope explicitly. Fixed points and ordinary
+equilibria are not part of `std::optimality`; they remain ordinary
+relations or a future equilibrium surface if concrete model pressure
+requires one.
+
+All optimality claim relations use the same explicit slot-map shape:
+
+```myco
+std::optimality::global_maximum(
+    family = candidate_relation,
+    fixed = { ctx },
+    choice = { Pc: realized_Pc },
+    criterion = { from: state, project: profit },
+    alternatives = interval(Pcrit, Ps),
+    tie = any,
+)
+```
+
+Slot meanings:
+
+- **`family`.** A parameterized relation that defines one admissible
+  candidate world for one alternative value. It is ordinary Myco source:
+  all slots are explicit, and it does not capture caller scope (§6).
+- **`fixed`.** Family slots held constant across counterfactual
+  alternatives. `fixed` is not workflow binding; it means "held fixed
+  during this comparison."
+- **`choice`.** The family choice slot or slots plus the realized
+  e-class anchors being claimed optimal.
+- **`criterion`.** The scalar ordered value compared across
+  alternatives. For structured family outputs, the canonical form names
+  the output slot and projection, e.g. `{ from: state, project: profit }`.
+  If the family exposes the criterion as a single slot, the shorter
+  `{ profit }` form desugars to the same criterion anchor.
+- **`alternatives`.** Explicit domain or admissible alternative family
+  for the choice slot.
+- **Operator-specific slots.** `tie`, `epsilon`, `neighborhood`, and
+  `horizon` are required by the relations that need them. No default is
+  hidden for these fields.
+
+**Realized invocation requirement.** The optimality relation does not
+instantiate the realized candidate. The source must separately invoke
+the family at the realized choice whenever non-choice slots are consumed
+by the model:
+
+```myco
+relation realized:
+    sperry_candidate(ctx, realized_Pc, state)
+
+relation optimality_claim:
+    std::optimality::global_maximum(
+        family = sperry_candidate,
+        fixed = { ctx },
+        choice = { Pc: realized_Pc },
+        criterion = { from: state, project: profit },
+        alternatives = interval(Pcrit, Ps),
+        tie = any,
+    )
+```
+
+If an `OptimalitySite` references a family whose non-choice slots are
+otherwise unconstrained at the realized choice, the compiler emits a
+structural diagnostic:
+
+```text
+unfulfilled_optimality_realization:
+  OptimalitySite references family sperry_candidate, but slot state is
+  not constrained at the realized choice. Add a realized invocation of
+  the family at the choice anchor, or provide ordinary model structure
+  that produces the consumed slot.
+```
+
+This rule keeps optimality from becoming a value-producing surface. A
+workflow may bind the choice value with `Constant`, `Trainable`, a
+provider-validated workflow source, or an external `Controller`, but
+the model still needs ordinary graph structure for the realized
+candidate's readouts.
+
+**Admissibility.** A candidate value is admissible iff the family
+relation, invoked with the choice slot set to that candidate and the
+`fixed` slots set to their realized values, is satisfiable under:
+
+- the explicit `alternatives` domain;
+- refinements on the choice slot's declared type;
+- all active constraints, guards, and nested relation invocations inside
+  the family expansion; and
+- any source obligations that the family itself activates.
+
+This deliberately includes derived-state constraints such as
+`state.Gw <= ctx.Gmax`; admissibility is not limited to predicates that
+are syntactically pure in the choice variable. Constraints elsewhere in
+the source model affect the realized world, but they do not define the
+counterfactual feasible set unless the candidate family invokes them or
+the relevant values are part of `fixed`.
+
+The compiler records the admissibility predicate and reports it through
+inspection. It is not required to prove satisfiability for every point
+of a continuous domain. Fulfillment evidence demonstrates admissibility
+for the candidates, subdomains, bounds, or certificates it uses. A
+provably empty feasible set is a workflow-composition error.
+
+**Quantified-template semantics.** An `OptimalitySite` is a universally
+quantified comparison template, not a duplication of the graph for every
+alternative. The site records:
+
+- a fresh symbolic candidate anchor for the choice slot;
+- a parametric family invocation with that candidate substituted;
+- the criterion projection from the parametric invocation;
+- the realized criterion anchor; and
+- the dominance assertion, such as `criterion(realized) >=
+  criterion(candidate)` for all admissible candidates.
+
+This mirrors weak-form `test_space` quantification (§14.3): source
+semantics quantify over an admissible semantic family, while providers
+may later choose finite bases, searches, certificates, or approximations
+with evidence (§37.1).
+
+**Criterion rule.** The criterion must satisfy the `Compare` capability
+contract and must have a coherent unit / scaling policy. Multi-output,
+tensor-valued, distribution-valued, and complex criteria are rejected
+unless the model explicitly projects them to an ordered scalar. Hidden
+scalarization is forbidden. Future multi-objective relations such as
+lexicographic or Pareto optimality must ship as separate
+`std::optimality` relations with their own claim shapes.
+
+`epsilon_global_*` relations require an `epsilon: Scalar<U>` whose unit
+matches the criterion's comparison unit. CC1 applies: the source declares
+the epsilon value as a universal or derived quantity, and the workflow
+binds it. Evidence must certify the gap
+`sup(candidate_criterion) - realized_criterion <= epsilon` (or the
+minimization analog) under the same unit and scaling policy.
+
+**Tie policy.** Tie behavior is part of the claim's multiplicity, not
+part of the solver's coverage evidence. Valid tie policies are:
+
+- `unique` - the optimum set is claimed to be a singleton.
+- `any` - one representative is acceptable; uniqueness is not claimed.
+- `all` - every optimizer is requested; valid only when the optimum set
+  can be represented by the relation's result structure.
+- `reject_plateau` - plateaus or unresolved multiplicity reject the
+  claim.
+- `interval` - the optimum set is a connected interval or region, and
+  evidence must characterize it.
+
+Evidence coverage, such as exhaustive branch-and-bound over an interval,
+is recorded on the fulfillment certificate, not in `tie`.
+
+**Layer placement and payload.** `OptimalitySite` records live in Layer
+3 adjacent keyed state (§16.1). They do not merge e-classes and do not
+install equality facts by assertion. A site records:
+
+- stable site key and source provenance;
+- `family`, `fixed`, `choice`, `criterion`, and `alternatives` maps;
+- operator (`max`, `min`, or `stationary`);
+- strength (`exact_global`, `epsilon_global`, `local`, or
+  `stationary`);
+- scope (`pointwise`, `steady_state`, or `path_horizon`);
+- admissibility predicate;
+- tie, epsilon, neighborhood, or horizon parameters where applicable;
+- crossing / nonsmooth guard inventory visible inside the family;
+- evidence requirements and evidence links; and
+- status (`unfulfilled`, `fulfilled_by_compiler`,
+  `fulfilled_by_provider`, `fulfilled_by_audited_package`,
+  `fulfilled_empirically`, `relaxed_with_ledger`, or `refuted`).
+
+An unfulfilled site is visible in `hypha explain` and fails workflow
+composition when the source claim is active and the workflow has not
+accepted a diagnostic-only or relaxed plan.
+
+**Finite selectors.** Finite `argmax`, `argmin`, `option_argmax`,
+`option_argmin`, `argmax_all`, and `argmin_all` remain the exact
+finite-collection selector surface (§12.2). They return `Selected<T>`
+handles and produce `SelectedSite` records. They are not replaced by
+`std::optimality`.
+
+The relationship is one-way. A `SelectedSite` over a finite collection
+with the same target, criterion, alternatives, and tie policy may
+discharge a coincident `OptimalitySite` with `compiler_proven` evidence.
+The reverse never constructs a `Selected<T>` handle. Expression-position
+continuous `argmax` / `argmin` does not exist; attempting to use the
+finite selector family on a continuous domain produces a diagnostic
+pointing to `std::optimality`.
+
+**Workflow fulfillment.** Workflow solvers and providers fulfill
+optimality sites by evidence grade (§37.1):
+
+- `compiler_proven`
+- `stdlib_derived`
+- `provider_validated`
+- `audited_package_certified`
+- `empirical_tested`
+- `unknown`
+
+An obligation specifies which grades are acceptable. A finite grid over
+a continuous domain without a coverage certificate does not fulfill an
+exact or epsilon-global claim. A stationary condition does not fulfill a
+global optimum unless accompanied by boundary, tie, nonsmooth, and
+regularity evidence sufficient for that claim. A workflow-bound
+`Controller` may provide behavior through §24.2, but it does not prove
+optimality by satisfying an input/output contract.
+
+Optimality fulfillment may create the hierarchical SCC pattern of §20:
+an outer differentiable objective or verifier may wrap an inner
+implicit family solve. The site's family invocation is the inner
+candidate block; the criterion is consumed by the outer workflow
+optimizer, verifier, or evidence provider. The source claim still lives
+in Layer 3 and the workflow method remains execution policy.
+
+**Competing claims.** Multiple `OptimalitySite`s may refer to the same
+choice anchor. Structurally identical claims are consolidated for
+diagnostics, and one fulfillment discharges all duplicates. Distinct
+claims remain separate obligations. A pointwise optimum, a steady-state
+optimum, and a trajectory optimum on the same conductance value are
+different claims and require separate fulfillment or an explicit
+`fulfills` relation / package rule proving one from another under named
+assumptions and acceptable evidence.
+
+**Policy split.** A policy, strategy, or control law is ordinary model
+structure: a parameterized relation, contract implementation, or
+workflow-bound `Controller` source. It constrains a value such as
+`g_c`; it does not by itself claim the value is optimal. If the source
+also wants to say that the policy is optimal, it invokes a
+`std::optimality` relation separately.
+
+Potkay-style stomatal models illustrate the distinction:
+
+- `pointwise` maximum: maximize growth at one context.
+- `steady_state` maximum: maximize among candidates satisfying
+  equilibrium constraints.
+- `stationary_point`: assert a marginal first-order rule.
+- `path_horizon` maximum: maximize integrated growth over a horizon or
+  lifetime policy class.
+- workflow RL controller: bind behavior from Python; evidence of
+  optimality is separate.
+
+Supplying steady-state or stationary evidence for a horizon/lifetime
+claim is an evidence-scope mismatch, not a successful fulfillment.
+
+**Diagnostics.** The `EOPT` diagnostic family covers:
+
+- unfulfilled active optimality site;
+- missing realized family invocation;
+- empty or inconsistent feasible set;
+- criterion lacking `Compare` or scaling policy;
+- finite evidence offered for continuous/global claim;
+- stationarity offered for global or local extremum without sufficient
+  boundary / neighborhood evidence;
+- local evidence offered for global claim;
+- pointwise or steady-state evidence offered for path-horizon claim;
+- tie-policy mismatch or unresolved plateau;
+- external controller with no acceptable optimality evidence; and
+- relaxed, smoothed, clipped, or surrogate execution offered for an
+  exact source claim without an accepted ledger entry.
+
+The Trainable interaction is intentionally not locked here. A choice
+slot bound as `Trainable` plus an active `OptimalitySite` may represent
+alternative fulfillment paths or a workflow-selected training policy.
+The exact UX for combining them is tracked in §35; the compiler must not
+silently translate an optimality claim into a penalty term.
+
 ---
 
 ## Part II — Compiler Substrate
@@ -4220,6 +4534,10 @@ principle is restated in §0 as a structural commitment.
    - `DiscreteOperatorSite` records keyed on continuous site, topology
      version, provider, backend, and artifact identity, holding realized
      executable artifact facts and evidence grades (§28.6, §37.1).
+   - `OptimalitySite` / `OptimalityObligation` records keyed on
+     source-level optimality claim identity, holding family, fixed
+     context, choice anchor, criterion anchor, admissibility predicate,
+     operator / strength / scope, tie policy, and evidence links (§15.7).
    - SCC decomposition results keyed on SCC identifier; carries
      the canonical four-way class assignment (static / dynamic /
      stochastic / training; §20) plus any lowering solver-strategy
@@ -8800,10 +9118,11 @@ lowering details after the core sum-type lock. Chunks 05, 06, 07, 08,
 **Summary.** Catalog of smaller remaining items: source-level retraction
 if ever admitted, exact-numeric GPU portability, vector / tensor seam
 transforms, rational-denominator termination beyond the rewrite cap,
-continuous-extremum evidence, controller-interface affordances, stdlib
-inventory, distribution / stochastic-process catalog polish, backend
-cost-calibration interfaces, workflow inference UX, package
-dependencies, and event-scheduling policy API. Obligation retraction is
+controller-interface affordances, stdlib inventory, distribution /
+stochastic-process catalog polish, backend cost-calibration interfaces,
+workflow inference UX, package dependencies, and event-scheduling policy
+API. Continuous extrema / verified optimization sites are resolved by
+`std::optimality` and `OptimalitySite` (§15.7). Obligation retraction is
 resolved by the `ObligationSite` /
 `fulfills` ledger (§8.11, §10.5).
 Heterogeneous selection is resolved by `Selected<T>` /
@@ -8867,33 +9186,20 @@ Guided subsystem search is workflow-authorized extraction approximation,
 not exact Y6, and records a Layer-4 approximation term on the relevant
 `ResidualSite`.
 
-**Continuous extrema / verified optimization sites.** Rewriting the
-Sperry et al. 2017 plant mock exposed a source/workflow boundary that is
-not yet cleanly specified. The model needs two values: `PcAtAmax`, the
-canopy pressure that maximizes gross assimilation over the continuous
-hydraulic range `[Pcrit, Ps]`, and `Pc`, the attainable canopy pressure
-that maximizes `beta - theta` under the maximum conductance constraint.
-Both objectives are derived from implicit relation families: choosing a
-candidate pressure determines transpiration, leaf temperature, vapor
-deficit, conductance, internal CO2, assimilation, hydraulic cost, and
-profit through a coupled graph. This is not the same problem as selecting
-an element from a finite collection with `argmax`; it is also not
-faithfully represented by `deriv(objective, Pc) = 0`, because boundary
-optima, plateaus, non-smooth guards, and local extrema are all possible.
-
-Current Myco can write the world equations and can leave the chosen
-continuous value workflow-bound, but it has no canonical way to say
-"this bound value is the globally verified maximizer of this implicit
-objective over this model-defined continuous domain" while preserving
-the `.myco` / workflow split. Open design questions: whether this should
-be a workflow source object, a realization-provider validation site, a
-compiler-emitted `OptimizationSite` / `ExtremumSite`, a stdlib relation
-over bounded domains, or some combination; how exact vs approximate
-evidence, tie behavior, boundary checks, tolerances, and provenance are
-recorded; and what diagnostics should fire when no acceptable global
-evidence is supplied. Until resolved, examples that need this pattern
-should state the limitation explicitly and avoid pretending a finite grid
-or first-order stationarity condition is the source-level semantics.
+**Continuous extrema / verified optimization sites resolved.** Rewriting
+the Sperry et al. 2017 plant mock exposed the need to say that
+`PcAtAmax` maximizes gross assimilation over a continuous hydraulic
+range and that `Pc` maximizes profit under conductance constraints.
+Potkay-style growth optimization exposed the broader policy / horizon
+case: pointwise, steady-state, stationary, and trajectory-optimal claims
+are different scientific commitments. The resolution is §15.7:
+source models express optimality with `std::optimality` claim relations
+over explicit candidate families; the compiler emits Layer-3
+`OptimalitySite` / `OptimalityObligation` records; workflow providers,
+solvers, controllers, and certificates fulfill them with evidence.
+Finite `argmax` remains a separate exact selector surface (§12.2).
+Derivative stationarity, finite grids, local optimizers, and controller
+contracts do not silently satisfy global continuous or horizon claims.
 
 **Controller-interface affordances in the Python layer.** General-
 system question: what hooks does Myco need to expose so workflows
@@ -9012,14 +9318,23 @@ stdlib-shipped parameterized relations is referenced throughout the
 spec but not enumerated in one place. Deferred to a dedicated chunk
 that locks: the full list of axiomatic primitives (`exp`, `log`,
 `sin`, `cos`, `sqrt`, arithmetic, `smooth_max`, etc.), the
-classification of each surface (expression atom vs parameterized relation), the
-capability contracts and abstract cost tags for each, and the
-classification of distributions (`log_density` / backend sampling
-capability) and kernels. This pass should also audit Tier 1 distribution
-capability tags (`A`, `S`, `P`, `Sc`, `ST`, `R`, `Conj`) against the
+classification of each surface (expression atom vs parameterized
+relation), the capability contracts and abstract cost tags for each,
+and the classification of distributions (`log_density` / backend
+sampling capability), kernels, and `std::optimality` relations (§15.7).
+This pass should also audit Tier 1 distribution capability tags (`A`,
+`S`, `P`, `Sc`, `ST`, `R`, `Conj`) against the
 stdlib implementation so the table is both mathematically precise and
 backend-realizable.
-Cross-refs §6, §7, §13.8, §14, §28, §30.
+Cross-refs §6, §7, §13.8, §14, §15.7, §28, §30.
+
+**Trainable / optimality interaction.** §15.7 intentionally does not
+lock the UX for a choice slot that is both bound as `Trainable` and
+covered by an active `OptimalitySite`. These may be alternative
+fulfillment paths, a workflow-selected training policy, or an invalid
+composition depending on the run. The compiler must not silently turn an
+optimality claim into a training penalty. A future pass should specify
+the Python API, diagnostics, and ledger entries for this combination.
 
 **Y5 closure-policy placement review.** §8.8 currently locks Y5 custom
 closure policies as ordinary parameterized relations selected by the
@@ -9402,6 +9717,13 @@ reserves `pi`, `e`, and the parametric family `integer<N: val>`
 (target of the integer-literal desugar in §4). User-declared
 parameterized relations occupy the relation namespace; they do not
 shadow stdlib expression atoms.
+
+The stdlib relation namespace reserves `std::optimality` and its claim
+relations: `global_maximum`, `global_minimum`,
+`epsilon_global_maximum`, `epsilon_global_minimum`, `local_maximum`,
+`local_minimum`, `stationary_point`, `steady_state_maximum`,
+`steady_state_minimum`, `trajectory_maximum`, and
+`trajectory_minimum` (§15.7).
 
 The full list is normative as of the current lock. Additions are a
 breaking change to the parse surface and follow the source-

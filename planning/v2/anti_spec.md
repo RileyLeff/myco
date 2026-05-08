@@ -40,6 +40,8 @@ gap-review stale list, subsequent design locks.
 | source-level sparse storage claims (`CSR<K>`, `block_sparse W`, `use_neighbor_list`) | planner-owned lowerings from exact pattern / index facts | storage layout is execution policy; `.myco` describes the mathematical object and its evidence-backed facts |
 | `approximate A <-> B: under: ...` expr-infix form | `approximate { body: ... under: ... }` block form | chunk 04 earlier draft used an infix-over-equation syntax; block form scopes cleanly to a named body and is what §15.1 locks |
 | `loss_of(residual)` intrinsic | `objective_terms(residual)` | "loss" overloaded planner cost, training objective, and likelihood; `objective_terms` is explicitly workflow-facing training decomposition |
+| `optimize { ... }` block or source-level optimizer keyword | `std::optimality::*` claim relations plus `OptimalitySite` / `OptimalityObligation` (§15.7) | optimality is a comparison claim with evidence, not a solver instruction or directional language surface |
+| expression-position continuous `argmax` / `argmin` | finite selectors stay in §12.2; continuous and path-valued claims use statement-form `std::optimality::*` | avoids hiding counterfactual family semantics inside an expression; continuous optimality needs admissibility, tie, scope, and evidence |
 | `replaces <obligation_key>` | `fulfills <obligation_key>` plus the obligation ledger | Myco source statements do not retract or mutate other statements; explicit fulfillments satisfy obligations, while generated/package defaults remain inspectable candidate fulfillments |
 | `basis` declaration for matrix axes | plain contracts / field-set shapes plus compiler-facing matrix facts | axis signatures do not need a new source construct; contracts already name fields and units |
 | source `basis` / mode declaration for kernel approximations (`basis Fourier<N> on Domain`) | ordinary feature / mode relations plus workflow artifacts and compiler facts | feature maps, modes, eigenfunctions, inducing points, and random features are not a special source construct |
@@ -53,6 +55,7 @@ gap-review stale list, subsequent design locks.
 | retired | replacement | why |
 |---|---|---|
 | `#[verified_externally]` | nothing | no proof-escape-hatch annotations |
+| `#[optimal]` / user-marked optimality annotations | `std::optimality::*` claim relations plus evidence-graded fulfillments | no annotation surface; optimality claims emit obligations and do not become facts by assertion |
 | `#[inverse]` | capability contract (`Invertible<_>`) on stdlib expression atom | unified contract machinery |
 | four-class invertibility metadata (`bijective` / `injective_restricted` / `lossy` / `opaque`) | capability contracts on stdlib expression atoms | same |
 | all `#[...]` attribute annotations | nothing | `.myco` has no annotation surface |
@@ -94,6 +97,7 @@ gap-review stale list, subsequent design locks.
 | conversion legality as execution-cost choice | type graph owns semantic conversion edges; extraction / lowering owns realization cost | cheap or convenient does not make an illegal conversion legal; legal conversions may still be expensive or unsupported on a backend |
 | compiler auto-emitted admissibility projections | workflow picks projection flavor (`hard_clip` / `sigmoid` / `soft_clip`) | projection-free-compiler principle |
 | compiler auto-selected solver | workflow selects | same principle |
+| compiler-emitted scalarization for multi-output optimality criteria | explicit user scalarization, or future `lexicographic_optimum` / `pareto_optimum` relations | no hidden weighting, no covert policy choice |
 | exact-in-context default-off rewrites disappearing into the global default-on bucket | site-local `promoted_exact_in_context` with zero `cost_of().approximation` and preserved provenance | exactness in one envelope does not change the rewrite's baseline class; diagnostics must show why it fired |
 | hidden cancellation / independence assumptions when approximation terms stack | conservative monotone composition by default; sharper laws only from stdlib/compiler rules or evidence-graded provider facts | multiple approximations must remain auditable, and better error algebra requires evidence |
 | one scalar `cost_of().condition` as the canonical conditioning story | structured `ConditionRecord` over entrywise / norm / spectral / structural views with optional derived summary | multi-output numerical risk is not one dimension; scalar ranking summaries need provenance |
